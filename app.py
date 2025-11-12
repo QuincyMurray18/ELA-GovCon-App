@@ -1,48 +1,26 @@
 
-# === ELA Company Sidebar (single render) ===
-try:
-    import streamlit as st
-except Exception:
-    st = None
+# === ELA Company Sidebar (single instance) ===
+import streamlit as st
 
 def render_company_sidebar():
-    if st is None:
+    if st.session_state.get("_ela_sidebar_rendered", False):
         return
-    # Guard to ensure one-time render per session
-    key = "_ela_sidebar_rendered"
-    if getattr(st.session_state, key, False):
-        return
-    try:
-        with st.sidebar:
-            st.markdown("## Company")
-            st.markdown(
-                "**ELA Management LLC**  \n"
-                "999 Fortino Blvd Lot 246  \n"
-                "Pueblo, CO 81008, US\n\n"
-                "**CAGE Code:** 14ZP6  \n"
-                "**UEI:** U32LBVK3DDF7  \n"
-                "**DUNS:** 14-483-4790"
-            )
-        st.session_state[key] = True
-    except Exception:
-        pass
+    with st.sidebar:
+        st.markdown("## Company")
+        st.markdown(
+            "**ELA Management LLC**  \n"
+            "999 Fortino Blvd Lot 246  \n"
+            "Pueblo, CO 81008, US\n\n"
+            "**CAGE Code:** 14ZP6  \n"
+            "**UEI:** U32LBVK3DDF7  \n"
+            "**DUNS:** 14-483-4790"
+        )
+    st.session_state["_ela_sidebar_rendered"] = True
 
-# Wrap set_page_config once to inject rendering after layout is set.
-if st is not None and not getattr(st.session_state, "_ela_spc_wrapped", False):
-    try:
-        _ela__orig_spc = st.set_page_config
-        def _ela__patched_spc(*args, **kwargs):
-            rv = _ela__orig_spc(*args, **kwargs)
-            try:
-                render_company_sidebar()
-            except Exception:
-                pass
-            return rv
-        st.set_page_config = _ela__patched_spc  # type: ignore[attr-defined]
-        st.session_state["_ela_spc_wrapped"] = True
-    except Exception:
-        pass
+render_company_sidebar()
 # === End ELA Company Sidebar ===
+
+
 
 
 
