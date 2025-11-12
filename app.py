@@ -7340,7 +7340,7 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
 def _render_deals_board(conn: "sqlite3.Connection") -> None:
-    import streamlit as st
+    import streamlit as st, pandas as pd
     st.subheader("Board")
     stages = _deal_stages()
     try:
