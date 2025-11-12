@@ -1355,15 +1355,7 @@ def run_alerts_center(conn):
                 notify("Updated.", "success")
                 try:
                     st.rerun()
-                    with c4:
-        if st.button("🗑 Delete", key=f"k_del_{did}"):
-            from contextlib import closing as _closing
-            with _closing(conn.cursor()) as cur:
-                cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                conn.commit()
-            st.rerun()
-
-except Exception:
+                except Exception:
                     pass
             except Exception as _e:
                 st.error(f"Update failed: {_e}")
@@ -7725,15 +7717,7 @@ def run_sam_watch(conn) -> None:
                 if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
                     st.session_state["sam_page"] = cur_page - 1
                     st.rerun()
-                    with c4:
-            if st.button("🗑 Delete", key=f"k_del_{did}"):
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                    conn.commit()
-                st.rerun()
-
-with p2:
+            with p2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with p3:
                 if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
@@ -7768,15 +7752,7 @@ with p2:
                         if st.button("View details", key=f"sam_view_{i}"):
                             st.session_state["sam_selected_idx"] = i
                             st.rerun()
-                                        with c4:
-                        if st.button("🗑 Delete", key=f"k_del_{did}"):
-                            from contextlib import closing as _closing
-                            with _closing(conn.cursor()) as cur:
-                                cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                                conn.commit()
-                            st.rerun()
-
-with c4:
+                    with c4:
                         # Add to Deals (kept as-is; relies on project helpers)
                         if st.button("Add to Deals", key=f"add_to_deals_{i}"):
                             try:
@@ -7884,18 +7860,18 @@ with c4:
 
             # Selected details panel
 
-                        # Bottom pager
-                        bp1, bp2, bp3 = st.columns([1, 3, 1])
-                        with bp1:
-                            if st.button("◀ Prev", key="sam_prev_btn_bottom", disabled=(cur_page <= 1)):
-                                st.session_state["sam_page"] = cur_page - 1
-                                st.rerun()
-                        with bp2:
-                            st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
-                        with bp3:
-                            if st.button("Next ▶", key="sam_next_btn_bottom", disabled=(cur_page >= total_pages)):
-                                st.session_state["sam_page"] = cur_page + 1
-                                st.rerun()
+            # Bottom pager
+            bp1, bp2, bp3 = st.columns([1, 3, 1])
+            with bp1:
+                if st.button("◀ Prev", key="sam_prev_btn_bottom", disabled=(cur_page <= 1)):
+                    st.session_state["sam_page"] = cur_page - 1
+                    st.rerun()
+            with bp2:
+                st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
+            with bp3:
+                if st.button("Next ▶", key="sam_next_btn_bottom", disabled=(cur_page >= total_pages)):
+                    st.session_state["sam_page"] = cur_page + 1
+                    st.rerun()
 
             st.divider()
             sel_idx = st.session_state.get("sam_selected_idx")
@@ -9833,15 +9809,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
-            with c4:
-        if st.button("🗑 Delete", key=f"k_del_{did}"):
-            from contextlib import closing as _closing
-            with _closing(conn.cursor()) as cur:
-                cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                conn.commit()
-            st.rerun()
-
-content_map: Dict[str, str] = {}
+        content_map: Dict[str, str] = {}
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
             st.markdown(f"**{sec}**")
@@ -10354,15 +10322,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
                 conn.commit()
             st.success("Scenario created.")
             st.rerun()
-                with c4:
-            if st.button("🗑 Delete", key=f"k_del_{did}"):
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                    conn.commit()
-                st.rerun()
-
-return
+        return
     else:
         if df_sc.empty:
             st.info("No scenarios yet. Switch to 'Create new'.")
@@ -11525,6 +11485,21 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
             _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
         st.subheader("Kanban")
+
+        # Bulk delete controls for deals in current view
+        try:
+            _df_del = df_k.copy() if 'df_k' in locals() else df.copy()
+            _opts = {str(int(r['id'])): f"#{int(r['id'])} — {str(r.get('title') or '')[:60]}" for _, r in _df_del.iterrows()}
+            _sel = st.multiselect("Delete deals", options=list(_opts.keys()), format_func=lambda k: _opts.get(k, k), key="kanban_delete_sel")
+            if _sel and st.button("Delete selected", key="kanban_delete_btn"):
+                with conn:
+                    for _id in _sel:
+                        conn.execute("DELETE FROM deals WHERE id=?", (int(_id),))
+                st.success(f"Deleted {len(_sel)} deal(s)")
+                st.rerun()
+        except Exception as _e:
+            pass
+
         try:
             # Prefer base table. Include owner-null when filtering so old deals still show and can be assigned.
             if deal_owner_ctx != "All":
@@ -11572,7 +11547,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             owner_new = st.selectbox("Owner", owner_opts, index=(owner_opts.index(owner_cur) if owner_cur in owner_opts else 0), key=f"k_owner_{did}")
 
                             ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
-                            c1, c2, c3, c4 = st.columns([1,1,1,1])
+                            c1, c2, c3 = st.columns([1,1,1])
                             with c1:
                                 if st.button("◀", key=f"k_prev_{did}"):
                                     ns2 = _stage_prev(stage)
@@ -11584,15 +11559,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
                                         conn.commit()
                                     st.rerun()
-                                    with c4:
-            if st.button("🗑 Delete", key=f"k_del_{did}"):
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                    conn.commit()
-                st.rerun()
-
-with c2:
+                            with c2:
                                 if st.button("Save", key=f"k_save_{did}"):
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
@@ -11614,15 +11581,7 @@ with c2:
                                     st.rerun()
 
     
-                                        with c4:
-                                if st.button("🗑 Delete", key=f"k_del_{did}"):
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                                        conn.commit()
-                                    st.rerun()
-
-st.subheader("Summary by Stage")
+            st.subheader("Summary by Stage")
             summary = df.groupby("status").agg(
                 deals=("id","count"),
                 value=("value","sum"),
@@ -12434,14 +12393,6 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
             st.success(f"Imported {n} row(s) into {tsel}")
             st.rerun()
 
-                with c4:
-                    if st.button("🗑 Delete", key=f"k_del_{did}"):
-                        from contextlib import closing as _closing
-                        with _closing(conn.cursor()) as cur:
-                            cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                            conn.commit()
-                        st.rerun()
-
 # ---------- Phase O: Global Theme & Layout ----------
 def _apply_theme_old() -> None:
     css = """
@@ -12694,15 +12645,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 _one_click_analyze(conn, int(_ensure_selected_rfp_id(conn)))
                 st.rerun()
-                with c4:
-        if st.button("🗑 Delete", key=f"k_del_{did}"):
-            from contextlib import closing as _closing
-            with _closing(conn.cursor()) as cur:
-                cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                conn.commit()
-            st.rerun()
-
-except Exception as e:
+            except Exception as e:
                 st.error(f"Ingest failed: {e}")
 
     # Add files
@@ -12948,15 +12891,7 @@ if "_o3_render_sender_picker" not in globals():
                         except Exception:
                             pass
                         st.rerun()
-                            with c4:
-            if st.button("🗑 Delete", key=f"k_del_{did}"):
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                    conn.commit()
-                st.rerun()
-
-except Exception as e:
+                    except Exception as e:
                         st.error(f"Save failed: {e}")
             if ok and email:
                 conn.execute("INSERT OR REPLACE INTO email_accounts(user_email, display_name, app_password) VALUES(?,?,?)",
@@ -13205,7 +13140,7 @@ RFP Context (optional, may be empty):
                     return (resp.choices[0].message.content or "").strip()
                 except Exception as e:
                     return f"AI error: {e}"
-            c1, c2, c3, c4 = st.columns([1,1,1,1])
+            c1, c2, c3 = st.columns([1,1,1])
             with c1:
                 if st.button("Draft Tagline", key="x161_tl"):
                     st.session_state["x161_tagline"] = _ask_x161("a concise 8–14 word tagline")
@@ -13409,27 +13344,11 @@ def render_outreach_templates(conn):
             email_template_upsert(conn, f"{name} copy", subject or "", sig_html or "", None)
             st.success("Duplicated")
             st.rerun()
-                with c4:
-                if st.button("🗑 Delete", key=f"k_del_{did}"):
-                    from contextlib import closing as _closing
-                    with _closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                        conn.commit()
-                    st.rerun()
-
-with c3:
+    with c3:
         if (tid is not None) and st.button("Delete"):
             email_template_delete(conn, tid)
             st.success("Deleted")
             st.rerun()
-
-with c4:
-    if st.button("🗑 Delete", key=f"k_del_{did}"):
-        from contextlib import closing as _closing
-        with _closing(conn.cursor()) as cur:
-            cur.execute("DELETE FROM deals WHERE id=?", (did,))
-            conn.commit()
-        st.rerun()
 
 def _tpl_picker_prefill(conn):
 
@@ -13974,15 +13893,7 @@ def _o4_accounts_ui(conn):
     except Exception:
         pass
     st.rerun()
-        with c4:
-        if st.button("🗑 Delete", key=f"k_del_{did}"):
-            from contextlib import closing as _closing
-            with _closing(conn.cursor()) as cur:
-                cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                conn.commit()
-            st.rerun()
-
-with c4:
+    with c4:
         if st.button("Delete account", key="o4_ac_del"):
             if not email:
                 st.error("Enter the Email of the account to delete")
@@ -14839,15 +14750,7 @@ def render_subfinder_s1d(conn):
                 st.session_state["s1d_trigger"] = "next"
                 st.rerun()
 
-            with c4:
-            if st.button("🗑 Delete", key=f"k_del_{did}"):
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                    conn.commit()
-                st.rerun()
-
-# === S1D CARDS: Add Places to Vendors and Quick Edit Vendors ===
+    # === S1D CARDS: Add Places to Vendors and Quick Edit Vendors ===
     import sqlite3 as _sqlite3
     import pandas as _pd
 
@@ -16074,15 +15977,7 @@ def _wrap_chat_assistant():
                 _cp_maybe_autosummarize(conn, sel_tid, every_n=1)
                 st.rerun()
 
-                with c4:
-            if st.button("🗑 Delete", key=f"k_del_{did}"):
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-                    cur.execute("DELETE FROM deals WHERE id=?", (did,))
-                    conn.commit()
-                st.rerun()
-
-if "chat_plus_history" not in st.session_state or not isinstance(st.session_state["chat_plus_history"], list):
+        if "chat_plus_history" not in st.session_state or not isinstance(st.session_state["chat_plus_history"], list):
             _cp_load_into_session(conn, sel_tid)
         before_len = len(st.session_state.get("chat_plus_history") or [])
 
