@@ -7809,7 +7809,7 @@ def run_sam_watch(conn) -> None:
                                     )
                                     deal_id = cur.lastrowid
                                     try:
-                                        cur.execute("UPDATE deals SET status=?, stage=? WHERE id=?", (STAGES_ORDERED[0], STAGES_ORDERED[0], deal_id))
+                                        cur.execute("UPDATE deals SET status=?, stage=? rfp_deadline=?,  WHERE id=?", (STAGES_ORDERED[0], STAGES_ORDERED[0], str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, deal_id))
                                         cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
                                     except Exception:
                                         pass
@@ -8034,7 +8034,7 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
         with _closing(conn.cursor()) as cur:
             cur.execute(
                 "INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at) "
-                "VALUES(?, ?, COALESCE((SELECT stage FROM deals WHERE rfp_id=?), 'No contact made'), datetime('now'))",
+                "VALUES(?, ?, COALESCE((SELECT stage, rfp_deadline FROM deals WHERE rfp_id=?), 'No contact made'), datetime('now'))",
                 (int(rfp_id), str(title), int(rfp_id))
             )
             conn.commit()
@@ -8081,7 +8081,7 @@ def _p3_due_date_for_rfp(conn, rfp_id: int) -> str:
 def _p3_get_deal_id_for_rfp(conn, rfp_id: int):
     try:
         import pandas as _pd
-        df = _pd.read_sql_query("SELECT id FROM deals WHERE rfp_id=?", conn, params=(int(rfp_id),))
+        df = _pd.read_sql_query("SELECT id, rfp_deadline FROM deals WHERE rfp_id=?", conn, params=(int(rfp_id),))
         if not df.empty:
             return int(df.iloc[0]["id"])
     except Exception:
@@ -8117,7 +8117,7 @@ def _p3_auto_stage_for_rfp(conn, rfp_id: int):
         return
     try:
         # Fetch current stage
-        df = _pd.read_sql_query("SELECT stage, status FROM deals WHERE id=?", conn, params=(int(deal_id),))
+        df = _pd.read_sql_query("SELECT stage, status, rfp_deadline FROM deals WHERE id=?", conn, params=(int(deal_id),))
         cur_stage = str(df.iloc[0]["stage"] or "") if not df.empty else ""
     except Exception:
         cur_stage = ""
@@ -11481,6 +11481,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 _ctx_owner = st.session_state.get("deal_owner_ctx")
                 _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
                 owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
+            d_due = st.date_input("Due date (optional)", key="deal_due_date")
             submitted = st.form_submit_button("Add Deal")
         if submitted and title:
             try:
@@ -11498,7 +11499,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     
         # Weighted Pipeline view
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
+        df = pd.read_sql_query("SELECT id, title, agency, status, value, rfp_deadline FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
             st.info("No deals")
         else:
@@ -11542,7 +11543,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             # Fallback to view without owner column
             try:
                 df_k = pd.read_sql_query(
-                    "SELECT id, title, agency, status, value, '' AS owner FROM deals_t ORDER BY id DESC;",
+                    "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
                     conn, params=()
                 )
             except Exception:
@@ -11562,6 +11563,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             did = int(r["id"])
                             st.markdown(f"#{did} · **{r.get('title') or ''}**")
                             st.caption(str(r.get("agency") or ""))
+                            if r.get('rfp_deadline'):
+                                st.caption(f"Due: {r['rfp_deadline']}")
                             v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
                             owner_opts = ["Quincy","Collin","Charles"]
                             owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
@@ -11584,7 +11587,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 if st.button("Save", key=f"k_save_{did}"):
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
-                                        cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
+                                        cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, rfp_deadline=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
                                         if ns != stage:
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
                                         conn.commit()
@@ -11594,7 +11597,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     ns2 = _stage_next(stage)
                                     from contextlib import closing as _closing
                                     with _closing(conn.cursor()) as cur:
-                                        cur.execute("UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, did))
+                                        cur.execute("UPDATE deals SET status=?, stage=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, did))
                                         if ns2 != stage:
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
                                         cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
@@ -11618,7 +11621,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         st.subheader("Edit Pipeline")
         try:
             df_edit = pd.read_sql_query(
-                "SELECT id, title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+                "SELECT id, title, agency, status, value, rfp_deadline, sam_url FROM deals_t ORDER BY id DESC;",
                 conn,
                 params=(),
             )
@@ -11632,7 +11635,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     use_container_width=True,
                     hide_index=True,
                     column_config={"status": st.column_config.SelectboxColumn(options=STAGES_ORDERED), "owner": st.column_config.SelectboxColumn(options=["Quincy","Collin","Charles"]),
-                        "prob_%": st.column_config.NumberColumn(disabled=True),
+                        "rfp_deadline": st.column_config.DateColumn(format="YYYY-MM-DD"), "prob_%": st.column_config.NumberColumn(disabled=True),
                         "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
                     },
                     key="crm_deals_editor",
@@ -17197,3 +17200,63 @@ def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return f"[AI unavailable] {e}"
+
+def nav() -> str:
+    import streamlit as st
+
+    # Sidebar header is always rendered so the Go to bar never disappears
+    st.sidebar.title("Workspace")
+    st.sidebar.caption(BUILD_LABEL)
+    st.sidebar.caption(f"SHA {_file_hash()}")
+
+    # Determine default page based on state flags (RFP ingestion, SAM watch jump, etc.)
+    default_page = None
+
+    # One-shot flag to force RFP Analyzer
+    if st.session_state.pop('_force_rfp_analyzer', False):
+        default_page = 'RFP Analyzer'
+    # When files are being ingested / handled for One-Page Analyzer, prefer RFP Analyzer
+    elif (
+        st.session_state.get('op_inline_files')
+        or st.session_state.get('op_new_files')
+        or st.session_state.get('onepage_uploads')
+    ):
+        default_page = 'RFP Analyzer'
+
+    # Auto-jump to One-Page Analyzer when a SAM notice was pushed
+    if st.session_state.pop('rfp_selected_notice', None):
+        default_page = 'RFP Analyzer'
+
+    # One-shot explicit navigation target overrides everything else
+    _tgt = st.session_state.pop("nav_target", None)
+    if _tgt:
+        default_page = _tgt
+
+    pages = [
+        "SAM Watch",
+        "RFP Analyzer",
+        "L and M Checklist",
+        "Proposal Builder",
+        "File Manager",
+        "Past Performance",
+        "White Paper Builder",
+        "Subcontractor Finder",
+        "Outreach",
+        "RFQ Pack",
+        "Backup & Data",
+        "Quote Comparison",
+        "Pricing Calculator",
+        "Win Probability",
+        "Chat Assistant",
+        "Capability Statement",
+        "Contacts",
+        "Deals",
+    ]
+
+    # Compute index for selectbox; default to first page if nothing is set
+    if default_page in pages:
+        index = pages.index(default_page)
+    else:
+        index = 0
+
+    return st.sidebar.selectbox("Go to", pages, index=index)
