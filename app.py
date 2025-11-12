@@ -1,33 +1,3 @@
-
-# === ELA Company Sidebar (single instance) ===
-import streamlit as st
-
-# Module-level sentinel prevents duplicates even if called multiple times in a single run.
-try:
-    _ELA_SIDEBAR_RENDERED
-except NameError:
-    _ELA_SIDEBAR_RENDERED = False
-
-def _ela_render_company_sidebar():
-    global _ELA_SIDEBAR_RENDERED
-    if _ELA_SIDEBAR_RENDERED:
-        return
-    with st.sidebar:
-        st.markdown("## Company")
-        st.markdown(
-            "**ELA Management LLC**  \n"
-            "999 Fortino Blvd Lot 246  \n"
-            "Pueblo, CO 81008, US\n\n"
-            "**CAGE Code:** 14ZP6  \n"
-            "**UEI:** U32LBVK3DDF7  \n"
-            "**DUNS:** 14-483-4790"
-        )
-    _ELA_SIDEBAR_RENDERED = True
-
-# Call once at import time so every page gets it without extra calls.
-_ela_render_company_sidebar()
-# === End ELA Company Sidebar ===
-
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
@@ -16409,6 +16379,23 @@ def _sidebar_brand():
         st.markdown("### 🧭 ELA GovCon Suite")
         st.caption("Phase 1 UI loaded")
         st.caption("Faster sourcing, compliant bids, higher win rates.")
+        st.markdown(
+            """
+            <div class='ela-card'>
+              <div style="font-weight:700; margin-bottom:4px;">Company</div>
+              <div style="font-size:13px; line-height:1.35">
+                <strong>ELA Management LLC</strong><br>
+                999 Fortino Blvd Lot 246<br>
+                Pueblo, CO 81008, US
+                <hr style="border:0;border-top:1px solid rgba(49,51,63,0.16);margin:6px 0;">
+                <div><span style="opacity:.7">CAGE</span> 14ZP6</div>
+                <div><span style="opacity:.7">UEI</span> U32LBVK3DDF7</div>
+                <div><span style="opacity:.7">DUNS</span> 14-483-4790</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
     try:
