@@ -8,8 +8,7 @@ except NameError:
 def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
     try:
-        import streamlit as st
-        import pandas as pd
+        import streamlit as st, pandas as pd
     except Exception:
         st = None; pd = None
     rid = None
@@ -38,32 +37,6 @@ def _ensure_selected_rfp_id(conn):
     return rid
 
 # === Proposal Builder normalization helpers ===
-
-
-# --- CRM stage ladder and probabilities ---
-STAGES_ORDERED = [
-    "No contact made",
-    "CO contacted",
-    "Quote",
-    "Multiple quotes",
-    "Proposal started",
-    "Proposal finished",
-    "Submitted",
-    "Awarded",
-    "Proposal lost",
-]
-DEFAULT_STAGE_PROB = {
-    "No contact made": 0.05,
-    "CO contacted": 0.10,
-    "Quote": 0.20,
-    "Multiple quotes": 0.30,
-    "Proposal started": 0.45,
-    "Proposal finished": 0.60,
-    "Submitted": 0.75,
-    "Awarded": 1.00,
-    "Proposal lost": 0.00,
-}
-
 def _pb_try_json(text: str):
     try:
         import json as _json
@@ -7368,6 +7341,8 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
         st.error(f"Failed to load contacts {e}")
 
 def run_deals(conn: "sqlite3.Connection") -> None:
+    st.info("Deals has been merged into CRM. Use CRM › Pipeline for add and edit.")
+    return run_crm(conn)
     st.header("Deals")
     try:
         _migrate_deals_columns(conn)
@@ -11346,42 +11321,21 @@ def _stage_probability(stage: str) -> int:
 
 def run_crm(conn: "sqlite3.Connection") -> None:
     st.header("CRM")
-    tabs = st.tabs(["Activities","Tasks","Pipeline","Settings"])
+    tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
 
-    # Settings tab for probabilities
-    with tabs[3]:
-        st.subheader("Stage probabilities")
-        try:
-            _ensure_stage_probability_map(conn)
-            dfp = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn, params=())
-            current = {r["stage"]: float(r["probability"]) for _, r in dfp.iterrows()} if not dfp.empty else {}
-        except Exception:
-            current = {}
-        cols = st.columns(3)
-        edited_probs = {}
-        for i, sname in enumerate(STAGES_ORDERED):
-            with cols[i % 3]:
-                edited_probs[sname] = st.number_input(sname, min_value=0.0, max_value=1.0, step=0.05, value=float(current.get(sname, DEFAULT_STAGE_PROB.get(sname, 0.0))))
-        if st.button("Save probabilities"):
-            with conn:
-                for sname, p in edited_probs.items():
-                    conn.execute("INSERT OR REPLACE INTO stage_probability_map(stage, probability) VALUES(?,?)", (sname, float(p)))
-            merge_crm_deals_upgrade(conn)
-            st.success("Saved")
+    # Ensure Deals schema and CRM wiring are in sync
+    try:
+        _migrate_deals_columns(conn)  # align columns/views like Deals
+    except Exception:
+        pass
+    try:
+        rid = int(st.session_state.get("current_rfp_id") or 0)
+        if rid:
+            _p3_auto_wire_crm_from_rfp(conn, rid)
+    except Exception:
+        pass
 
-def merge_crm_deals_upgrade(conn):
-    _ensure_deals_prob_columns(conn)
-    _ensure_stage_probability_map(conn)
-    _recompute_deal_weighted(conn)
-
-    if st.button("Save probabilities"):
-        with conn:
-            for sname, p in edited_probs.items():
-                conn.execute("INSERT OR REPLACE INTO stage_probability_map(stage, probability) VALUES(?,?)", (sname, float(p)))
-        merge_crm_deals_upgrade(conn)
-        st.success("Saved")
-
-# --- Activities
+    # --- Activities
     with tabs[0]:
         st.subheader("Log Activity")
         df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
@@ -11511,52 +11465,104 @@ def merge_crm_deals_upgrade(conn):
 
     # --- Pipeline
     with tabs[2]:
+        # Add Deal (moved from Deals)
+        with st.form("add_deal", clear_on_submit=True):
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+            with c1:
+                title = st.text_input("Title")
+            with c2:
+                agency = st.text_input("Agency")
+            with c3:
+                status = st.selectbox("Status", ["New","Qualifying","Bidding","Submitted","Awarded","Lost"])
+            with c4:
+                value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
+            submitted = st.form_submit_button("Add Deal")
+        if submitted and title:
+            try:
+                from contextlib import closing as _closing
+                with _closing(conn.cursor()) as cur:
+                    cur.execute(
+                        "INSERT INTO deals(title, agency, status, stage, value, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                        (title.strip(), agency.strip(), status, status, float(value))
+                    )
+                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (status,))
+                    conn.commit()
+                st.success(f"Added deal {title}")
+            except Exception as e:
+                st.error(f"Error saving deal {e}")
+    
+        # Weighted Pipeline view
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=(),
-)
-
-        try:
-            _ensure_stage_probability_map(conn)
-            prob_map_df = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn, params=())
-            _pmap = {r["stage"]: float(r["probability"]) for _, r in prob_map_df.iterrows()} if not prob_map_df.empty else {}
-            if "value" in df.columns:
-                df["probability"] = df["status"].map(_pmap).fillna(0.0)
-                df["weighted_value"] = (df["value"].fillna(0.0) * df["probability"]).round(2)
-            elif "amount" in df.columns:
-                df["probability"] = df["status"].map(_pmap).fillna(0.0)
-                df["weighted_value"] = (df["amount"].fillna(0.0) * df["probability"]).round(2)
-        except Exception:
-            pass
-
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
             st.info("No deals")
         else:
             df["prob_%"] = df["status"].apply(_stage_probability)
-            df["expected_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
-            # Stage age: days since last stage change
-            df_log = pd.read_sql_query("SELECT deal_id, stage, MAX(changed_at) AS last_change FROM deal_stage_log_t GROUP BY deal_id, stage;", conn, params=())
-            def stage_age(row):
-                try:
-                    last = df_log[(df_log["deal_id"]==row["id"]) & (df_log["stage"]==row["status"])]["last_change"]
-                    if last.empty: return None
-                    dt = pd.to_datetime(last.values[0])
-                    return (pd.Timestamp.utcnow() - dt).days
-                except Exception:
-                    return None
-            df["stage_age_days"] = df.apply(stage_age, axis=1)
-            _styled_dataframe(df[["title","agency","status","value","prob_%","expected_value","stage_age_days"]], use_container_width=True, hide_index=True)
-
+            df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
+            _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
+    
             st.subheader("Summary by Stage")
             summary = df.groupby("status").agg(
                 deals=("id","count"),
                 value=("value","sum"),
-                expected=("expected_value","sum")
+                expected=("weighted_value","sum")
             ).reset_index().sort_values("expected", ascending=False)
             _styled_dataframe(summary, use_container_width=True, hide_index=True)
             if st.button("Export Pipeline CSV", key="pipe_export"):
                 path = str(Path(DATA_DIR) / "pipeline.csv")
                 df.to_csv(path, index=False)
                 st.markdown(f"[Download CSV]({path})")
+    
+        # Editable pipeline table with stage logging
+        st.subheader("Edit Pipeline")
+        try:
+            df_edit = pd.read_sql_query(
+                "SELECT id, title, agency, status, value, sam_url FROM deals_t ORDER BY id DESC;",
+                conn,
+                params=(),
+            )
+            if df_edit.empty:
+                st.write("No deals yet")
+            else:
+                df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
+                df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
+                edited = st.data_editor(
+                    df_edit,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "status": st.column_config.SelectboxColumn(options=["New","Qualifying","Bidding","Submitted","Awarded","Lost"]),
+                        "prob_%": st.column_config.NumberColumn(disabled=True),
+                        "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
+                    },
+                    key="crm_deals_editor",
+                )
+                if st.button("Save Edits", key="crm_deals_save"):
+                    try:
+                        df_orig = df_edit.set_index("id")
+                        from contextlib import closing as _closing
+                        with _closing(conn.cursor()) as cur:
+                            for _, r in edited.iterrows():
+                                rid = int(r["id"])
+                                old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
+                                new_status = str(r["status"] or "New")
+                                cur.execute(
+                                    "UPDATE deals SET title=?, agency=?, status=?, stage=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
+                                    (str(r.get("title","") or "").strip(),
+                                     str(r.get("agency","") or "").strip(),
+                                     new_status, new_status,
+                                     float(r.get("value") or 0.0),
+                                     str(r.get("sam_url","") or "").strip(),
+                                     rid)
+                                )
+                                if new_status != old_status:
+                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
+                            conn.commit()
+                        st.success("Pipeline updated")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+        except Exception as e:
+            st.error(f"Pipeline load failed: {e}")
 
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
     try:
