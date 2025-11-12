@@ -7341,63 +7341,9 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
         st.error(f"Failed to load contacts {e}")
 
 def run_deals(conn: "sqlite3.Connection") -> None:
-    st.info("Deals has been merged into CRM. Use CRM › Pipeline for add and edit.")
+    # Deals merged into CRM. Keep a single source of truth.
     return run_crm(conn)
-    st.header("Deals")
-    try:
-        _migrate_deals_columns(conn)
-    except Exception:
-        pass
 
-    # Ensure any current RFP in session is wired to CRM/Deals
-    try:
-        rid = int(st.session_state.get("current_rfp_id") or 0)
-        if rid:
-            _p3_auto_wire_crm_from_rfp(conn, rid)
-    except Exception:
-        pass
-
-    with st.form("add_deal", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-        with c1:
-            title = st.text_input("Title")
-        with c2:
-            agency = st.text_input("Agency")
-        with c3:
-            status = st.selectbox("Status", STAGES_ORDERED),
-                "prob_%": st.column_config.NumberColumn(disabled=True),
-                "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability")
-            },
-            key="deals_editor",
-        )
-        if st.button("Save Edits", key="deals_save"):
-            try:
-                # Detect status changes to log stage
-                df_orig = df.set_index("id")
-                with closing(conn.cursor()) as cur:
-                    for _, r in edited.iterrows():
-                        rid = int(r["id"])
-                        old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
-                        new_status = str(r["status"] or "New")
-                        cur.execute(
-                            "UPDATE deals SET title=?, agency=?, status=?, stage=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
-                            (str(r["title"] or "").strip(),
-                             str(r["agency"] or "").strip(),
-                             new_status,
-                             new_status,
-                             float(r["value"] or 0.0),
-                             str(r["sam_url"] or "").strip(),
-                             rid)
-                        )
-                        if new_status != old_status:
-                            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
-                conn.commit()
-                st.success("Saved edits")
-            except Exception as e:
-                st.error(f"Error saving edits {e}")
-        _styled_dataframe(edited, use_container_width=True, hide_index=True)
-    except Exception as e:
-        st.error(f"Failed to load deals {e}")
 def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
     from contextlib import closing as _closing
     nid = str(notice_row.get('Notice ID') or "")
@@ -11423,31 +11369,29 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             q += " AND priority IN (%s)" % ",".join(["?"]*len(tf_priority)); params.extend(tf_priority)
         q += " ORDER BY COALESCE(due_date,'9999-12-31') ASC"
         df_t = pd.read_sql_query(q, conn, params=params)
-        if df_t.empty:
-            st.write("No tasks")
-        else:
-            for _, r in df_t.iterrows():
-                c1, c2, c3, c4 = st.columns([3,2,2,2])
-                with c1:
-                    st.write(f"**{r['title']}**  — due {r['due_date'] or '—'}")
-                with c2:
-                    new_status = st.selectbox("Status", STAGES_ORDERED)}")
-                with c3:
-                    new_pri = st.selectbox("Priority", ["Low","Normal","High"],
-                                            index=["Low","Normal","High"].index(r["priority"] if r["priority"] in ["Low","Normal","High"] else "Normal"),
-                                            key=f"task_pri_{int(r['id'])}")
-                with c4:
-                    if st.button("Apply", key=f"task_apply_{int(r['id'])}"):
-                        with closing(conn.cursor()) as cur:
-                            cur.execute("UPDATE tasks SET status=?, priority=?, completed_at=CASE WHEN ?='Done' THEN datetime('now') ELSE completed_at END WHERE id=?;",
-                                        (new_status, new_pri, new_status, int(r["id"])))
-                            conn.commit()
-                        st.success("Updated")
-
-            if st.button("Export CSV", key="task_export"):
-                path = str(Path(DATA_DIR) / "tasks.csv")
-                df_t.to_csv(path, index=False)
-                st.markdown(f"[Download CSV]({path})")
+        
+if df_t.empty:
+    st.write("No tasks")
+else:
+    for _, r in df_t.iterrows():
+        c1, c2, c3, c4 = st.columns([3,2,2,2])
+        with c1:
+            st.write(f"**{r['title']}**  — due {r['due_date'] or '—'}")
+        with c2:
+            opts = ["Open","In Progress","Done"]
+            new_status = st.selectbox("Status", opts, index=(opts.index(r['status']) if r['status'] in opts else 0), key=f"task_status_{int(r['id'])}")
+        with c3:
+            pr_opts = ["Low","Normal","High"]
+            new_pri = st.selectbox("Priority", pr_opts, index=(pr_opts.index(r['priority']) if r['priority'] in pr_opts else 1), key=f"task_pri_{int(r['id'])}")
+        with c4:
+            if st.button("Apply", key=f"task_apply_{int(r['id'])}"):
+                with closing(conn.cursor()) as cur:
+                    cur.execute(
+                        "UPDATE tasks SET status=?, priority=?, completed_at=CASE WHEN ?='Done' THEN datetime('now') ELSE completed_at END WHERE id=?;",
+                        (new_status, new_pri, new_status, int(r["id"])),
+                    )
+                    conn.commit()
+                st.success("Updated")
 
     # --- Pipeline
     with tabs[2]:
