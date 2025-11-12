@@ -2,8 +2,15 @@
 # === ELA Company Sidebar (single instance) ===
 import streamlit as st
 
-def render_company_sidebar():
-    if st.session_state.get("_ela_sidebar_rendered", False):
+# Module-level sentinel prevents duplicates even if called multiple times in a single run.
+try:
+    _ELA_SIDEBAR_RENDERED
+except NameError:
+    _ELA_SIDEBAR_RENDERED = False
+
+def _ela_render_company_sidebar():
+    global _ELA_SIDEBAR_RENDERED
+    if _ELA_SIDEBAR_RENDERED:
         return
     with st.sidebar:
         st.markdown("## Company")
@@ -15,14 +22,11 @@ def render_company_sidebar():
             "**UEI:** U32LBVK3DDF7  \n"
             "**DUNS:** 14-483-4790"
         )
-    st.session_state["_ela_sidebar_rendered"] = True
+    _ELA_SIDEBAR_RENDERED = True
 
-render_company_sidebar()
+# Call once at import time so every page gets it without extra calls.
+_ela_render_company_sidebar()
 # === End ELA Company Sidebar ===
-
-
-
-
 
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
@@ -35,7 +39,6 @@ def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
     try:
         import streamlit as st, pandas as pd
-
     except Exception:
         st = None; pd = None
     rid = None
