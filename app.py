@@ -412,12 +412,6 @@ except NameError:
         """
         import streamlit as st
 
-
-# ensure set_aside column exists
-try:
-    conn.execute("ALTER TABLE deals ADD COLUMN set_aside TEXT")
-except Exception:
-    pass
         # If a later, full implementation is available, delegate.
         for name in ("__p_o4_signature_ui", "__p_signature_ui", "__p_call_sig_ui_full"):
             fn = globals().get(name)
@@ -7957,167 +7951,7 @@ def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime:
 def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
     try:
         import pandas as _pd
-        df = _pd.__p_read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url, set_aside) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                        """, (
-                                            row.get('Title') or "",
-                                            row.get('Agency Path') or "",
-                                            "Bidding",
-                                            None,
-                                            row.get('Notice ID') or "",
-                                            row.get('Solicitation') or "",
-                                            row.get('Posted') or "",
-                                            row.get('Response Due') or "",
-                                            row.get('NAICS') or "",
-                                            row.get('PSC') or "",
-                                            row.get('SAM Link') or "",
-                                        ),
-                                    )
-                                    deal_id = cur.lastrowid
-                                    try:
-                                        cur.execute("UPDATE deals SET status=?, stage=? rfp_deadline=?,  WHERE id=?", (STAGES_ORDERED[0], STAGES_ORDERED[0], str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, deal_id))
-                                        cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
-                                    except Exception:
-                                        pass
-                                    _db.commit()
-                                try:
-                                    with _closing(_db.cursor()) as cur:
-                                        cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
-                                        rfp_id = cur.lastrowid
-                                        _db.commit()
-                                    att_saved = 0
-                                    try:
-                                        for fname, fbytes in sam_try_fetch_attachments(str(row.get('Notice ID') or '')) or []:
-                                            try:
-                                                save_rfp_file_db(_db, rfp_id, fname, fbytes)
-                                                att_saved += 1
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
-                                st.success(f"Saved to Deals{' · ' + str(att_saved) + ' attachment(s) pulled' if att_saved else ''}")
-                            except Exception as e:
-                                st.error("Failed to save deal: %s" % (e,))
-                            finally:
-                                try:
-                                    if _owned:
-                                        _db.close()
-                                except Exception:
-                                    pass
-                    with c5:
-                        # Ask RFP Analyzer (restored)
-                        try:
-                            _render_ask_rfp_button(row.to_dict())  # expected to open the modal
-                        except Exception:
-                            if st.button('Ask RFP Analyzer 💬', key=f'ask_rfp_{i}'):
-                                try:
-                                    _ask_rfp_analyzer_modal(row.to_dict())
-                                except Exception as _e:
-                                    st.warning(f'Analyzer dialog unavailable: {_e}')
-# Push notice to Analyzer tab
-                        if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
-                            try:
-                                notice = row.to_dict()
-                            except Exception:
-                                notice = {}
-                            rid = None
-                            try:
-                                rid = _ensure_rfp_for_notice(conn, notice)
-                                st.session_state["current_rfp_id"] = int(rid)
-                            except Exception as _e:
-                                st.warning(f"RFP record not created: {_e}")
-                            try:
-                                _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
-                                _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
-                                if rid and _nid:
-                                    try:
-                                        _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                            st.session_state["rfp_selected_notice"] = notice
-                            st.session_state["nav_target"] = "RFP Analyzer"
-                            st.success("Opening RFP Analyzer…")
-                            try:
-                                router("RFP Analyzer", conn); st.stop()
-                            except Exception:
-                                try: st.rerun()
-                                except Exception:
-                                    st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
-
-            # Selected details panel
-
-            # Bottom pager
-            bp1, bp2, bp3 = st.columns([1, 3, 1])
-            with bp1:
-                if st.button("◀ Prev", key="sam_prev_btn_bottom", disabled=(cur_page <= 1)):
-                    _sam_go(-1)
-            with bp2:
-                st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
-            with bp3:
-                if st.button("Next ▶", key="sam_next_btn_bottom", disabled=(cur_page >= total_pages)):
-                    _sam_go(1)
-            st.divider()
-            sel_idx = st.session_state.get("sam_selected_idx")
-            if isinstance(sel_idx, int) and 0 <= sel_idx < len(results_df):
-                row = results_df.iloc[sel_idx]
-                with st.expander("Opportunity Details", expanded=True):
-                    c1, c2 = st.columns([3,2])
-                    with c1:
-                        st.write(f"**Title:** {row.get('Title') or ''}")
-                        st.write(f"**Solicitation:** {row.get('Solicitation') or '—'}")
-                        st.write(f"**Type:** {row.get('Type') or '—'}")
-                        st.write(f"**Set-Aside:** {row.get('Set-Aside') or '—'} ({row.get('Set-Aside Code') or '—'})")
-                        st.write(f"**NAICS:** {row.get('NAICS') or '—'}  **PSC:** {row.get('PSC') or '—'}")
-                        st.write(f"**Agency Path:** {row.get('Agency Path') or '—'}")
-                    with c2:
-                        st.write(f"**Posted:** {row.get('Posted') or '—'}")
-                        st.write(f"**Response Due:** {row.get('Response Due') or '—'}")
-                        st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
-                        if row.get('SAM Link'):
-                            st.markdown(f"[Open in SAM]({row['SAM Link']})")
-
-    # ---------- ALERTS TAB ----------
-def run_research_tab(conn: "sqlite3.Connection") -> None:
-    st.header("Research (FAR/DFARS/Wage/NAICS)")
-    url = st.text_input("URL", placeholder="https://www.acquisition.gov/")
-    ttl = st.number_input("Cache TTL (hours)", min_value=1, max_value=168, value=24, step=1)
-    q = st.text_input("Highlight phrase (optional)")
-    if st.button("Fetch", type="primary", key="research_fetch_btn"):
-        with st.spinner("Fetching"):
-            rec = research_fetch(url.strip(), ttl_hours=int(ttl))
-        if rec.get("status", 0) != 200 and not rec.get("cached"):
-            st.error(f"Fetch failed or not cached. Status {rec.get('status')} — {rec.get('error','')}")
-        else:
-            st.success(("Loaded from cache" if rec.get("cached") else "Fetched") + f" — status {rec.get('status')}")
-            txt = rec.get("text","")
-            ex = research_extract_excerpt(txt, q or "")
-            st.text_area("Excerpt", value=ex, height=240)
-            if rec.get("path"):
-                st.markdown(f"[Open cached text]({rec['path']})")
-    st.caption("Shortcuts: FAR | DFARS | Wage Determinations | NAICS | SBA Size Standards")
-
-# === Phase 3 helpers (injected) ===
-import datetime as _dt, hashlib, re as _re
-
-def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
-    from contextlib import closing as _closing
-    sha = hashlib.sha256(blob or b"").hexdigest()
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT OR IGNORE INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
-            "VALUES (?, ?, ?, ?, ?,NULL,?, datetime('now'))",
-            (int(rfp_id), filename, mime or "application/octet-stream", sha, blob)
-        )
-        conn.commit()
-
-def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
-    try:
-        import pandas as _pd
-        df = _pd.__p_read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key,
-                                            row.get('Set-Aside') or ""))
+        df = _pd.__p_read_sql_query("SELECT value FROM rfp_meta WHERE rfp_id=? AND key=?", conn, params=(int(rfp_id), str(key)))
         if not df.empty:
             return str(df.iloc[0]["value"] or "")
     except Exception:
@@ -11731,8 +11565,6 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             st.caption(str(r.get("agency") or ""))
                             if r.get('rfp_deadline'):
                                 st.caption(f"Due: {r['rfp_deadline']}")
-                                if r.get('set_aside') or r.get('Set-Aside'):
-                                    st.caption(f"Set-Aside: {r.get('set_aside') or r.get('Set-Aside')}")
                             v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
                             owner_opts = ["Quincy","Collin","Charles"]
                             owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
