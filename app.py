@@ -11462,13 +11462,31 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
         st.subheader("Kanban")
         try:
-            df_k = None
+            # Prefer base table. Include owner-null when filtering so old deals still show and can be assigned.
             if deal_owner_ctx != "All":
-                df_k = pd.read_sql_query("SELECT id, title, agency, status, value, owner FROM deals WHERE owner = ? ORDER BY id DESC;", conn, params=(deal_owner_ctx,))
+                df_k = pd.read_sql_query(
+                    "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
+                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                    "FROM deals WHERE (owner = ? OR owner IS NULL OR owner = '') "
+                    "ORDER BY id DESC;",
+                    conn, params=(deal_owner_ctx,)
+                )
             else:
-                df_k = pd.read_sql_query("SELECT id, title, agency, status, value, owner FROM deals ORDER BY id DESC;", conn, params=())
+                df_k = pd.read_sql_query(
+                    "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
+                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                    "FROM deals ORDER BY id DESC;",
+                    conn, params=()
+                )
         except Exception:
-            df_k = None
+            # Fallback to view without owner column
+            try:
+                df_k = pd.read_sql_query(
+                    "SELECT id, title, agency, status, value, '' AS owner FROM deals_t ORDER BY id DESC;",
+                    conn, params=()
+                )
+            except Exception:
+                df_k = None
         if df_k is None or df_k.empty:
             st.caption("No deals to display")
         else:
