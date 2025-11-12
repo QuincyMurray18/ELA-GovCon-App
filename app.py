@@ -7724,19 +7724,28 @@ def run_sam_watch(conn) -> None:
             cur_page = max(1, min(cur_page, total_pages))
             st.session_state["sam_page"] = cur_page
 
+            def _sam_go(delta:int):
+
+                cur = int(st.session_state.get('sam_page', 1))
+
+                st.session_state['sam_page'] = cur + int(delta)
+
+                st.session_state['sam_scroll_to_top'] = True
+
+                st.rerun()
+
+
             p1, p2, p3 = st.columns([1, 3, 1])
             with p1:
                 if st.button("◀ Prev", key="sam_prev_btn", disabled=(cur_page <= 1)):
-                    st.session_state["sam_page"] = cur_page - 1
-                    st.session_state['sam_scroll_to_top'] = True
+                    _sam_go(-1)
 st.session_state["sam_page"] = cur_page - 1
                     st.rerun()
             with p2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with p3:
                 if st.button("Next ▶", key="sam_next_btn", disabled=(cur_page >= total_pages)):
-                    st.session_state["sam_page"] = cur_page + 1
-                    st.session_state['sam_scroll_to_top'] = True
+                    _sam_go(1)
 st.session_state["sam_page"] = cur_page + 1
                     st.rerun()
 
@@ -7880,16 +7889,14 @@ st.session_state["sam_page"] = cur_page + 1
             bp1, bp2, bp3 = st.columns([1, 3, 1])
             with bp1:
                 if st.button("◀ Prev", key="sam_prev_btn_bottom", disabled=(cur_page <= 1)):
-                    st.session_state["sam_page"] = cur_page - 1
-                    st.session_state['sam_scroll_to_top'] = True
+                    _sam_go(-1)
 st.session_state["sam_page"] = cur_page - 1
                     st.rerun()
             with bp2:
                 st.caption(f"Page {cur_page} of {total_pages} — showing {min(page_size, total - (cur_page - 1) * page_size)} of {total} results")
             with bp3:
                 if st.button("Next ▶", key="sam_next_btn_bottom", disabled=(cur_page >= total_pages)):
-                    st.session_state["sam_page"] = cur_page + 1
-                    st.session_state['sam_scroll_to_top'] = True
+                    _sam_go(1)
 st.session_state["sam_page"] = cur_page + 1
                     st.rerun()
 
