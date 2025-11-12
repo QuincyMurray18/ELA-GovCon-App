@@ -11503,7 +11503,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             st.markdown(f"#{did} · **{r.get('title') or ''}**")
                             st.caption(str(r.get("agency") or ""))
                             v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
-                            ns = st.selectbox("Stage", STAGES_ORDERED, index=0, key=f"k_stage_{did}")
+                            owner_opts = ["Quincy","Collin","Charles"]
+                            owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
+                            owner_new = st.selectbox("Owner", owner_opts, index=(owner_opts.index(owner_cur) if owner_cur in owner_opts else 0), key=f"k_owner_{did}")
+
+                            ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
                             c1, c2, c3 = st.columns([1,1,1])
                             with c1:
                                 if st.button("◀", key=f"k_prev_{did}"):
@@ -11513,7 +11517,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         cur.execute("UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, did))
                                         if ns2 != stage:
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
-                                        cur.execute("UPDATE deals SET value=? WHERE id=?", (float(v or 0.0), did))
+                                        cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
                                         conn.commit()
                                     st.rerun()
                             with c2:
@@ -11533,7 +11537,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         cur.execute("UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, did))
                                         if ns2 != stage:
                                             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
-                                        cur.execute("UPDATE deals SET value=? WHERE id=?", (float(v or 0.0), did))
+                                        cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
                                         conn.commit()
                                     st.rerun()
 
