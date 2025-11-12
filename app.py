@@ -9893,18 +9893,6 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         elif _pct_ok < _min_cov:
             st.error(f"Coverage {_covered}/{_total} ({_pct_ok:.0%}) is below threshold {_min_cov:.0%}. Export is disabled.")
         if st.button("Export DOCX", type="primary", disabled=not (_total > 0 and _pct_ok >= _min_cov)):
-        _min_cov = st.slider("Minimum compliance coverage to allow export", min_value=0.0, max_value=1.0, value=float(_min_cov), step=0.05, key="pb_min_cov_slider")
-        try:
-            _cov = x6_coverage(conn, int(rfp_id)) if 'x6_coverage' in globals() else (0,0)
-            _total, _covered = int(_cov[0]), int(_cov[1])
-            _pct_ok = 0 if _total == 0 else (_covered / max(1, _total))
-        except Exception:
-            _total, _covered, _pct_ok = 0, 0, 0.0
-        if _total == 0:
-            st.warning("No compliance items extracted yet. Consider running Compliance Matrix in RFP Analyzer.")
-        elif _pct_ok < _min_cov:
-            st.error(f"Coverage {_covered}/{_total} ({_pct_ok:.0%}) is below threshold {_min_cov:.0%}. Export is disabled.")
-        if st.button("Export DOCX", type="primary"):
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
             exported = _export_docx(
                 out_path,
