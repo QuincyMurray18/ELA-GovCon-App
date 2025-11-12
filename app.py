@@ -2324,14 +2324,8 @@ def _x3_render_modal(conn, notice: dict):
     # Coverage meter
     try:
         cov_total = cov_covered = 0
-        if 'x6_coverage' in globals():
-            cov_total = 0; cov_covered = 0
-            _cov = x6_coverage(conn, int(rfp_id))
-            if isinstance(_cov, tuple) and len(_cov) == 2:
-                cov_total = int(_cov[0] + 0) if False else int(_cov[0])  # keep types strict
-                cov_covered = int(_cov[1]) if isinstance(_cov[1], (int,)) else int(_cov[1])
-        elif 'covered' in locals() and 'total' in locals():
-            cov_total = int(total); cov_covered = int(covered)
+        _cov = x6_coverage(conn, int(rfp_id)) if 'x6_coverage' in globals() else (0,0)
+        cov_total, cov_covered = int(_cov[0]), int(_cov[1])
         _pct = 0.0 if cov_total == 0 else max(0.0, min(1.0, float(cov_covered) / float(cov_total)))
         cc1, cc2 = st.columns([1,3])
         with cc1:
@@ -7681,20 +7675,22 @@ def run_sam_watch(conn) -> None:
             recs = out.get("records", [])
             results_df = flatten_records(recs)
             st.session_state["sam_results_df"] = results_df
-                    # Optional short reasons column
-                    try:
-                        if "Reasons" not in results_df.columns and "Title" in results_df.columns:
-                            _q = (st.session_state.get("sam_nl_text") or "").lower()
-                            _terms = [t for t in re.split(r"[^a-z0-9]+", _q) if t]
-                            def _top_reasons(row):
-                                base = (str(row.get("Title") or "") + " " + str(row.get("Description") or "")).lower()
-                                hits = [t for t in dict.fromkeys(_terms) if t and t in base]
-                                return ", ".join(hits[:5])
-                            results_df["Reasons"] = [ _top_reasons(r if hasattr(r, "to_dict") else r) for _, r in results_df.iterrows() ]
-                            st.session_state["sam_results_df"] = results_df
-                    except Exception as _e_r:
-                        pass
-    
+            # Optional short Reasons column for quick triage
+            try:
+                if "Reasons" not in results_df.columns and "Title" in results_df.columns:
+                    q = (st.session_state.get("sam_nl_text") or "").lower()
+                    # simple tokenization without regex to avoid import issues
+                    terms = [t for t in q.replace("/", " ").replace("-", " ").replace(",", " ").split() if t]
+                    def _top_reasons(row):
+                        base = (str(row.get("Title") or "") + " " + str(row.get("Description") or "")).lower()
+                        hits = [t for t in dict.fromkeys(terms) if t and t in base]
+                        return ", ".join(hits[:5])
+                    results_df = results_df.copy()
+                    results_df["Reasons"] = [ _top_reasons(dict(r)) for _, r in results_df.iterrows() ]
+                    st.session_state["sam_results_df"] = results_df
+            except Exception:
+                pass
+
             st.session_state["sam_page"] = 1
             st.session_state.pop("sam_selected_idx", None)
             st.success(f"Fetched {len(results_df)} notices")
@@ -9891,8 +9887,6 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
         out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
         out_path = os.path.join(DATA_DIR, out_name)
-        
-        # Compliance gate in Builder
         _min_cov = float(st.session_state.get("pb_min_coverage", 0.7))
         _min_cov = st.slider("Minimum compliance coverage to allow export", min_value=0.0, max_value=1.0, value=float(_min_cov), step=0.05, key="pb_min_cov_slider")
         try:
@@ -9905,8 +9899,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             st.warning("No compliance items extracted yet. Consider running Compliance Matrix in RFP Analyzer.")
         elif _pct_ok < _min_cov:
             st.error(f"Coverage {_covered}/{_total} ({_pct_ok:.0%}) is below threshold {_min_cov:.0%}. Export is disabled.")
-        
-        if _total > 0 and _pct_ok >= _min_cov and if st.button("Export DOCX", type="primary"):
+        if st.button("Export DOCX", type="primary", disabled=not (_total > 0 and _pct_ok >= _min_cov)):
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
             exported = _export_docx(
                 out_path,
