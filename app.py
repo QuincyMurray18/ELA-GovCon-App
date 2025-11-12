@@ -11368,31 +11368,38 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         if tf_priority:
             q += " AND priority IN (%s)" % ",".join(["?"]*len(tf_priority)); params.extend(tf_priority)
         q += " ORDER BY COALESCE(due_date,'9999-12-31') ASC"
-        df_t = pd.read_sql_query(q, conn, params=params)
-        
-if df_t.empty:
-    st.write("No tasks")
-else:
-    for _, r in df_t.iterrows():
-        c1, c2, c3, c4 = st.columns([3,2,2,2])
-        with c1:
-            st.write(f"**{r['title']}**  — due {r['due_date'] or '—'}")
-        with c2:
-            opts = ["Open","In Progress","Done"]
-            new_status = st.selectbox("Status", opts, index=(opts.index(r['status']) if r['status'] in opts else 0), key=f"task_status_{int(r['id'])}")
-        with c3:
-            pr_opts = ["Low","Normal","High"]
-            new_pri = st.selectbox("Priority", pr_opts, index=(pr_opts.index(r['priority']) if r['priority'] in pr_opts else 1), key=f"task_pri_{int(r['id'])}")
-        with c4:
-            if st.button("Apply", key=f"task_apply_{int(r['id'])}"):
-                with closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "UPDATE tasks SET status=?, priority=?, completed_at=CASE WHEN ?='Done' THEN datetime('now') ELSE completed_at END WHERE id=?;",
-                        (new_status, new_pri, new_status, int(r["id"])),
-                    )
-                    conn.commit()
-                st.success("Updated")
-
+        try:
+            df_t = pd.read_sql_query(q, conn, params=params)
+        except Exception:
+            import pandas as _pd
+            df_t = _pd.DataFrame(columns=["id","title","due_date","status","priority","deal_id","contact_id"])
+        if df_t is None or df_t.empty:
+            st.write("No tasks")
+        else:
+            for _, r in df_t.iterrows():
+                c1, c2, c3, c4 = st.columns([3,2,2,2])
+                with c1:
+                    st.write(f"**{r['title']}**  — due {r['due_date'] or '—'}")
+                with c2:
+                    _opts = ["Open","In Progress","Done"]
+                    _cur = str(r.get('status') or 'Open')
+                    _idx = _opts.index(_cur) if _cur in _opts else 0
+                    new_status = st.selectbox("Status", _opts, index=_idx, key=f"task_status_{int(r['id'])}")
+                with c3:
+                    _p = ["Low","Normal","High"]
+                    _cp = str(r.get('priority') or 'Normal')
+                    _pidx = _p.index(_cp) if _cp in _p else 1
+                    new_pri = st.selectbox("Priority", _p, index=_pidx, key=f"task_pri_{int(r['id'])}")
+                with c4:
+                    if st.button("Apply", key=f"task_apply_{int(r['id'])}"):
+                        from contextlib import closing as _closing
+                        with _closing(conn.cursor()) as cur:
+                            cur.execute(
+                                "UPDATE tasks SET status=?, priority=?, completed_at=CASE WHEN ?='Done' THEN datetime('now') ELSE completed_at END WHERE id=?;",
+                                (new_status, new_pri, new_status, int(r["id"])),
+                            )
+                            conn.commit()
+                        st.success("Updated")
     # --- Pipeline
     with tabs[2]:
         # Add Deal (moved from Deals)
