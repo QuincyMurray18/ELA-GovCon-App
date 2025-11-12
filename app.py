@@ -11321,51 +11321,26 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     st.header("CRM")
     tabs = st.tabs(["Activities","Tasks","Pipeline","Settings"])
 
-    
-
-# Settings tab for probabilities
-with tabs[3]:
-    st.subheader("Stage probabilities")
-    _ensure_stage_probability_map(conn)
-    dfp = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn)
-    current = {r["stage"]: float(r["probability"]) for _, r in dfp.iterrows()} if not dfp.empty else {}
-    cols = st.columns(3)
-    edited_probs = {}
-    for i, sname in enumerate(STAGES_ORDERED):
-        with cols[i % 3]:
-            edited_probs[sname] = st.number_input(sname, min_value=0.0, max_value=1.0, step=0.05, value=float(current.get(sname, DEFAULT_STAGE_PROB.get(sname, 0.0))))
-
-
-def _ensure_deals_prob_columns(conn):
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info('deals')").fetchall()}
-        if 'probability' not in cols:
-            conn.execute("ALTER TABLE deals ADD COLUMN probability REAL DEFAULT 0")
-        if 'weighted_value' not in cols:
-            conn.execute("ALTER TABLE deals ADD COLUMN weighted_value REAL DEFAULT 0")
-    except Exception:
-        pass
-
-def _ensure_stage_probability_map(conn):
-    try:
-        conn.execute("CREATE TABLE IF NOT EXISTS stage_probability_map (stage TEXT PRIMARY KEY, probability REAL NOT NULL)")
-        existing = {r[0] for r in conn.execute("SELECT stage FROM stage_probability_map").fetchall()}
-        for s in STAGES_ORDERED:
-            if s not in existing:
-                conn.execute("INSERT OR REPLACE INTO stage_probability_map(stage, probability) VALUES(?,?)", (s, DEFAULT_STAGE_PROB.get(s, 0.0)))
-    except Exception:
-        pass
-
-def _recompute_deal_weighted(conn):
-    try:
-        prob_map = dict(conn.execute("SELECT stage, probability FROM stage_probability_map").fetchall())
-        rows = conn.execute("SELECT id, COALESCE(amount, 0.0), COALESCE(stage, status) FROM deals").fetchall()
-        for rid, amt, stg in rows:
-            p = float(prob_map.get(stg, 0.0))
-            wv = round(float(amt or 0.0) * p, 2)
-            conn.execute("UPDATE deals SET probability=?, weighted_value=? WHERE id=?", (p, wv, rid))
-    except Exception:
-        pass
+    # Settings tab for probabilities
+    with tabs[3]:
+        st.subheader("Stage probabilities")
+        try:
+            _ensure_stage_probability_map(conn)
+            dfp = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn, params=())
+            current = {r["stage"]: float(r["probability"]) for _, r in dfp.iterrows()} if not dfp.empty else {}
+        except Exception:
+            current = {}
+        cols = st.columns(3)
+        edited_probs = {}
+        for i, sname in enumerate(STAGES_ORDERED):
+            with cols[i % 3]:
+                edited_probs[sname] = st.number_input(sname, min_value=0.0, max_value=1.0, step=0.05, value=float(current.get(sname, DEFAULT_STAGE_PROB.get(sname, 0.0))))
+        if st.button("Save probabilities"):
+            with conn:
+                for sname, p in edited_probs.items():
+                    conn.execute("INSERT OR REPLACE INTO stage_probability_map(stage, probability) VALUES(?,?)", (sname, float(p)))
+            merge_crm_deals_upgrade(conn)
+            st.success("Saved")
 
 def merge_crm_deals_upgrade(conn):
     _ensure_deals_prob_columns(conn)
