@@ -11510,20 +11510,22 @@ def merge_crm_deals_upgrade(conn):
     # --- Pipeline
     with tabs[2]:
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=()
-try:
-    _ensure_stage_probability_map(conn)
-    prob_map_df = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn)
-    _pmap = {r["stage"]: float(r["probability"]) for _, r in prob_map_df.iterrows()} if not prob_map_df.empty else {}
-    if "value" in df.columns:
-        df["probability"] = df["status"].map(_pmap).fillna(0.0)
-        df["weighted_value"] = (df["value"].fillna(0.0) * df["probability"]).round(2)
-    elif "amount" in df.columns:
-        df["probability"] = df["status"].map(_pmap).fillna(0.0)
-        df["weighted_value"] = (df["amount"].fillna(0.0) * df["probability"]).round(2)
-except Exception:
-    pass
+        df = pd.read_sql_query("SELECT id, title, agency, status, value FROM deals_t ORDER BY id DESC;", conn, params=(),
 )
+
+        try:
+            _ensure_stage_probability_map(conn)
+            prob_map_df = pd.read_sql_query("SELECT stage, probability FROM stage_probability_map", conn, params=())
+            _pmap = {r["stage"]: float(r["probability"]) for _, r in prob_map_df.iterrows()} if not prob_map_df.empty else {}
+            if "value" in df.columns:
+                df["probability"] = df["status"].map(_pmap).fillna(0.0)
+                df["weighted_value"] = (df["value"].fillna(0.0) * df["probability"]).round(2)
+            elif "amount" in df.columns:
+                df["probability"] = df["status"].map(_pmap).fillna(0.0)
+                df["weighted_value"] = (df["amount"].fillna(0.0) * df["probability"]).round(2)
+        except Exception:
+            pass
+
         if df.empty:
             st.info("No deals")
         else:
