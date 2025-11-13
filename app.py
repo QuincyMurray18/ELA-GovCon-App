@@ -13512,15 +13512,12 @@ def email_template_delete(conn, template_id:int):
         conn.execute("DELETE FROM email_templates WHERE id=?", (int(template_id),))
 
 import re as _re_o2
-MERGE_TAGS = {"company","email","phone","city","state","naics","title","solicitation","due","notice_id"}
-def template_missing_tags(text: str) -> set[str]:
-    """Return any unknown merge tags used in the template body/subject."""
+MERGE_TAGS = {"company","email","title","solicitation","due","notice_id","first_name","last_name","city","state"}
+def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
     found = set(_re_o2.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", text or ""))
-    # Unknown tags are those that are not in the supported MERGE_TAGS set
-    return found - MERGE_TAGS
+    return required - found
 
 def render_outreach_templates(conn):
-
 
     st.subheader("Email templates")
     ensure_email_templates(conn)
@@ -13540,8 +13537,7 @@ def render_outreach_templates(conn):
         sig_html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
     missing = template_missing_tags((subject or "") + " " + (sig_html or ""))
     if missing:
-        st.warning("Unknown merge tags (will not be filled): " + ", ".join(sorted(missing)))
-    st.caption("Available merge tags: " + ", ".join(sorted(MERGE_TAGS)))
+        st.info("Missing merge tags: " + ", ".join(sorted(missing)))
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Save"):
@@ -13969,8 +13965,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             data = {k: str(r.get(k,"") or "") for k in r.index}
             subj = _o3_merge(subject_tpl or "", data)
             sig_html = _o3_merge(html_tpl or "", data)
-            # Auto-append a lightweight unsubscribe footer if not already present
-            if "unsubscribe" not in (sig_html or "").lower():
+            if "unsubscribe" not in html.lower():
                 sig_html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
             if test_only:
                 status = "Preview"; err = ""
