@@ -8235,12 +8235,6 @@ def _run_rfp_analyzer_phase3(conn):
         format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0],
         key="onepage_rfp_default"
     )
-    # Keep current_rfp_id in sync with the user's selection
-    try:
-        st.session_state["current_rfp_id"] = int(selected_rfp_id)
-    except Exception:
-        st.session_state["current_rfp_id"] = selected_rfp_id
-
     try:
         _p3_auto_wire_crm_from_rfp(conn, int(_ensure_selected_rfp_id(conn)))
     except Exception:
@@ -11692,15 +11686,22 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             if df_edit.empty:
                 st.write("No deals yet")
             else:
+                # Ensure rfp_deadline is a proper date type for editing
+                try:
+                    df_edit["rfp_deadline"] = pd.to_datetime(df_edit.get("rfp_deadline"), errors="coerce").dt.date
+                except Exception:
+                    pass
                 df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
                 df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
                 edited = st.data_editor(
                     df_edit,
                     use_container_width=True,
                     hide_index=True,
-                    column_config={"status": st.column_config.SelectboxColumn(options=STAGES_ORDERED), "owner": st.column_config.SelectboxColumn(options=["Quincy","Collin","Charles"]),
-                        "rfp_deadline": st.column_config.DateColumn(format="YYYY-MM-DD"), "prob_%": st.column_config.NumberColumn(disabled=True),
-                        "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
+                    column_config={
+                        "status": st.column_config.SelectboxColumn("Stage", options=STAGES_ORDERED),
+                        "rfp_deadline": st.column_config.DateColumn("RFP deadline", format="YYYY-MM-DD"),
+                        "prob_%": st.column_config.NumberColumn("Prob %", disabled=True),
+                        "weighted_value": st.column_config.NumberColumn("Weighted value", disabled=True, help="value × stage probability"),
                     },
                     key="crm_deals_editor",
                 )
@@ -12714,7 +12715,7 @@ def run_rfp_analyzer(conn) -> None:
         default_idx = 0
     rid = st.selectbox("RFP (One‑Page Analyzer)", options=df_rfps["id"].tolist(), index=default_idx,
                        format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0], key="onepage_rfp_default")
-    st.session_state["current_rfp_id"] = int(rid)
+    st.session_state["current_rfp_id"] = int(_ensure_selected_rfp_id(conn))
 
     # Controls
     c1, c2, c3 = st.columns([1,1,2])
