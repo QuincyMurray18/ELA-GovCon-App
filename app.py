@@ -9599,7 +9599,7 @@ def _compliance_flags(ctx: dict, df_items: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
-def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
+def _load_rfp_context_struct(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     try:
         rf = pd.read_sql_query("SELECT id, title, solnum, sam_url, created_at FROM rfps WHERE id=?;", conn, params=(int(rfp_id),))
     except Exception:
@@ -9611,7 +9611,7 @@ def _load_rfp_context(conn: "sqlite3.Connection", rfp_id: int) -> dict:
     joined = "\n".join(df_items["item_text"].astype(str).tolist()) if not df_items.empty else ""
     sections = pd.DataFrame([{"name":"Checklist Items","content": joined}])
     meta = rf.iloc[0].to_dict() if not rf.empty else {}
-    return {"rfp": meta, "sections": sections, "items": df_items}
+    return {"rfp": rf, "sections": sections, "items": df_items, "meta": meta}
 
 def run_lm_checklist(conn: "sqlite3.Connection") -> None:
 
@@ -9745,7 +9745,7 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
             st.success("Exported"); st.markdown(f"[Download CSV]({path})")
 
     st.subheader("Red-Flag Finder")
-    ctx = _load_rfp_context(conn, int(rfp_id))
+    ctx = _load_rfp_context_struct(conn, int(rfp_id))
     flags = _compliance_flags(ctx, df_items)
     if flags is None or flags.empty:
         st.write("No obvious flags detected.")
@@ -10024,7 +10024,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         index=0,
     )
     st.session_state["current_rfp_id"] = rfp_id
-    ctx = _load_rfp_context(conn, rfp_id)
+    ctx = _load_rfp_context_struct(conn, rfp_id)
 
     left, right = st.columns([3, 2])
     with left:
@@ -11226,7 +11226,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
         rfp_id = st.selectbox("RFP context for relevance scoring (optional)", options=[None] + df_rf["id"].tolist(),
                               format_func=lambda rid: "None" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0]}")
     if rfp_id:
-        ctx = _load_rfp_context(conn, int(rfp_id))
+        ctx = _load_rfp_context_struct(conn, int(rfp_id))
         title = (ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "")
         secs = ctx.get("sections", pd.DataFrame())
         # Compute scores
