@@ -12494,14 +12494,6 @@ def nav() -> str:
     if st.session_state.pop("_force_rfp_analyzer", False):
         st.session_state["nav_page"] = "RFP Analyzer"
 
-    # When files are being ingested / handled for One-Page Analyzer, prefer RFP Analyzer
-    if (
-        st.session_state.get("op_inline_files")
-        or st.session_state.get("op_new_files")
-        or st.session_state.get("onepage_uploads")
-    ):
-        st.session_state["nav_page"] = "RFP Analyzer"
-
     # Auto-jump to One-Page Analyzer when a SAM notice was pushed
     if st.session_state.pop("rfp_selected_notice", None):
         st.session_state["nav_page"] = "RFP Analyzer"
