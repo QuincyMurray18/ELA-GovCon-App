@@ -621,10 +621,10 @@ def __p_render_signature(conn, sender_email, body_html):
     sig_html = sig_html or ""
     logo_html = ""
 
-    # Inline the logo only if it is reasonably small; very large
-    # data URIs can push the email body over Gmail's clipping threshold.
-    max_inline_bytes = 40000  # ~40 KB raw image data
-    if logo_blob and len(logo_blob) <= max_inline_bytes:
+    # Inline the logo directly as a data URI so it is always sent with the
+    # signature. If clipping ever becomes an issue, reduce the logo file size
+    # itself rather than dropping it entirely.
+    if logo_blob:
         try:
             b64 = base64.b64encode(logo_blob).decode("ascii")
             mime = logo_mime or "image/png"
@@ -637,8 +637,6 @@ def __p_render_signature(conn, sender_email, body_html):
         except Exception:
             logo_html = ""
     else:
-        # If the stored logo is very large, skip inlining it so that the
-        # email remains compact and is less likely to be clipped.
         logo_html = ""
 
     final_sig = sig_html
