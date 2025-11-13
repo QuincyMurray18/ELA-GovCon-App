@@ -582,16 +582,18 @@ except NameError:
         st.caption("Preview")
         st.markdown(sig_html or "", unsafe_allow_html=True)
 
+
 def __p_render_signature(conn, sender_email, body_html):
     """
     Render the stored Outreach email signature for the given sender and
     append it to the provided HTML body.
 
-    Returns a tuple of (html_with_signature, inline_images). Inline images
-    are currently inlined via data URIs so the list is empty.
-    """
-    import base64
+    Returns a tuple of (html_with_signature, inline_images).
 
+    inline_images is a list of dicts like
+    {"cid": "...", "content": bytes, "mime": "image/png"} that should be
+    attached as inline images to the email message.
+    """
     if conn is None:
         return body_html, []
 
@@ -620,24 +622,22 @@ def __p_render_signature(conn, sender_email, body_html):
     sig_html, logo_blob, logo_mime = row
     sig_html = sig_html or ""
     logo_html = ""
+    inline_images = []
 
-    # Inline the logo directly as a data URI so it is always sent with the
-    # signature. If clipping ever becomes an issue, reduce the logo file size
-    # itself rather than dropping it entirely.
+    # Prefer CID-based inline image instead of large data URIs. This keeps
+    # the HTML body small so Gmail is less likely to clip the message while
+    # still displaying the logo inline in supported clients.
     if logo_blob:
-        try:
-            b64 = base64.b64encode(logo_blob).decode("ascii")
-            mime = logo_mime or "image/png"
-            logo_html = (
-                f'<div style="margin-bottom:4px;">'
-                f'<img src="data:{mime};base64,{b64}" alt="Logo" '
-                f'style="max-width:200px;height:auto;border:0;" />'
-                f"</div>"
-            )
-        except Exception:
-            logo_html = ""
-    else:
-        logo_html = ""
+        cid_base = (sender_email or "logo").replace("@", "_at_").replace(">", "").replace("<", "")
+        cid = f"{cid_base}_siglogo"
+        mime = logo_mime or "image/png"
+        logo_html = (
+            f'<div style="margin-bottom:4px;">'
+            f'<img src="cid:{cid}" alt="Logo" '
+            f'style="max-width:200px;height:auto;border:0;" />'
+            f"</div>"
+        )
+        inline_images.append({"cid": cid, "content": logo_blob, "mime": mime})
 
     final_sig = sig_html
     if logo_html:
@@ -655,7 +655,8 @@ def __p_render_signature(conn, sender_email, body_html):
     else:
         combined = final_sig
 
-    return combined, []
+    return combined, inline_images
+
 # --- end early stub ---
 
 # === BEGIN READSQL SHIM ===
@@ -14197,6 +14198,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     try:
         from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
         from email.mime.text import MIMEText as _O3MIMEText
+        from email.mime.image import MIMEImage as _O3MIMEImage
         import smtplib as _o3smtp
     except Exception:
         st.error("Email libraries not available in this environment.")
@@ -14399,7 +14401,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                 # Apply saved signature for the active sender
                 try:
                     _sig_conn = (get_o4_conn() if "get_o4_conn" in globals() else None) or conn
-                    html_to_send, _inline_imgs = __p_render_signature(
+                    html_to_send, inline_imgs = __p_render_signature(
                         _sig_conn,
                         (sender.get("email") or sender.get("username") or "").strip(),
                         html_to_send,
@@ -14409,6 +14411,25 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
 
                 wrapped_html = _o3_wrap_email_html(html_to_send)
                 msg.attach(_O3MIMEText(wrapped_html, "html", "utf-8"))
+
+                # Attach inline signature images (for example, the sender logo)
+                try:
+                    if 'inline_imgs' in locals() and inline_imgs:
+                        for _img in inline_imgs:
+                            try:
+                                _content = _img.get("content") or b""
+                                if not _content:
+                                    continue
+                                part = _O3MIMEImage(_content)
+                                _cid = _img.get("cid") or "siglogo"
+                                part.add_header("Content-ID", f"<{_cid}>")
+                                part.add_header("Content-Disposition", "inline", filename=_cid)
+                                msg.attach(part)
+                            except Exception:
+                                # Ignore logo-specific issues so the rest of the batch can send.
+                                pass
+                except Exception:
+                    pass
 
                 # Attach files if provided
                 try:
