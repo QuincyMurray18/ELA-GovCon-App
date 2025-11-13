@@ -8235,8 +8235,24 @@ def _run_rfp_analyzer_phase3(conn):
         format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0],
         key="onepage_rfp_default"
     )
+
+    # Keep the global + session in sync with the user's choice
     try:
-        _p3_auto_wire_crm_from_rfp(conn, int(_ensure_selected_rfp_id(conn)))
+        _selected_id_int = int(selected_rfp_id)
+    except Exception:
+        _selected_id_int = selected_rfp_id
+
+    try:
+        st.session_state["current_rfp_id"] = _selected_id_int
+    except Exception:
+        pass
+    try:
+        globals()["selected_rfp_id"] = _selected_id_int
+    except Exception:
+        pass
+
+    try:
+        _p3_auto_wire_crm_from_rfp(conn, int(_selected_id_int))
     except Exception:
         pass
 
@@ -12732,7 +12748,12 @@ def run_rfp_analyzer(conn) -> None:
         default_idx = 0
     rid = st.selectbox("RFP (One‑Page Analyzer)", options=df_rfps["id"].tolist(), index=default_idx,
                        format_func=lambda i: f"#{i} — " + df_rfps.loc[df_rfps['id']==i,'title'].values[0], key="onepage_rfp_default")
-    st.session_state["current_rfp_id"] = int(_ensure_selected_rfp_id(conn))
+    # Keep the session in sync with the current dropdown choice
+    try:
+        st.session_state["current_rfp_id"] = int(rid)
+    except Exception:
+        st.session_state["current_rfp_id"] = rid
+
 
     # Controls
     c1, c2, c3 = st.columns([1,1,2])
