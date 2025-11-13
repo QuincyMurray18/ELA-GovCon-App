@@ -11856,6 +11856,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             if df_edit.empty:
                 st.write("No deals yet")
             else:
+                # Normalize rfp_deadline to real dates so DateColumn works
+                if "rfp_deadline" in df_edit.columns:
+                    df_edit["rfp_deadline"] = pd.to_datetime(df_edit["rfp_deadline"], errors="coerce").dt.date
                 df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
                 df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
                 edited = st.data_editor(
