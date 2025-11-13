@@ -267,6 +267,8 @@ except NameError:  # define if missing
             "12) Include a Risk table with mitigations.\n"
             "13) Add a brief L&M compliance crosswalk.\n"
             "14) Keep tone federal and precise."
+            "15) Refer to the contractor as 'ELA Management' instead of 'we' or 'us'. "
+            "Avoid first-person plural."
         )
 
 try:
@@ -3801,7 +3803,7 @@ You are a veteran federal proposal writer. Write ONLY the section titled '{secti
 Rules:
 - Stay strictly within the scope of '{section}'. Do not include Risk Mitigation, Quality, Staffing, Management, Past Performance, or Pricing.
 - One idea per paragraph. Sentences average 14–20 words.
-- Balance 'you' and 'we' near 1:1. Use present-tense commitments. Avoid hedges.
+- Refer to the contractor as 'ELA Management' (no 'we' or 'us'). Use present-tense commitments. Avoid hedges.
 - Include one proof point: a metric, artifact, or timeline relevant to the section.
 - Close with a promise line tied to risk control.
 
@@ -17030,6 +17032,8 @@ def _style_guide() -> str:
             "12) Include a Risk table with mitigations.\n"
             "13) Add a brief L&M compliance crosswalk.\n"
             "14) Keep tone federal and precise."
+            "15) Refer to the contractor as 'ELA Management' instead of 'we' or 'us'. "
+            "Avoid first-person plural."
         )
 
 
@@ -17117,7 +17121,38 @@ def _pb_psychology_framework() -> str:
 
 
 def _finalize_draft(text: str) -> str:
-    return _one_idea_per_paragraph(_enforce_style_guide(_strip_citations(text)))
+    try:
+        t = _strip_citations(text)
+    except Exception:
+        t = str(text or "")
+    try:
+        t = _enforce_style_guide(t)
+    except Exception:
+        pass
+    try:
+        import re as _re_fix
+        # Headings and terms: Assumptions -> Dependencies
+        t = _re_fix.sub(r'(?im)^\s*assumptions\s*:?', 'Dependencies', t)
+        def _swap_dep(mo):
+            word = mo.group(0)
+            # preserve case
+            if word.isupper():
+                return 'DEPENDENCIES' if word.endswith('S') else 'DEPENDENCY'
+            if word[0].isupper():
+                return 'Dependencies' if word.endswith('s') else 'Dependency'
+            return 'dependencies' if word.endswith('s') else 'dependency'
+        t = _re_fix.sub(r'(?i)\bassumptions\b', _swap_dep, t)
+        t = _re_fix.sub(r'(?i)\bassumption\b', _swap_dep, t)
+    except Exception:
+        pass
+    # Enforce ELA Management instead of first-person plural
+    try:
+        import re as _re_pron
+        t = _re_pron.sub(r'\b[Ww]e\b', 'ELA Management', t)
+        t = _re_pron.sub(r'\b[Uu]s\b', 'ELA Management', t)
+    except Exception:
+        pass
+    return _one_idea_per_paragraph(t)
 
 def _get_conn(db_path="samwatch.db"):
     import os
