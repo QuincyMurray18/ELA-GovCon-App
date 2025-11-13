@@ -4333,11 +4333,11 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
         df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    if df is None or df.empty:
+    if df_bytes is None or df_bytes.empty:
         return {"ok": False, "error": "No linked files"}
     added = 0
     skipped = 0
-    for _, row in df.iterrows():
+    for _, row in df_bytes.iterrows():
         fid = int(row["id"]); name = row.get('filename') or f"file_{fid}"
         try:
             blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
@@ -7369,7 +7369,7 @@ def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
         if row:
             return int(row[0])
         cur.execute(
-            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
             (notice_row.get('Title') or "", notice_row.get('Solicitation') or "", nid, notice_row.get('SAM Link') or "", "")
         )
         rid = int(cur.lastrowid)
@@ -8603,7 +8603,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                                 ((_title_in or _guess_title(full_text, "Untitled")), (_solnum_in or _guess_solnum(full_text)), (_parse_sam_notice_id(_sam_in) or ""), (_sam_in or ""), "",)
                             )
                             rfp_id = cur.lastrowid
@@ -8689,7 +8689,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                                 ((_title_in or _guess_title(text, f.name)), (_solnum_in or _guess_solnum(text)), (_parse_sam_notice_id(_sam_in) or ""), _sam_in, "", )
                             )
                             rfp_id = cur.lastrowid
@@ -12536,7 +12536,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
@@ -12544,7 +12544,7 @@ def run_rfp_analyzer(conn) -> None:
                 # Save uploads (ZIPs expanded)
                 import io as _io, zipfile as _zip
                 saved = 0
-                for f in (st.session_state.get("op_new_files") or []):
+                for f in (ups or []):
                     try:
                         name = (getattr(f, "name", "upload") or "").lower()
                         b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
@@ -12597,7 +12597,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
@@ -12605,7 +12605,7 @@ def run_rfp_analyzer(conn) -> None:
                 # Save uploads (ZIPs expanded)
                 import io as _io, zipfile as _zip
                 saved = 0
-                for f in (st.session_state.get("op_inline_files") or []):
+                for f in (ups or []):
                     try:
                         name = (getattr(f, "name", "upload") or "").lower()
                         b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
