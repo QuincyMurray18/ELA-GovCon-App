@@ -11686,22 +11686,15 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             if df_edit.empty:
                 st.write("No deals yet")
             else:
-                # Ensure rfp_deadline is a proper date type for editing
-                try:
-                    df_edit["rfp_deadline"] = pd.to_datetime(df_edit.get("rfp_deadline"), errors="coerce").dt.date
-                except Exception:
-                    pass
                 df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
                 df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
                 edited = st.data_editor(
                     df_edit,
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "status": st.column_config.SelectboxColumn("Stage", options=STAGES_ORDERED),
-                        "rfp_deadline": st.column_config.DateColumn("RFP deadline", format="YYYY-MM-DD"),
-                        "prob_%": st.column_config.NumberColumn("Prob %", disabled=True),
-                        "weighted_value": st.column_config.NumberColumn("Weighted value", disabled=True, help="value × stage probability"),
+                    column_config={"status": st.column_config.SelectboxColumn(options=STAGES_ORDERED), "owner": st.column_config.SelectboxColumn(options=["Quincy","Collin","Charles"]),
+                        "rfp_deadline": st.column_config.DateColumn(format="YYYY-MM-DD"), "prob_%": st.column_config.NumberColumn(disabled=True),
+                        "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
                     },
                     key="crm_deals_editor",
                 )
@@ -12527,50 +12520,74 @@ def init_session() -> None:
     if "initialized" not in st.session_state:
         st.session_state.initialized = True
 
+
 def nav() -> str:
+    """Main sidebar navigation with smart defaults but no disappearing sidebar.
+
+    We always render the sidebar + "Go to" selectbox. Internal flags only
+    control the *default* selected page, never whether the sidebar shows.
+    """
+    # Decide which page should be preselected
+    default_page = None
+
+    # One-shot "force" flag (used when creating / ingesting RFPs, etc.)
     if st.session_state.pop('_force_rfp_analyzer', False):
-        return 'RFP Analyzer'
+        default_page = 'RFP Analyzer'
+
+    # Keep user on RFP Analyzer while working with inline / new RFP uploads
     if st.session_state.get('op_inline_files'):
-        return 'RFP Analyzer'
+        default_page = 'RFP Analyzer'
     if st.session_state.get('op_new_files'):
-        return 'RFP Analyzer'
+        default_page = 'RFP Analyzer'
     if st.session_state.get('onepage_uploads'):
-        return 'RFP Analyzer'
+        default_page = 'RFP Analyzer'
+
+    # Auto-jump when a SAM notice was pushed
+    if st.session_state.pop('rfp_selected_notice', None):
+        default_page = 'RFP Analyzer'
+
+    # One-shot explicit nav target
+    _tgt = st.session_state.pop("nav_target", None)
+    if _tgt:
+        default_page = _tgt
+
+    # Sidebar chrome
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
-    # Auto-jump to One‑Page Analyzer when a SAM notice was pushed,
-    # or when a one-shot nav_target is set.
-    if st.session_state.pop('rfp_selected_notice', None):
-        return 'RFP Analyzer'
-    _tgt = st.session_state.pop("nav_target", None)
-    if _tgt:
-        return _tgt
 
-    return st.sidebar.selectbox(
-        "Go to",
-        [
-            "SAM Watch",
-            "RFP Analyzer",
-            "L and M Checklist",
-            "Proposal Builder",
-            "File Manager",
-            "Past Performance",
-            "White Paper Builder",
-            "Subcontractor Finder",
-            "Outreach",
-            "RFQ Pack",
-            "Backup & Data",
-            "Quote Comparison",
-            "Pricing Calculator",
-            "Win Probability",
-            "Chat Assistant",
-            "Capability Statement",
-            
-            "Contacts",
-            "Deals",
-        ],
-    )
+    pages = [
+        "SAM Watch",
+        "RFP Analyzer",
+        "L and M Checklist",
+        "Proposal Builder",
+        "File Manager",
+        "Past Performance",
+        "White Paper Builder",
+        "Subcontractor Finder",
+        "Outreach",
+        "RFQ Pack",
+        "Backup & Data",
+        "Quote Comparison",
+        "Pricing Calculator",
+        "Win Probability",
+        "Chat Assistant",
+        "Capability Statement",
+        "Contacts",
+        "Deals",
+    ]
+
+    # Compute the index for the default page if any
+    if default_page in pages:
+        try:
+            default_index = pages.index(default_page)
+        except ValueError:
+            default_index = 0
+    else:
+        default_index = 0
+
+    choice = st.sidebar.selectbox("Go to", pages, index=default_index)
+    return choice
 
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
