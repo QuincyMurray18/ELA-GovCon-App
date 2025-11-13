@@ -10214,7 +10214,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                             cur.execute(
                                 """
                                 INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 ;
                                 """,
                                 (
@@ -10260,7 +10260,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                         cur.execute(
                             """
                             INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                            VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ;
                             """,
                             (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
