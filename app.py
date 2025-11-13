@@ -10134,13 +10134,13 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
             exported = _export_docx(
                 out_path,
-                doc_title=_ctxd(ctx, "rfp").iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "Proposal",
+                doc_title=_first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
                 sections=sections,
                 clins=_ctxd(ctx, "clins"),
                 checklist=_ctxd(ctx, "items"),
                 metadata={
-                    "Solicitation": (_ctxd(ctx, "rfp").iloc[0]["solnum"] if _df_nonempty(ctx.get("rfp")) else ""),
-                    "Notice ID": (_ctxd(ctx, "rfp").iloc[0]["notice_id"] if _df_nonempty(ctx.get("rfp")) else ""),
+                    "Solicitation": _first_row_value(_ctxd(ctx, "rfp"), "solnum", ""),
+                    "Notice ID": _first_row_value(_ctxd(ctx, "rfp"), "notice_id", ""),
                 },
                 font_name=font_name,
                 font_size_pt=int(font_size),
