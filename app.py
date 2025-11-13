@@ -2705,13 +2705,24 @@ def _ensure_email_accounts_schema(conn):
     ensure_outreach_o1_schema(conn)
 
 def _get_senders(conn):
+    """Return a unified list of configured sender accounts.
+
+    Each row is (email, display_name, app_password). We merge across
+    the modern outreach_sender_accounts table and legacy tables.
+    """
     from contextlib import closing as _closing
+
     tables = [
+        # Modern multi-sender table used by Outreach → Sender accounts
+        ("outreach_sender_accounts", "email", "label", "app_password"),
+        # Legacy / fallback tables kept for compatibility
         ("email_accounts", "user_email", "display_name", "app_password"),
         ("o4_senders", "email", "name", "app_password"),
         ("senders", "email", "display_name", "app_password"),
         ("smtp_settings", "username", "label", "password"),
     ]
+
+    senders = {}
     for tbl, c_email, c_name, c_pw in tables:
         try:
             with _closing(conn.cursor()) as c:
@@ -2719,12 +2730,19 @@ def _get_senders(conn):
                 if not c.fetchone():
                     continue
                 c.execute(f"SELECT {c_email}, {c_name}, {c_pw} FROM {tbl} ORDER BY {c_email}")
-                rows = c.fetchall()
-                if rows:
-                    return [(r[0], r[1], r[2] if len(r) > 2 else "") for r in rows]
+                rows = c.fetchall() or []
         except Exception:
             continue
-    return []
+        for r in rows:
+            email = (r[0] or "").strip()
+            if not email:
+                continue
+            name = (r[1] or "").strip() if len(r) > 1 else ""
+            pw = r[2] if len(r) > 2 else ""
+            # Prefer the first non-empty display name we see for a given email
+            if email not in senders or (name and not senders[email][1]):
+                senders[email] = (email, name, pw or "")
+    return list(senders.values())
 # ==== end O4 helpers ====
 # Helper imports for RTM/Amendment
 import re as _rtm_re
@@ -14374,46 +14392,130 @@ def _o4_accounts_ui(conn):
 def _o3_render_sender_picker():
     import streamlit as st
 
-    # Override to use email_accounts. Uses _O4_CONN set by render_outreach_mailmerge.
-
+    # Uses the unified sender discovery and lets you pick from
+    # all saved accounts (including multiple Gmail senders).
     conn = get_o4_conn() if "get_o4_conn" in globals() else globals().get("_O4_CONN")
     if conn is None:
-        st.warning("No sender accounts configured");
-        return {"email":"", "app_password":""}
-    ensure_outreach_o1_schema(conn)
-    rows = _get_senders(conn)
-    try:
+        st.warning("No sender accounts configured.")
+        return {"email": "", "app_password": ""}
 
-        st.caption(f"Loaded {len(rows)} sender account(s) from unified sources")
+    ensure_outreach_o1_schema(conn)
+
+    try:
+        rows = _get_senders(conn) or []
+    except Exception:
+        rows = []
+
+    if not rows:
+        st.info("No sender accounts found yet. Add one under Outreach → Sender accounts, then select it here.")
+        return {"email": "", "app_password": ""}
+
+    # rows: list of (email, display_name, app_password)
+    labels = []
+    for email, name, _pw in rows:
+        email = email or ""
+        name = name or ""
+        if name and name != email:
+            labels.append(f"{name} — {email}")
+        else:
+            labels.append(email)
+
+    # Remember last chosen email across reruns
+    default_email = st.session_state.get("o4_sender_sel_email") or rows[0][0]
+    try:
+        default_idx = next(i for i, (e, _n, _p) in enumerate(rows) if e == default_email)
+    except StopIteration:
+        default_idx = 0
+
+    sel_label = st.selectbox("From account", labels, index=default_idx, key="o4_sender_sel")
+    sel_idx = labels.index(sel_label)
+    email, name, _pw = rows[sel_idx]
+    st.session_state["o4_sender_sel_email"] = email
+
+    # Base sender payload
+    chosen = {
+        "email": email,
+        "name": name or email,
+        "display_name": name or "",
+        "app_password": "",
+        "smtp_host": "smtp.gmail.com",
+        "smtp_port": 587,
+        "use_tls": 1,
+        "use_ssl": 0,
+    }
+
+    # Prefer modern outreach_sender_accounts settings
+    try:
+        row = conn.execute(
+            "SELECT app_password, smtp_host, smtp_port, use_tls "
+            "FROM outreach_sender_accounts WHERE email=?",
+            (email,),
+        ).fetchone()
+        if row:
+            chosen["app_password"] = row[0] or chosen["app_password"]
+            chosen["smtp_host"] = row[1] or chosen["smtp_host"]
+            try:
+                chosen["smtp_port"] = int(row[2] or chosen["smtp_port"])
+            except Exception:
+                pass
+            try:
+                chosen["use_tls"] = int(row[3] if row[3] is not None else chosen.get("use_tls", 1))
+            except Exception:
+                pass
     except Exception:
         pass
-    choices = [r[0] for r in rows] + ["<add new>"]
-    default = st.session_state.get("o4_sender_sel", choices[0] if choices else None)
-    idx = choices.index(default) if default in choices else 0
-    sel = st.selectbox("From account", choices, key="o4_sender_sel", index=idx)
-    chosen = {"email": sel if sel != "<add new>" else "", "app_password":"", "smtp_host":"smtp.gmail.com", "smtp_port":465, "use_ssl":1}
-    # Load password and SMTP details from the unifying table when present
-    if sel != "<add new>":
-        try:
-            # First try email_accounts
-            row = conn.execute("SELECT app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?", (sel,)).fetchone()
-            if row:
-                chosen.update({"app_password": row[0] or "", "smtp_host": row[1] or "smtp.gmail.com", "smtp_port": int(row[2] or 465), "use_ssl": int(row[3] or 1)})
-            else:
-                # Fallback to smtp_settings
-                row2 = conn.execute("SELECT password, host, port, use_tls FROM smtp_settings WHERE username=?", (sel,)).fetchone()
-                if row2:
-                    chosen.update({"app_password": row2[0] or "", "smtp_host": row2[1] or "smtp.gmail.com", "smtp_port": int(row2[2] or 587), "use_ssl": int(row2[3] or 1)})
-        except Exception:
-            pass
-    if sel == "<add new>":
-        st.info("Add an account below in 'Sender accounts'. Then select it here.")
-    else:
-        row = conn.execute("SELECT user_email, display_name, app_password, smtp_host, smtp_port, use_ssl FROM email_accounts WHERE user_email=?", (sel,)).fetchone()
+
+    # Fallback to email_accounts if present
+    try:
+        row = conn.execute(
+            "SELECT app_password, smtp_host, smtp_port, use_ssl, use_tls "
+            "FROM email_accounts WHERE user_email=?",
+            (email,),
+        ).fetchone()
         if row:
-            chosen = {"email": row[0], "display_name": row[1] or "", "app_password": row[2] or "",
-                      "smtp_host": row[3] or "smtp.gmail.com", "smtp_port": int(row[4] or 465), "use_ssl": int(row[5] or 1)}
-    st.caption("Uses Gmail SMTP. Create an App Password once per account and save it above.")
+            if not chosen.get("app_password"):
+                chosen["app_password"] = row[0] or chosen["app_password"]
+            if not chosen.get("smtp_host") or chosen["smtp_host"] == "smtp.gmail.com":
+                chosen["smtp_host"] = row[1] or chosen["smtp_host"]
+            try:
+                chosen["smtp_port"] = int(row[2] or chosen["smtp_port"])
+            except Exception:
+                pass
+            try:
+                chosen["use_ssl"] = int(row[3] if row[3] is not None else chosen.get("use_ssl", 0))
+            except Exception:
+                pass
+            try:
+                chosen["use_tls"] = int(row[4] if row[4] is not None else chosen.get("use_tls", 1))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Backwards compatibility: smtp_settings table
+    try:
+        row = conn.execute(
+            "SELECT password, host, port, use_tls "
+            "FROM smtp_settings WHERE username=? OR label=?",
+            (email, name or email),
+        ).fetchone()
+        if row:
+            if not chosen.get("app_password"):
+                chosen["app_password"] = row[0] or chosen["app_password"]
+            if not chosen.get("smtp_host") or chosen["smtp_host"] == "smtp.gmail.com":
+                chosen["smtp_host"] = row[1] or chosen["smtp_host"]
+            try:
+                chosen["smtp_port"] = int(row[2] or chosen["smtp_port"])
+            except Exception:
+                pass
+            try:
+                chosen["use_tls"] = int(row[3] if row[3] is not None else chosen.get("use_tls", 1))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    st.caption(f"Using {chosen['email']} via {chosen.get('smtp_host')}:{chosen.get('smtp_port')}")
     return chosen
 
 def _o4_optout_ui(conn):
