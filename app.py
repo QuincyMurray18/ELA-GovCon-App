@@ -12544,7 +12544,7 @@ def run_rfp_analyzer(conn) -> None:
                 # Save uploads (ZIPs expanded)
                 import io as _io, zipfile as _zip
                 saved = 0
-                for f in (ups or []):
+                for f in (st.session_state.get("op_new_files") or []):
                     try:
                         name = (getattr(f, "name", "upload") or "").lower()
                         b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
@@ -12605,7 +12605,7 @@ def run_rfp_analyzer(conn) -> None:
                 # Save uploads (ZIPs expanded)
                 import io as _io, zipfile as _zip
                 saved = 0
-                for f in (ups or []):
+                for f in (st.session_state.get("op_inline_files") or []):
                     try:
                         name = (getattr(f, "name", "upload") or "").lower()
                         b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
