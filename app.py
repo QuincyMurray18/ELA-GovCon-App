@@ -13514,8 +13514,15 @@ def email_template_delete(conn, template_id:int):
 import re as _re_o2
 MERGE_TAGS = {"company","email","title","solicitation","due","notice_id","first_name","last_name","city","state"}
 def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
+    """Return any unknown merge tags used in the template.
+
+    We treat all supported tags as optional. This function only flags tags that
+    appear in the template but are not in the supported set, so normal templates
+    with no tags or a subset of tags will not raise warnings.
+    """
     found = set(_re_o2.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", text or ""))
-    return required - found
+    # Unknown tags = tags referenced in the template that are not supported
+    return {t for t in found if t not in required}
 
 def render_outreach_templates(conn):
 
@@ -13537,7 +13544,7 @@ def render_outreach_templates(conn):
         sig_html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
     missing = template_missing_tags((subject or "") + " " + (sig_html or ""))
     if missing:
-        st.info("Missing merge tags: " + ", ".join(sorted(missing)))
+        st.info("Unknown merge tags (will not be filled automatically): " + ", ".join(sorted(missing)))
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Save"):
@@ -13566,8 +13573,12 @@ def _tpl_picker_prefill(conn):
     choice = st.selectbox("Use template", ["<none>"] + names, key="tpl_pick")
     if choice != "<none>":
         row = next(r for r in rows if r[1] == choice)
+       # Populate high-level outreach session keys
         st.session_state["outreach_subject"] = row[2]
         st.session_state["outreach_html"] = row[3]
+        # Also sync the actual Mail Merge widget keys so the fields update immediately
+        st.session_state["o3_subject"] = row[2]
+        st.session_state["o3_body"] = row[3]
         return row
     return None
 
