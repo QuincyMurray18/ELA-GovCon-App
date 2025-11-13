@@ -13772,6 +13772,42 @@ def _o3_ensure_schema(conn):
             error TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );""")
+        # Add tracking columns used by newer Outreach features
+        try:
+            cur.execute("PRAGMA table_info(outreach_log);")
+            cols = [r[1] for r in cur.fetchall()]
+            if "opened_at" not in cols:
+                cur.execute("ALTER TABLE outreach_log ADD COLUMN opened_at TEXT;")
+            if "bounced_at" not in cols:
+                cur.execute("ALTER TABLE outreach_log ADD COLUMN bounced_at TEXT;")
+        except Exception:
+            # If ALTER TABLE is not supported, continue without raising.
+            pass
+        conn.commit()
+    with _o3c(conn.cursor()) as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_optouts(
+            id INTEGER PRIMARY KEY,
+            email TEXT UNIQUE,
+            reason TEXT,
+            ts TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_blasts(
+            id INTEGER PRIMARY KEY,
+            title TEXT,
+            template_name TEXT,
+            sender_email TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS outreach_log(
+            id INTEGER PRIMARY KEY,
+            blast_id INTEGER,
+            to_email TEXT,
+            to_name TEXT,
+            subject TEXT,
+            status TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );""")
         conn.commit()
 
 def _o3_wrap_email_html(sig_html: str) -> str:
@@ -13921,120 +13957,330 @@ except Exception:
         SMTP_SSL = _smtplib.SMTP_SSL
         SMTP = _smtplib.SMTP
 
-def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500, attachments: list[str] | None = None):
-    # Ensure required email and SMTP aliases are available
+def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, max_send=500, attachments=None):
+    """
+    Send a batch of outreach emails and log per-recipient status.
+
+    Enhancements:
+    - Logs invalid and opt-out addresses instead of silently skipping.
+    - Writes one row per recipient into outreach_log.
+    - Adds basic tracking columns (opened_at, bounced_at) that can be updated later.
+    - Injects a lightweight open-tracking pixel when an O6 base URL is configured.
+    """
+    import streamlit as st
+    from contextlib import closing as _closing
+    import datetime as _dt
+    import uuid as _uuid
+
     try:
         from email.mime.multipart import MIMEMultipart as _O3MIMEMultipart
         from email.mime.text import MIMEText as _O3MIMEText
         import smtplib as _o3smtp
     except Exception:
-        pass
-    import streamlit as st
+        st.error("Email libraries not available in this environment.")
+        return 0, []
 
+    # Ensure schemas
     _o3_ensure_schema(conn)
-    if rows is None or rows.empty:
-        st.error("No recipients"); return 0, []
-    blast_title = st.text_input("Blast name", value=f"Outreach {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}", key="o3_blast_name")
+    try:
+        ensure_o6_schema(conn)
+    except Exception:
+        # Older builds may not have O6 helpers wired yet; ignore.
+        pass
+
+    if rows is None or getattr(rows, "empty", True):
+        st.error("No recipients")
+        return 0, []
+
+    import pandas as _pd  # local alias
+
+    # Blast metadata
+    from datetime import datetime as _dt_datetime
+    default_title = f"Outreach {_dt_datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    blast_title = st.text_input("Blast name", value=default_title, key="o3_blast_name")
     if not blast_title:
         blast_title = "Outreach"
+
+    template_name = st.session_state.get("tpl_sel", "")
+    if not isinstance(template_name, str):
+        template_name = ""
+
     with _o3c(conn.cursor()) as cur:
-        cur.execute("INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
-                    (blast_title, st.session_state.get("tpl_sel",""), sender.get("email","")))
+        cur.execute(
+            "INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
+            (blast_title, template_name, (sender.get("email") or sender.get("username") or "").strip()),
+        )
         conn.commit()
         blast_id = cur.lastrowid
+
+    # Load opt-outs
     try:
-        opt = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
-        blocked = set(e.lower().strip() for e in opt['email'].tolist())
+        opt_df = _pd.__p_read_sql_query("SELECT email FROM outreach_optouts;", conn)
+        blocked = {str(e).strip().lower() for e in opt_df.get("email", []) if str(e).strip()}
     except Exception:
         blocked = set()
+
+    # Configure SMTP
     sent = 0
     logs = []
     smtp = None
     if not test_only:
-        # derive SMTP settings from sender
-        host = sender.get("host") or "smtp.gmail.com"
-        port = int(sender.get("port") or 465)
-        use_tls = bool(sender.get("use_tls") or (port == 587))
+        host = sender.get("host") or sender.get("smtp_host") or "smtp.gmail.com"
+        port = int(sender.get("port") or sender.get("smtp_port") or 587)
+        use_tls = bool(sender.get("use_tls", True) or port == 587)
         try:
-            if use_tls or port == 587:
+            if use_tls:
                 smtp = _o3smtp.SMTP(host, port, timeout=20)
                 smtp.ehlo()
                 try:
                     smtp.starttls()
                 except Exception:
                     pass
-                smtp.login(sender["email"], sender["app_password"])
+                smtp.login(sender["email"], sender.get("app_password") or sender.get("password") or "")
             else:
                 smtp = _o3smtp.SMTP_SSL(host, port, timeout=20)
-                smtp.login(sender["email"], sender["app_password"])
+                smtp.login(sender["email"], sender.get("app_password") or sender.get("password") or "")
         except Exception as e:
             st.error(f"SMTP login failed: {e}")
             return 0, []
 
-    for _, r in rows.head(int(max_send)).iterrows():
-        to_email = str(r.get("email","")).strip()
+    # Helper for template merge
+    def _render_merge(tpl: str, data: dict) -> str:
+        try:
+            return _o3_merge(tpl or "", data or {})
+        except Exception:
+            return tpl or ""
+
+    # Open tracking base URL, if configured
+    try:
+        base_url = o6_get_base_url(conn) or ""
+    except Exception:
+        base_url = ""
+
+    # Limit rows
+    try:
+        max_n = int(max_send or 0)
+    except Exception:
+        max_n = 0
+    if max_n > 0:
+        rows_iter = rows.head(max_n).iterrows()
+    else:
+        rows_iter = rows.iterrows()
+
+    for _, r in rows_iter:
+        to_email = str(r.get("email", "") or "").strip()
+        data = {str(k): ("" if r.get(k) is None else str(r.get(k))) for k in getattr(r, "index", [])}
+
+        # Normalize some common merge keys
+        if "name" not in data:
+            data["name"] = str(r.get("name") or r.get("Name") or "")
+        to_name = data.get("name", "")
+
+        subj = _render_merge(subject_tpl or "", data)
+
+        # Handle invalid address
         if not to_email or "@" not in to_email:
+            status = "Skipped: invalid email"
+            err = "Missing or malformed address"
+            with _closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) VALUES (?,?,?,?,?,?);",
+                    (blast_id, to_email, to_name, subj, status, err),
+                )
+                conn.commit()
+            logs.append({"email": to_email, "status": status, "error": err})
             continue
+
+        # Handle opt-out suppression
         if to_email.lower() in blocked:
-            status = "Skipped: opt-out"; err = ""; subj = ""
-        else:
-            data = {k: str(r.get(k,"") or "") for k in r.index}
-            subj = _o3_merge(subject_tpl or "", data)
-            sig_html = _o3_merge(html_tpl or "", data)
-            if "unsubscribe" not in html.lower():
-                sig_html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
-            if test_only:
-                status = "Preview"; err = ""
-            else:
+            status = "Skipped: opt-out"
+            err = ""
+            with _closing(conn.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) VALUES (?,?,?,?,?,?);",
+                    (blast_id, to_email, to_name, subj, status, err),
+                )
+                conn.commit()
+            logs.append({"email": to_email, "status": status, "error": err})
+            continue
+
+        # Merge body
+        sig_html = _render_merge(html_tpl or "", data)
+
+        # Basic unsubscribe safety net if template forgot macro
+        if "unsubscribe" not in (sig_html or "").lower():
+            sig_html += "<br><br><small>To unsubscribe, reply 'STOP' to this email.</small>"
+
+        log_id = None
+        open_code = None
+
+        # Pre-create log row so we can attach tracking info
+        if not test_only:
+            with _closing(conn.cursor()) as cur:
+                # opened_at and bounced_at may not exist on older DBs
                 try:
-                    msg = _O3MIMEMultipart("alternative")
-                    msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
-                    msg["To"] = to_email
-                    msg["Subject"] = subj
-                    # Apply saved signature for the active sender
-                    try:
-                        _sig_conn = (get_o4_conn() if 'get_o4_conn' in globals() else None) or conn
-                        sig_html, _inline_imgs = __p_render_signature(_sig_conn, (sender.get('email') or sender.get('username') or '').strip(), sig_html)
-                    except Exception:
-                        pass
-                    sig_html = _o3_wrap_email_html(sig_html)
-                    msg.attach(_O3MIMEText(sig_html, "sig_html", "utf-8"))
-                    # Attach files if provided
-                    try:
-                        if attachments:
-                            from email.mime.base import MIMEBase as _MBase
-                            from email import encoders as _enc
-                            for _ap in attachments:
-                                try:
-                                    with open(_ap, 'rb') as _f:
-                                        _part = _MBase('application', 'octet-stream'); _part.set_payload(_f.read())
-                                    _enc.encode_base64(_part)
-                                    import os as _os
-                                    _part.add_header('Content-Disposition', f'attachment; filename="{_os.path.basename(_ap)}"')
-                                    msg.attach(_part)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-                    smtp.sendmail(sender["email"], [to_email], msg.as_string())
-                    status = "Sent"; err = ""
-                except Exception as e:
-                    status = "Error"; err = str(e)
-        with _closing(conn.cursor()) as cur:
-            cur.executemany("INSERT INTO outreach_log(blast_id, to_email, to_name, subject, status, error) VALUES (?, ?, ?, ?, ?,?,?);", logs)
-            conn.commit()
-        logs.append({"email":to_email,"status":status,"error":err})
-        if status=="Sent":
-            sent += 1
+                    cur.execute(
+                        "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error,opened_at,bounced_at) "
+                        "VALUES (?,?,?,?,?,?,NULL,NULL);",
+                        (blast_id, to_email, to_name, subj, "Queued", ""),
+                    )
+                except Exception:
+                    cur.execute(
+                        "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) "
+                        "VALUES (?,?,?,?,?,?);",
+                        (blast_id, to_email, to_name, subj, "Queued", ""),
+                    )
+                log_id = cur.lastrowid
+                conn.commit()
+
+            # Create open tracking code if base URL is available
+            if base_url and log_id:
+                try:
+                    with conn:
+                        conn.execute(
+                            "CREATE TABLE IF NOT EXISTS outreach_open_codes("
+                            "code TEXT PRIMARY KEY, "
+                            "log_id INTEGER, "
+                            "created_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+                            "opened_at TEXT, "
+                            "FOREIGN KEY(log_id) REFERENCES outreach_log(id)"
+                            ");"
+                        )
+                        open_code = _uuid.uuid4().hex
+                        conn.execute(
+                            "INSERT OR IGNORE INTO outreach_open_codes(code,log_id) VALUES(?,?);",
+                            (open_code, int(log_id)),
+                        )
+                except Exception:
+                    open_code = None
+
+        # Build HTML with optional tracking pixel
+        html_to_send = sig_html or ""
+        if open_code and base_url:
+            track_url = base_url.rstrip("/") + f"/?open={open_code}"
+            html_to_send += (
+                f'<img src="{track_url}" alt="" width="1" height="1" '
+                f'style="display:none;border:0;outline:none;" />'
+            )
+
+        if test_only:
+            status = "Preview"
+            err = ""
+        else:
+            bounce_ts = None
+            try:
+                msg = _O3MIMEMultipart("alternative")
+                msg["From"] = f"{sender.get('name') or sender['email']} <{sender['email']}>"
+                msg["To"] = to_email
+                msg["Subject"] = subj
+
+                # Apply saved signature for the active sender
+                try:
+                    _sig_conn = (get_o4_conn() if "get_o4_conn" in globals() else None) or conn
+                    html_to_send, _inline_imgs = __p_render_signature(
+                        _sig_conn,
+                        (sender.get("email") or sender.get("username") or "").strip(),
+                        html_to_send,
+                    )
+                except Exception:
+                    pass
+
+                wrapped_html = _o3_wrap_email_html(html_to_send)
+                msg.attach(_O3MIMEText(wrapped_html, "html", "utf-8"))
+
+                # Attach files if provided
+                try:
+                    if attachments:
+                        from email.mime.base import MIMEBase as _MBase
+                        from email import encoders as _enc
+                        import os as _os
+
+                        for _ap in attachments:
+                            try:
+                                with open(_ap, "rb") as _f:
+                                    part = _MBase("application", "octet-stream")
+                                    part.set_payload(_f.read())
+                                _enc.encode_base64(part)
+                                part.add_header(
+                                    "Content-Disposition",
+                                    f'attachment; filename="{_os.path.basename(_ap)}"',
+                                )
+                                msg.attach(part)
+                            except Exception:
+                                # Ignore attachment-specific issues so the rest of the batch can send.
+                                pass
+                except Exception:
+                    pass
+
+                smtp.sendmail(sender["email"], [to_email], msg.as_string())
+                status = "Sent"
+                err = ""
+                sent += 1
+            except Exception as e:
+                err = str(e)[:500]
+                low = err.lower()
+                # Basic heuristic for "kicked back" or hard bounce errors
+                if any(
+                    phrase in low
+                    for phrase in (
+                        "user unknown",
+                        "no such user",
+                        "mailbox unavailable",
+                        "recipient address rejected",
+                        "550 ",
+                    )
+                ):
+                    status = "Bounced"
+                    bounce_ts = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                else:
+                    status = "Error"
+
+            # Update log row with final status
+            if log_id is not None:
+                try:
+                    with _closing(conn.cursor()) as cur:
+                        if bounce_ts:
+                            try:
+                                cur.execute(
+                                    "UPDATE outreach_log "
+                                    "SET status=?, error=?, bounced_at=COALESCE(bounced_at, ?) "
+                                    "WHERE id=?;",
+                                    (status, err, bounce_ts, int(log_id)),
+                                )
+                            except Exception:
+                                cur.execute(
+                                    "UPDATE outreach_log SET status=?, error=? WHERE id=?;",
+                                    (status, err, int(log_id)),
+                                )
+                        else:
+                            cur.execute(
+                                "UPDATE outreach_log SET status=?, error=? WHERE id=?;",
+                                (status, err, int(log_id)),
+                            )
+                        conn.commit()
+                except Exception:
+                    pass
+
+        logs.append({"email": to_email, "status": status, "error": err})
+
     if smtp is not None:
-        try: smtp.quit()
-        except Exception: pass
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+
     try:
         df = _pd.DataFrame(logs)
-        st.download_button("Download send log CSV", data=df.to_csv(index=False).encode("utf-8"),
-                           file_name=f"o3_send_log_{blast_id}.csv", mime="text/csv", key=f"o3_log_{blast_id}")
+        st.download_button(
+            "Download send log CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name=f"o3_send_log_{blast_id}.csv",
+            mime="text/csv",
+            key=f"o3_log_{blast_id}",
+        )
     except Exception:
         pass
+
     st.success(f"Batch complete. Sent={sent}, Total processed={len(logs)}")
     return sent, logs
 
@@ -14201,24 +14447,39 @@ def _o4_optout_ui(conn):
 
 def _o4_audit_ui(conn):
     import streamlit as st
+    import pandas as _pd
 
+    # Recent blast-level activity
     try:
-        blasts = _pd.__p_read_sql_query("SELECT id, title, sender_email, created_at FROM outreach_blasts ORDER BY id DESC LIMIT 50", conn)
+        blasts = _pd.__p_read_sql_query(
+            "SELECT id, title, sender_email, template_name, created_at "
+            "FROM outreach_blasts ORDER BY id DESC LIMIT 50;",
+            conn,
+        )
         st.markdown("**Recent blasts**")
         _styled_dataframe(blasts, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No blasts yet")
+
+    # Recent per-recipient activity (including tracking columns when available)
     try:
-        logs = _pd.__p_read_sql_query("SELECT created_at, to_email, status, subject, error FROM outreach_log ORDER BY id DESC LIMIT 200", conn)
+        try:
+            logs = _pd.__p_read_sql_query(
+                "SELECT created_at, to_email, status, opened_at, bounced_at, subject, error "
+                "FROM outreach_log ORDER BY id DESC LIMIT 200;",
+                conn,
+            )
+        except Exception:
+            # Fallback for databases created before opened_at and bounced_at existed
+            logs = _pd.__p_read_sql_query(
+                "SELECT created_at, to_email, status, subject, error "
+                "FROM outreach_log ORDER BY id DESC LIMIT 200;",
+                conn,
+            )
         st.markdown("**Recent sends**")
         _styled_dataframe(logs, use_container_width=True, hide_index=True)
     except Exception:
         st.caption("No logs yet")
-
-# === O5: Follow-ups & SLA ==================================================
-import sqlite3, pandas as _pd, smtplib, ssl, time
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 def _o5_now_iso():
     return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -14372,6 +14633,14 @@ def ensure_o6_schema(conn):
         conn.execute("""CREATE TABLE IF NOT EXISTS kv_store(
             k TEXT PRIMARY KEY, v TEXT
         );""")
+        # Per-recipient open-tracking codes (linked back to outreach_log.id)
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_open_codes(
+            code TEXT PRIMARY KEY,
+            log_id INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            opened_at TEXT,
+            FOREIGN KEY(log_id) REFERENCES outreach_log(id)
+        );""")
 
 def o6_set_base_url(conn, url):
     with conn:
@@ -14421,26 +14690,85 @@ def o6_unsub_link_for(conn, email):
     return f"{base}{sep}unsubscribe={code}"
 
 def o6_handle_query_unsubscribe(conn):
+    """Handle unsubscribe links and open-tracking callbacks from email.
+
+    This is invoked on each app load; if the current URL has one of the
+    supported query parameters, we update the appropriate tables and stop.
+    """
     try:
         import streamlit as _st
-        qp = _dict(st.query_params)
+        # Normalize Streamlit query params into a simple dict-of-lists
+        raw_qp = dict(_st.query_params)
+        qp = {}
+        for k, v in raw_qp.items():
+            if isinstance(v, list):
+                qp[k] = v
+            else:
+                qp[k] = [v]
+
+        # 1) Open tracking: ?open=<code>
+        if "open" in qp:
+            code_val = (qp.get("open", [None]) or [None])[0]
+            if code_val:
+                try:
+                    row = conn.execute(
+                        "SELECT log_id FROM outreach_open_codes WHERE code=? LIMIT 1;",
+                        (code_val,),
+                    ).fetchone()
+                except Exception:
+                    row = None
+                if row and row[0]:
+                    log_id = int(row[0])
+                    try:
+                        with conn:
+                            conn.execute(
+                                "UPDATE outreach_open_codes "
+                                "SET opened_at=CURRENT_TIMESTAMP "
+                                "WHERE code=?;",
+                                (code_val,),
+                            )
+                            # opened_at column may not exist in very old DBs; ignore failures
+                            try:
+                                conn.execute(
+                                    "UPDATE outreach_log "
+                                    "SET opened_at=CURRENT_TIMESTAMP "
+                                    "WHERE id=?;",
+                                    (log_id,),
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    # Render a minimal confirmation so the page is not blank
+                    _st.write("Thanks for reading.")
+                    return True
+
+        # 2) Standard unsubscribe flow: ?unsubscribe=<code>
         if "unsubscribe" in qp:
-            code = (qp.get("unsubscribe",[None]) or [None])[0]
+            code = (qp.get("unsubscribe", [None]) or [None])[0]
             if code:
-                row = conn.execute("SELECT email FROM outreach_unsub_codes WHERE code=? LIMIT 1;", (code,)).fetchone()
+                row = conn.execute(
+                    "SELECT email FROM outreach_unsub_codes WHERE code=? LIMIT 1;",
+                    (code,),
+                ).fetchone()
                 if row and row[0]:
                     email = row[0]
                     o6_add_optout(conn, email, reason="link_click")
                     with conn:
-                        conn.execute("UPDATE outreach_unsub_codes SET used_at=CURRENT_TIMESTAMP WHERE code=?", (code,))
+                        conn.execute(
+                            "UPDATE outreach_unsub_codes "
+                            "SET used_at=CURRENT_TIMESTAMP WHERE code=?;",
+                            (code,),
+                        )
                     _st.success(f"{email} unsubscribed.")
                     return True
                 else:
                     _st.warning("Invalid or expired unsubscribe link.")
                     return True
-        # Also support direct email param
+
+        # 3) Legacy direct email param: ?unsubscribe_email=<address>
         if "unsubscribe_email" in qp:
-            email = (qp.get("unsubscribe_email",[None]) or [None])[0]
+            email = (qp.get("unsubscribe_email", [None]) or [None])[0]
             if email:
                 o6_add_optout(conn, email, reason="direct_param")
                 _st.success(f"{email} unsubscribed.")
