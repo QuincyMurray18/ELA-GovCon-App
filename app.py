@@ -563,7 +563,7 @@ except NameError:
                 mime = {"png":"image/png","jpg":"image/jpeg","jpeg":"image/jpeg","gif":"image/gif"}.get(ext, "application/octet-stream")
                 try:
                     sconn.execute("""INSERT INTO outreach_signatures(email, signature_html, logo_blob, logo_mime, logo_name)
-                                     VALUES (?, ?, ?, ?, ?,?)""", (email, sig_html, data, mime, name))
+                                     VALUES (?, ?, ?, ?, ?)""", (email, sig_html, data, mime, name))
                 except Exception:
                     sconn.execute("""UPDATE outreach_signatures
                                      SET signature_html=?,
@@ -581,6 +581,76 @@ except NameError:
 
         st.caption("Preview")
         st.markdown(sig_html or "", unsafe_allow_html=True)
+
+def __p_render_signature(conn, sender_email, body_html):
+    """
+    Render the stored Outreach email signature for the given sender and
+    append it to the provided HTML body.
+
+    Returns a tuple of (html_with_signature, inline_images). Inline images
+    are currently inlined via data URIs so the list is empty.
+    """
+    import base64
+
+    if conn is None:
+        return body_html, []
+
+    try:
+        cur = conn.cursor()
+        # Ensure the same schema used by the signature editor
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS outreach_signatures(
+                email TEXT PRIMARY KEY,
+                signature_html TEXT DEFAULT '',
+                logo_blob BLOB,
+                logo_mime TEXT,
+                logo_name TEXT
+            )
+        """)
+        row = cur.execute(
+            "SELECT signature_html, logo_blob, logo_mime FROM outreach_signatures WHERE lower(email)=lower(?)",
+            ((sender_email or "").strip(),),
+        ).fetchone()
+    except Exception:
+        return body_html, []
+
+    if not row:
+        return body_html, []
+
+    sig_html, logo_blob, logo_mime = row
+    sig_html = sig_html or ""
+    logo_html = ""
+
+    if logo_blob:
+        try:
+            b64 = base64.b64encode(logo_blob).decode("ascii")
+            mime = logo_mime or "image/png"
+            logo_html = (
+                f'<div style="margin-bottom:4px;">'
+                f'<img src="data:{mime};base64,{b64}" alt="Logo" '
+                f'style="max-width:200px;height:auto;border:0;" />'
+                f"</div>"
+            )
+        except Exception:
+            logo_html = ""
+
+    final_sig = sig_html
+    if logo_html:
+        if "{{LOGO}}" in final_sig:
+            final_sig = final_sig.replace("{{LOGO}}", logo_html)
+        else:
+            final_sig = logo_html + ("<br>" + final_sig if final_sig else "")
+
+    if not final_sig:
+        return body_html, []
+
+    body_html = body_html or ""
+    if body_html.strip():
+        combined = body_html.rstrip() + "<br><br>" + final_sig
+    else:
+        combined = final_sig
+
+    return combined, []
 # --- end early stub ---
 
 # === BEGIN READSQL SHIM ===
