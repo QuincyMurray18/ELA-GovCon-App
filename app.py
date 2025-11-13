@@ -12820,9 +12820,7 @@ def run_rfp_analyzer(conn) -> None:
                 _delete_rfp_everywhere(conn, int(rid))
                 # Clear selection so we don't point at a deleted id
                 st.session_state.pop("current_rfp_id", None)
-                # After delete, send user back to RFP Analyzer to refresh list
-                st.session_state["_force_rfp_analyzer"] = True
-                st.session_state["nav_target"] = "RFP Analyzer"
+                # Refresh the page; nav() will keep you on RFP Analyzer because the sidebar selection doesn't change
                 st.success(f"Deleted RFP #{int(rid)}.")
                 st.rerun()
             except Exception as e:
