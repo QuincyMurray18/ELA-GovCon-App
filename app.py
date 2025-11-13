@@ -10099,7 +10099,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
                 st.session_state[ta_key] = st.session_state.get(f"pb_section_{sec}", "")
 
-            content_map[sec] = st.text_area(sec, value=st.session_state.get(ta_key, ""), height=200, key=ta_key)
+            content_map[sec] = st.text_area(sec, height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
                 st.markdown(st.session_state.get(ta_key, ""))
     # Ensure text areas reflect latest session values
