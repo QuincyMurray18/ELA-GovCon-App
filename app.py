@@ -7369,7 +7369,7 @@ def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
         if row:
             return int(row[0])
         cur.execute(
-            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
             (notice_row.get('Title') or "", notice_row.get('Solicitation') or "", nid, notice_row.get('SAM Link') or "", "")
         )
         rid = int(cur.lastrowid)
@@ -8603,7 +8603,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                                 ((_title_in or _guess_title(full_text, "Untitled")), (_solnum_in or _guess_solnum(full_text)), (_parse_sam_notice_id(_sam_in) or ""), (_sam_in or ""), "",)
                             )
                             rfp_id = cur.lastrowid
@@ -8689,7 +8689,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                                 ((_title_in or _guess_title(text, f.name)), (_solnum_in or _guess_solnum(text)), (_parse_sam_notice_id(_sam_in) or ""), _sam_in, "", )
                             )
                             rfp_id = cur.lastrowid
@@ -12463,62 +12463,49 @@ def init_session() -> None:
         st.session_state.initialized = True
 
 def nav() -> str:
-    import streamlit as st
-
-    pages = [
-        "SAM Watch",
-        "RFP Analyzer",
-        "L and M Checklist",
-        "Proposal Builder",
-        "File Manager",
-        "Past Performance",
-        "White Paper Builder",
-        "Subcontractor Finder",
-        "Outreach",
-        "RFQ Pack",
-        "Backup & Data",
-        "Quote Comparison",
-        "Pricing Calculator",
-        "Win Probability",
-        "Chat Assistant",
-        "Capability Statement",
-        "Contacts",
-        "Deals",
-    ]
-
-    # Ensure we have a current nav page in session
-    if "nav_page" not in st.session_state:
-        st.session_state["nav_page"] = "SAM Watch"
-
-    # One-shot flag to force RFP Analyzer
-    if st.session_state.pop("_force_rfp_analyzer", False):
-        st.session_state["nav_page"] = "RFP Analyzer"
-
-    # Auto-jump to One-Page Analyzer when a SAM notice was pushed
-    if st.session_state.pop("rfp_selected_notice", None):
-        st.session_state["nav_page"] = "RFP Analyzer"
-
-    # One-shot explicit navigation target overrides everything else
-    _tgt = st.session_state.pop("nav_target", None)
-    if _tgt in pages:
-        st.session_state["nav_page"] = _tgt
-
-    # Fallback safety
-    if st.session_state["nav_page"] not in pages:
-        st.session_state["nav_page"] = "SAM Watch"
-
-    # Sidebar header is always rendered so the Go to bar never disappears
+    if st.session_state.pop('_force_rfp_analyzer', False):
+        return 'RFP Analyzer'
+    if st.session_state.get('op_inline_files'):
+        return 'RFP Analyzer'
+    if st.session_state.get('op_new_files'):
+        return 'RFP Analyzer'
+    if st.session_state.get('onepage_uploads'):
+        return 'RFP Analyzer'
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
+    # Auto-jump to One‑Page Analyzer when a SAM notice was pushed,
+    # or when a one-shot nav_target is set.
+    if st.session_state.pop('rfp_selected_notice', None):
+        return 'RFP Analyzer'
+    _tgt = st.session_state.pop("nav_target", None)
+    if _tgt:
+        return _tgt
 
-    current = st.sidebar.selectbox(
+    return st.sidebar.selectbox(
         "Go to",
-        pages,
-        index=pages.index(st.session_state["nav_page"]),
-        key="nav_page",
+        [
+            "SAM Watch",
+            "RFP Analyzer",
+            "L and M Checklist",
+            "Proposal Builder",
+            "File Manager",
+            "Past Performance",
+            "White Paper Builder",
+            "Subcontractor Finder",
+            "Outreach",
+            "RFQ Pack",
+            "Backup & Data",
+            "Quote Comparison",
+            "Pricing Calculator",
+            "Win Probability",
+            "Chat Assistant",
+            "Capability Statement",
+            
+            "Contacts",
+            "Deals",
+        ],
     )
-    return current
 
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
@@ -12549,7 +12536,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
@@ -12610,7 +12597,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
