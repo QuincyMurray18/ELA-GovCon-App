@@ -974,7 +974,8 @@ def _phase3_analyzer_inline(conn):
         _ensure_phase3_schema(conn)
 
     st.markdown("### 🧠 Phase 3 — One‑Page Analyzer")
-    notice = st.session_state.get("rfp_selected_notice") or {}
+    _notice_ctx = st.session_state.get("rfp_selected_notice")
+    notice = _notice_ctx if isinstance(_notice_ctx, dict) else {}
     title = notice.get("Title") or notice.get("Solicitation") or "Untitled RFP"
     sam_url = notice.get("SAM Link") or notice.get("URL") or ""
 
@@ -1795,7 +1796,8 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
             pass
         # Phase 1: auto-fetch SAM attachments if we have a notice context
     try:
-        _ctx = st.session_state.get('rfp_selected_notice') or {}
+        _ctx_raw = st.session_state.get('rfp_selected_notice')
+        _ctx = _ctx_raw if isinstance(_ctx_raw, dict) else {}
         _rid = int(st.session_state.get('current_rfp_id') or 0)
         _nid = _ctx.get('Notice ID') or _ctx.get('noticeId') or _ctx.get('id') or ''
         if _rid and _nid:
@@ -11227,7 +11229,14 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                               format_func=lambda rid: "None" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0]}")
     if rfp_id:
         ctx = _load_rfp_context(conn, int(rfp_id))
-        title = (ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "")
+        meta = ctx.get("rfp") or {}
+        if isinstance(meta, dict):
+            title = meta.get("title") or meta.get("Title") or ""
+        else:
+            try:
+                title = str(meta.iloc[0].get("title") or meta.iloc[0].get("Title") or "")
+            except Exception:
+                title = ""
         secs = ctx.get("sections", pd.DataFrame())
         # Compute scores
         scores = []
@@ -12839,7 +12848,8 @@ def run_rfp_analyzer(conn) -> None:
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
         st.info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
-        ctx0 = st.session_state.get("rfp_selected_notice") or {}
+        _ctx0_raw = st.session_state.get("rfp_selected_notice")
+        ctx0 = _ctx0_raw if isinstance(_ctx0_raw, dict) else {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_new_title")
         s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_new_sol")
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_new_sam", placeholder="https://sam.gov/")
@@ -12900,7 +12910,8 @@ def run_rfp_analyzer(conn) -> None:
 
     # New RFP inline form (always available)
     with st.expander("➕ Start a new RFP", expanded=False):
-        ctx0 = st.session_state.get("rfp_selected_notice") or {}
+        _ctx0_raw = st.session_state.get("rfp_selected_notice")
+        ctx0 = _ctx0_raw if isinstance(_ctx0_raw, dict) else {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title")
         s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol")
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam", placeholder="https://sam.gov/")
