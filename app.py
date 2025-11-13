@@ -13647,8 +13647,13 @@ def render_outreach_mailmerge(conn):
     rows = _o3_collect_recipients_ui(conn) if "_o3_collect_recipients_ui" in globals() else None
     st.subheader("Mail Merge & Send")
     # 2) Template inputs
-    subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
-    body = st.text_area("HTML Body", value=st.session_state.get("outreach_html",""), height=260, key="o3_body")
+    # Seed widget state from outreach_* once, then let the widgets own their values.
+    if "o3_subject" not in st.session_state:
+        st.session_state["o3_subject"] = st.session_state.get("outreach_subject", "")
+    if "o3_body" not in st.session_state:
+        st.session_state["o3_body"] = st.session_state.get("outreach_html", "")
+    subj = st.text_input("Subject", key="o3_subject")
+    body = st.text_area("HTML Body", height=260, key="o3_body")
 
     # Attachments for this blast
     ups = st.file_uploader("Attachments (optional)", type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"], accept_multiple_files=True, key="o3_attachments")
