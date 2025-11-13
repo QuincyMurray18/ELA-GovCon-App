@@ -46,6 +46,64 @@ def _ensure_selected_rfp_id(conn):
     return rid
 
 # === Proposal Builder normalization helpers ===
+
+def _delete_rfp_everywhere(conn, rfp_id: int) -> None:
+    """Delete an RFP and its related analyzer records.
+
+    Best-effort cascade across the main RFP-related tables so UI stays clean.
+    Safe if some tables have no rows for this id.
+    """
+    import sqlite3 as _sqlite
+    from contextlib import closing as _closing
+
+    try:
+        rid = int(rfp_id)
+    except Exception:
+        return
+
+    tables = [
+        # Core One-Page / analyzer artifacts
+        "rfp_files",
+        "rfp_files_t",
+        "rfp_chunks",
+        "rfp_meta",
+        "rfp_sections",
+        "lm_items",
+        "clin_lines",
+        "key_dates",
+        "pocs",
+        "compliance_requirements",
+        "compliance_links",
+        "rtm_requirements",
+        "rfp_chat",
+        "rfp_chat_turns",
+        "y2_threads",
+        "draft_snippets",
+        # Downstream artifacts tied back to this RFP
+        "quote_totals",
+        "proposals",
+        "quotes",
+        "pricing_scenarios",
+        "white_papers",
+        "rfq_packs",
+        "sam_versions",
+        # CRM / deals that are explicitly tied to this RFP
+        "deals",
+    ]
+
+    with _closing(conn.cursor()) as cur:
+        for tbl in tables:
+            try:
+                cur.execute(f"DELETE FROM {tbl} WHERE rfp_id = ?", (rid,))
+            except Exception:
+                # Table may not have rfp_id or may not exist in this DB version
+                pass
+        # Finally delete the RFP shell itself
+        try:
+            cur.execute("DELETE FROM rfps WHERE id = ?", (rid,))
+        except Exception:
+            pass
+        conn.commit()
 def _pb_try_json(text: str):
     try:
         import json as _json
@@ -12754,6 +12812,21 @@ def run_rfp_analyzer(conn) -> None:
     except Exception:
         st.session_state["current_rfp_id"] = rid
 
+    # Danger zone: delete current RFP
+    with st.expander("Danger zone: Delete this RFP", expanded=False):
+        st.write("This will permanently remove this RFP and its related analyzer records.")
+        if st.button("Delete this RFP", type="secondary", key="p3_delete_rfp"):
+            try:
+                _delete_rfp_everywhere(conn, int(rid))
+                # Clear selection so we don't point at a deleted id
+                st.session_state.pop("current_rfp_id", None)
+                # After delete, send user back to RFP Analyzer to refresh list
+                st.session_state["_force_rfp_analyzer"] = True
+                st.session_state["nav_target"] = "RFP Analyzer"
+                st.success(f"Deleted RFP #{int(rid)}.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Delete failed: {e}")
 
     # Controls
     c1, c2, c3 = st.columns([1,1,2])
