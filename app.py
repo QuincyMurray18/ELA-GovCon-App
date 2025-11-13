@@ -11897,6 +11897,18 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 rid = int(r["id"])
                                 old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
                                 new_status = str(r.get("status") or "New")
+                                # Normalize deadline to ISO string for storage
+                                r_deadline = r.get("rfp_deadline")
+                                if isinstance(r_deadline, (pd.Timestamp, datetime.date)):
+                                    r_deadline_str = r_deadline.strftime("%Y-%m-%d")
+                                elif isinstance(r_deadline, str) and r_deadline.strip():
+                                    try:
+                                        _tmp_dt = pd.to_datetime(r_deadline, errors="coerce")
+                                        r_deadline_str = _tmp_dt.date().strftime("%Y-%m-%d") if _tmp_dt is not pd.NaT else None
+                                    except Exception:
+                                        r_deadline_str = None
+                                else:
+                                    r_deadline_str = None
                                 cur.execute(
                                     """
                                     UPDATE deals
@@ -11905,6 +11917,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         status = ?,
                                         stage = ?,
                                         value = ?,
+                                        rfp_deadline = ?,
                                         sam_url = ?,
                                         updated_at = datetime('now')
                                     WHERE id = ?;
@@ -11915,6 +11928,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         new_status,
                                         new_status,
                                         float(r.get("value") or 0.0),
+                                        r_deadline_str,
                                         str(r.get("sam_url", "") or "").strip(),
                                         rid,
                                     ),
