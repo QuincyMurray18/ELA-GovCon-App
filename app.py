@@ -4328,47 +4328,110 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
     return chunks
 
 def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
+    """
+    Build or update the semantic search index for all files attached to an RFP.
+
+    This reads rfp_files for the given rfp_id, extracts text per page, optionally OCRs,
+    splits into overlapping chunks, embeds each chunk, and stores into rfp_chunks.
+    """
     _ensure_y1_schema(conn)
     try:
-        df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
+        df_bytes = pd.read_sql_query(
+            "SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;",
+            conn,
+            params=(int(rfp_id),),
+        )
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
     if df_bytes is None or df_bytes.empty:
         return {"ok": False, "error": "No linked files"}
+
     added = 0
     skipped = 0
+
     for _, row in df_bytes.iterrows():
-        fid = int(row["id"]); name = row.get('filename') or f"file_{fid}"
+        fid = int(row["id"])
+        name = row.get("filename") or f"file_{fid}"
+        mime = row.get("mime") or "application/octet-stream"
+
+        # bytes may come back as memoryview or buffer-type from SQLite
         try:
-            blob = pd.read_sql_query("SELECT bytes, mime FROM rfp_files WHERE id=?;", conn, params=(fid,)).iloc[0]
-            b = blob["bytes"]; mime = blob.get("mime") or (row.get('mime') or "application/octet-stream")
+            b = row["bytes"]
+            if isinstance(b, memoryview):
+                b = b.tobytes()
         except Exception:
             continue
-        pages = extract_text_pages(b, mime) or []
+
+        # Extract text pages, fallback to OCR if empty
+        try:
+            pages = extract_text_pages(b, mime) or []
+        except Exception:
+            pages = []
         if pages:
-            pages, _ocrn = ocr_pages_if_empty(b, mime, pages)
+            try:
+                pages, _ = ocr_pages_if_empty(b, mime, pages)
+            except Exception:
+                # If OCR fails, keep whatever pages we had
+                pass
+
         if not pages:
             continue
+
         pages = pages[:max_pages]
-        for pi, txt in enumerate(pages, start=1):
-            parts = _split_chunks(txt or "", 1600, 200)
-            for ci, ch in enumerate(parts):
-                try:
-                    if not rebuild:
-                        q = pd.read_sql_query("SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;", conn, params=(fid, pi, ci))
+
+        for pi, txt_page in enumerate(pages, start=1):
+            if not txt_page:
+                continue
+
+            chunks = _split_chunks(str(txt_page), 1600, 200)
+            if not chunks:
+                continue
+
+            for ci, ch in enumerate(chunks):
+                # Skip if chunk already exists and we are not forcing rebuild
+                if not rebuild:
+                    try:
+                        q = pd.read_sql_query(
+                            "SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;",
+                            conn,
+                            params=(fid, pi, ci),
+                        )
                         if q is not None and not q.empty:
                             skipped += 1
                             continue
+                    except Exception:
+                        # If this check fails, just continue to insert
+                        pass
+
+                try:
+                    emb = _embed_texts([ch])[0]
                 except Exception:
-                    pass
-                emb = _embed_texts([ch])[0]
-                with closing(conn.cursor()) as cur:
-                    cur.execute("""
-                        INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb)
-                        VALUES (?, ?, ?, ?, ?,?,?,?);
-                    """, (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)))
+                    continue
+
+                try:
+                    with closing(conn.cursor()) as cur:
+                        cur.execute(
+                            """
+                            INSERT OR REPLACE INTO rfp_chunks(
+                                rfp_id,
+                                rfp_file_id,
+                                file_name,
+                                page,
+                                chunk_idx,
+                                text,
+                                emb
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?);
+                            """,
+                            (int(rfp_id), fid, name, int(pi), int(ci), ch, emb),
+                        )
                     conn.commit()
-                added += 1
+                    added += 1
+                except Exception:
+                    # If an insert fails, continue with the next chunk
+                    continue
+
     return {"ok": True, "added": added, "skipped": skipped}
 def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
