@@ -8000,6 +8000,16 @@ def run_sam_watch(conn) -> None:
                                         cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
                                     except Exception:
                                         pass
+                                    # Normalize new deal's stage/status so it appears in Kanban + summaries
+                                    try:
+                                        with _closing(_db.cursor()) as cur2:
+                                            cur2.execute(
+                                                "UPDATE deals SET status=?, stage=? WHERE id=?;",
+                                                (STAGES_ORDERED[0], STAGES_ORDERED[0], deal_id),
+                                            )
+                                            _db.commit()
+                                    except Exception:
+                                        pass
                                     _db.commit()
                                 try:
                                     with _closing(_db.cursor()) as cur:
@@ -11727,7 +11737,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     
         # Weighted Pipeline view
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, status, value, rfp_deadline FROM deals_t ORDER BY id DESC;", conn, params=())
+        df = pd.read_sql_query("SELECT id, title, agency, COALESCE(status, stage, '') AS status, COALESCE(value, 0) AS value, rfp_deadline FROM deals ORDER BY id DESC;", conn, params=())
         if df.empty:
             st.info("No deals")
         else:
