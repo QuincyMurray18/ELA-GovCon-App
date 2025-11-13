@@ -634,7 +634,7 @@ def __p_render_signature(conn, sender_email, body_html):
         logo_html = (
             f'<div style="margin-bottom:4px;">'
             f'<img src="cid:{cid}" alt="Logo" '
-            f'style="max-width:200px;height:auto;border:0;" />'
+            f'style="width:120px;max-width:120px;height:auto;border:0;" />'
             f"</div>"
         )
         inline_images.append({"cid": cid, "content": logo_blob, "mime": mime})
