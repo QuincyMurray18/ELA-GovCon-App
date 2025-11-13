@@ -7369,7 +7369,7 @@ def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
         if row:
             return int(row[0])
         cur.execute(
-            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
+            "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
             (notice_row.get('Title') or "", notice_row.get('Solicitation') or "", nid, notice_row.get('SAM Link') or "", "")
         )
         rid = int(cur.lastrowid)
@@ -8603,7 +8603,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                                 ((_title_in or _guess_title(full_text, "Untitled")), (_solnum_in or _guess_solnum(full_text)), (_parse_sam_notice_id(_sam_in) or ""), (_sam_in or ""), "",)
                             )
                             rfp_id = cur.lastrowid
@@ -8689,7 +8689,7 @@ def _run_rfp_analyzer_phase3(conn):
                             pass
                         with closing(conn.cursor()) as cur:
                             cur.execute(
-                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
+                                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                                 ((_title_in or _guess_title(text, f.name)), (_solnum_in or _guess_solnum(text)), (_parse_sam_notice_id(_sam_in) or ""), _sam_in, "", )
                             )
                             rfp_id = cur.lastrowid
@@ -12536,7 +12536,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
@@ -12597,7 +12597,7 @@ def run_rfp_analyzer(conn) -> None:
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?, ?, ?, ?, ?,?, datetime('now'));",
+                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
                         ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
                     )
                     new_id = cur.lastrowid
