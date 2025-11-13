@@ -12463,49 +12463,70 @@ def init_session() -> None:
         st.session_state.initialized = True
 
 def nav() -> str:
-    if st.session_state.pop('_force_rfp_analyzer', False):
-        return 'RFP Analyzer'
-    if st.session_state.get('op_inline_files'):
-        return 'RFP Analyzer'
-    if st.session_state.get('op_new_files'):
-        return 'RFP Analyzer'
-    if st.session_state.get('onepage_uploads'):
-        return 'RFP Analyzer'
+    import streamlit as st
+
+    pages = [
+        "SAM Watch",
+        "RFP Analyzer",
+        "L and M Checklist",
+        "Proposal Builder",
+        "File Manager",
+        "Past Performance",
+        "White Paper Builder",
+        "Subcontractor Finder",
+        "Outreach",
+        "RFQ Pack",
+        "Backup & Data",
+        "Quote Comparison",
+        "Pricing Calculator",
+        "Win Probability",
+        "Chat Assistant",
+        "Capability Statement",
+        "Contacts",
+        "Deals",
+    ]
+
+    # Ensure we have a current nav page in session
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = "SAM Watch"
+
+    # One-shot flag to force RFP Analyzer
+    if st.session_state.pop("_force_rfp_analyzer", False):
+        st.session_state["nav_page"] = "RFP Analyzer"
+
+    # When files are being ingested / handled for One-Page Analyzer, prefer RFP Analyzer
+    if (
+        st.session_state.get("op_inline_files")
+        or st.session_state.get("op_new_files")
+        or st.session_state.get("onepage_uploads")
+    ):
+        st.session_state["nav_page"] = "RFP Analyzer"
+
+    # Auto-jump to One-Page Analyzer when a SAM notice was pushed
+    if st.session_state.pop("rfp_selected_notice", None):
+        st.session_state["nav_page"] = "RFP Analyzer"
+
+    # One-shot explicit navigation target overrides everything else
+    _tgt = st.session_state.pop("nav_target", None)
+    if _tgt in pages:
+        st.session_state["nav_page"] = _tgt
+
+    # Fallback safety
+    if st.session_state["nav_page"] not in pages:
+        st.session_state["nav_page"] = "SAM Watch"
+
+    # Sidebar header is always rendered so the Go to bar never disappears
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
     st.sidebar.caption(f"SHA {_file_hash()}")
-    # Auto-jump to One‑Page Analyzer when a SAM notice was pushed,
-    # or when a one-shot nav_target is set.
-    if st.session_state.pop('rfp_selected_notice', None):
-        return 'RFP Analyzer'
-    _tgt = st.session_state.pop("nav_target", None)
-    if _tgt:
-        return _tgt
 
-    return st.sidebar.selectbox(
+    current = st.sidebar.selectbox(
         "Go to",
-        [
-            "SAM Watch",
-            "RFP Analyzer",
-            "L and M Checklist",
-            "Proposal Builder",
-            "File Manager",
-            "Past Performance",
-            "White Paper Builder",
-            "Subcontractor Finder",
-            "Outreach",
-            "RFQ Pack",
-            "Backup & Data",
-            "Quote Comparison",
-            "Pricing Calculator",
-            "Win Probability",
-            "Chat Assistant",
-            "Capability Statement",
-            
-            "Contacts",
-            "Deals",
-        ],
+        pages,
+        index=pages.index(st.session_state["nav_page"]),
+        key="nav_page",
     )
+    return current
 
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
@@ -17200,63 +17221,3 @@ def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return f"[AI unavailable] {e}"
-
-def nav() -> str:
-    import streamlit as st
-
-    # Sidebar header is always rendered so the Go to bar never disappears
-    st.sidebar.title("Workspace")
-    st.sidebar.caption(BUILD_LABEL)
-    st.sidebar.caption(f"SHA {_file_hash()}")
-
-    # Determine default page based on state flags (RFP ingestion, SAM watch jump, etc.)
-    default_page = None
-
-    # One-shot flag to force RFP Analyzer
-    if st.session_state.pop('_force_rfp_analyzer', False):
-        default_page = 'RFP Analyzer'
-    # When files are being ingested / handled for One-Page Analyzer, prefer RFP Analyzer
-    elif (
-        st.session_state.get('op_inline_files')
-        or st.session_state.get('op_new_files')
-        or st.session_state.get('onepage_uploads')
-    ):
-        default_page = 'RFP Analyzer'
-
-    # Auto-jump to One-Page Analyzer when a SAM notice was pushed
-    if st.session_state.pop('rfp_selected_notice', None):
-        default_page = 'RFP Analyzer'
-
-    # One-shot explicit navigation target overrides everything else
-    _tgt = st.session_state.pop("nav_target", None)
-    if _tgt:
-        default_page = _tgt
-
-    pages = [
-        "SAM Watch",
-        "RFP Analyzer",
-        "L and M Checklist",
-        "Proposal Builder",
-        "File Manager",
-        "Past Performance",
-        "White Paper Builder",
-        "Subcontractor Finder",
-        "Outreach",
-        "RFQ Pack",
-        "Backup & Data",
-        "Quote Comparison",
-        "Pricing Calculator",
-        "Win Probability",
-        "Chat Assistant",
-        "Capability Statement",
-        "Contacts",
-        "Deals",
-    ]
-
-    # Compute index for selectbox; default to first page if nothing is set
-    if default_page in pages:
-        index = pages.index(default_page)
-    else:
-        index = 0
-
-    return st.sidebar.selectbox("Go to", pages, index=index)
