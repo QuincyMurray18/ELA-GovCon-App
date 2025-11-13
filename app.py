@@ -13512,12 +13512,15 @@ def email_template_delete(conn, template_id:int):
         conn.execute("DELETE FROM email_templates WHERE id=?", (int(template_id),))
 
 import re as _re_o2
-MERGE_TAGS = {"company","email","title","solicitation","due","notice_id","first_name","last_name","city","state"}
-def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
+MERGE_TAGS = {"company","email","phone","city","state","naics","title","solicitation","due","notice_id"}
+def template_missing_tags(text: str) -> set[str]:
+    """Return any unknown merge tags used in the template body/subject."""
     found = set(_re_o2.findall(r"{{\s*([a-zA-Z0-9_]+)\s*}}", text or ""))
-    return required - found
+    # Unknown tags are those that are not in the supported MERGE_TAGS set
+    return found - MERGE_TAGS
 
 def render_outreach_templates(conn):
+
 
     st.subheader("Email templates")
     ensure_email_templates(conn)
@@ -13537,7 +13540,8 @@ def render_outreach_templates(conn):
         sig_html = st.text_area("HTML body", value=row[3], key="tpl_html", height=240)
     missing = template_missing_tags((subject or "") + " " + (sig_html or ""))
     if missing:
-        st.info("Missing merge tags: " + ", ".join(sorted(missing)))
+        st.warning("Unknown merge tags (will not be filled): " + ", ".join(sorted(missing)))
+    st.caption("Available merge tags: " + ", ".join(sorted(MERGE_TAGS)))
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Save"):
@@ -13637,7 +13641,7 @@ def render_outreach_mailmerge(conn):
     st.subheader("Mail Merge & Send")
     # 2) Template inputs
     subj = st.text_input("Subject", value=st.session_state.get("outreach_subject",""), key="o3_subject")
-    body = st.text_area("HTML Body", value=st.session_state.get("outreach_body",""), height=260, key="o3_body")
+    body = st.text_area("HTML Body", value=st.session_state.get("outreach_html",""), height=260, key="o3_body")
 
     # Attachments for this blast
     ups = st.file_uploader("Attachments (optional)", type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"], accept_multiple_files=True, key="o3_attachments")
@@ -13965,7 +13969,8 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             data = {k: str(r.get(k,"") or "") for k in r.index}
             subj = _o3_merge(subject_tpl or "", data)
             sig_html = _o3_merge(html_tpl or "", data)
-            if "unsubscribe" not in html.lower():
+            # Auto-append a lightweight unsubscribe footer if not already present
+            if "unsubscribe" not in (sig_html or "").lower():
                 sig_html += "<br><br><small>To unsubscribe, reply 'STOP'.</small>"
             if test_only:
                 status = "Preview"; err = ""
