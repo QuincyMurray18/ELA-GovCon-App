@@ -11899,8 +11899,12 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 new_status = str(r.get("status") or "New")
                                 # Normalize deadline to ISO string for storage
                                 r_deadline = r.get("rfp_deadline")
-                                if isinstance(r_deadline, (pd.Timestamp, datetime.date)):
-                                    r_deadline_str = r_deadline.strftime("%Y-%m-%d")
+                                # Accept pandas Timestamps, datetime.date, or anything with strftime
+                                if hasattr(r_deadline, "strftime"):
+                                    try:
+                                        r_deadline_str = r_deadline.strftime("%Y-%m-%d")
+                                    except Exception:
+                                        r_deadline_str = None
                                 elif isinstance(r_deadline, str) and r_deadline.strip():
                                     try:
                                         _tmp_dt = pd.to_datetime(r_deadline, errors="coerce")
