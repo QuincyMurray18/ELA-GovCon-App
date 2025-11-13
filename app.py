@@ -13611,50 +13611,183 @@ def seed_default_templates(conn):
         email_template_upsert(conn, n, s, h, None)
 
 # --- O4 wrapper: delegates to __p_o4_ui if present, else shows fallback UI ---
+
 def o4_sender_accounts_ui(conn):
     try:
+        # Prefer the dedicated O4 sender UI if present
         return __p_o4_ui(conn)  # provided by O4 module when available
     except Exception:
         import streamlit as _st
         from contextlib import closing
+        try:
+            import pandas as _pd
+        except Exception:
+            _pd = None
+
         _st.info("O4 sender accounts fallback UI loaded.")
-        # Load existing if any
-        host, port, username, password, use_tls = "smtp.gmail.com", 587, "", "", True
+
+        # Ensure modern multi-sender table exists
+        with conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS outreach_sender_accounts("
+                "id INTEGER PRIMARY KEY, "
+                "label TEXT UNIQUE, "
+                "email TEXT, "
+                "app_password TEXT, "
+                "smtp_host TEXT DEFAULT 'smtp.gmail.com', "
+                "smtp_port INTEGER DEFAULT 587, "
+                "use_tls INTEGER DEFAULT 1, "
+                "is_active INTEGER DEFAULT 1)"
+            )
+
+        # One-time migration from legacy smtp_settings (id=1) if multi-sender table is empty
         try:
             with closing(conn.cursor()) as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                row = cur.execute("SELECT label, host, port, username, password, use_tls FROM smtp_settings WHERE id=1").fetchone()
-                if row:
-                    label, host, port, username, password, use_tls = row[0] or "", row[1] or "smtp.gmail.com", int(row[2] or 587), row[3] or "", row[4] or "", bool(row[5] or 0)
+                cur.execute("SELECT COUNT(*) FROM outreach_sender_accounts;")
+                cnt = cur.fetchone()[0] or 0
+                if cnt == 0:
+                    cur.execute(
+                        "SELECT label, host, port, username, password, use_tls "
+                        "FROM smtp_settings WHERE id=1"
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        label, host, port, username, password, use_tls = row
+                        email = (username or "").strip()
+                        if email:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO outreach_sender_accounts"
+                                "(label, email, app_password, smtp_host, smtp_port, use_tls, is_active) "
+                                "VALUES(?,?,?,?,?,?,1);",
+                                (
+                                    (label or "Default").strip() or email,
+                                    email,
+                                    (password or "").strip(),
+                                    (host or "smtp.gmail.com").strip(),
+                                    int(port or 587),
+                                    1 if (use_tls or 0) else 0,
+                                ),
+                            )
         except Exception:
             pass
-        with _st.form("o4_fallback_sender_mm", clear_on_submit=False):
-            label = _st.text_input("Label", value=label if 'label' in locals() else "Default")
-            username = _st.text_input("Gmail address", value=username)
-            password = _st.text_input("App password", type="password", value=password)
-            c1,c2 = _st.columns(2)
-            with c1: host = _st.text_input("SMTP host", value=host)
-            with c2: port = _st.number_input("SMTP port", 1, 65535, value=int(port))
-            use_tls = _st.checkbox("Use STARTTLS", value=bool(use_tls))
+
+        # Load existing senders
+        rows = []
+        try:
+            rows = list(
+                conn.execute(
+                    "SELECT id, label, email, smtp_host, smtp_port, use_tls, is_active "
+                    "FROM outreach_sender_accounts ORDER BY id;"
+                ).fetchall()
+            )
+        except Exception:
+            rows = []
+
+        if rows:
+            _st.markdown("**Saved sender accounts**")
+            try:
+                data_rows = []
+                for r in rows:
+                    data_rows.append(
+                        {
+                            "id": r[0],
+                            "label": r[1],
+                            "email": r[2],
+                            "host": r[3],
+                            "port": r[4],
+                            "use_tls": bool(r[5]),
+                            "active": bool(r[6]),
+                        }
+                    )
+                if _pd is not None:
+                    df = _pd.DataFrame(data_rows)
+                    try:
+                        _styled_dataframe(df, use_container_width=True, hide_index=True)  # type: ignore[name-defined]
+                    except Exception:
+                        try:
+                            _st.dataframe(df, use_container_width=True, hide_index=True)
+                        except TypeError:
+                            _st.dataframe(df)
+                else:
+                    _st.write(rows)
+            except Exception:
+                pass
+        else:
+            _st.caption("No sender accounts saved yet. Use the form below to add one or more senders.")
+
+        _st.markdown("**Add or update sender account**")
+        with _st.form("o4_sender_accounts_form", clear_on_submit=True):
+            c1, c2 = _st.columns(2)
+            with c1:
+                label = _st.text_input("Label", value="")
+                email = _st.text_input("Sender email", value="")
+                app_password = _st.text_input("App password (Gmail app password)", type="password", value="")
+            with c2:
+                smtp_host = _st.text_input("SMTP host", value="smtp.gmail.com")
+                smtp_port = _st.number_input("SMTP port", 1, 65535, value=587)
+                use_tls = _st.checkbox("Use STARTTLS (TLS)", value=True)
+            is_active = _st.checkbox("Active", value=True)
             saved = _st.form_submit_button("Save sender")
             if saved:
+                if not email or "@" not in email:
+                    _st.error("Please enter a valid sender email.")
+                else:
+                    try:
+                        with conn:
+                            conn.execute(
+                                "INSERT OR REPLACE INTO outreach_sender_accounts"
+                                "(label, email, app_password, smtp_host, smtp_port, use_tls, is_active) "
+                                "VALUES(?,?,?,?,?,?,?);",
+                                (
+                                    (label or "").strip() or email.strip(),
+                                    email.strip(),
+                                    (app_password or "").strip(),
+                                    (smtp_host or "smtp.gmail.com").strip(),
+                                    int(smtp_port),
+                                    1 if use_tls else 0,
+                                    1 if is_active else 0,
+                                ),
+                            )
+                        _st.success("Sender saved.")
+                    except Exception as e:
+                        _st.error(f"Save failed: {e}")
+
+        # Delete sender controls
+        if rows:
+            _st.markdown("**Delete sender account**")
+            options = [
+                (r[0], f"{(r[1] or '').strip()} — {str(r[2] or '').strip()}".strip(" —"))
+                for r in rows
+            ]
+
+            def _fmt_choice(opt):
                 try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute("CREATE TABLE IF NOT EXISTS smtp_settings (id INTEGER PRIMARY KEY, label TEXT, host TEXT, port INTEGER, username TEXT, password TEXT, use_tls INTEGER)")
-                        cur.execute("INSERT OR REPLACE INTO smtp_settings(id, label, host, port, username, password, use_tls) VALUES(1,?,?,?,?,?,?)",
-                                    (label.strip() or "Default", host.strip(), int(port), username.strip(), password.strip(), 1 if use_tls else 0))
-                        conn.commit()
-                    _st.success("Sender saved")
-                except Exception as e:
-                    _st.error(f"Save failed: {e}")
-        # Show current
-        try:
-            with closing(conn.cursor()) as cur:
-                row = cur.execute("SELECT label, username, host, port, use_tls FROM smtp_settings WHERE id=1").fetchone()
-            if row:
-                _st.caption(f"Active: {row[0]} — {row[1]} via {row[2]}:{row[3]} TLS={'on' if row[4] else 'off'}")
-        except Exception:
-            pass
+                    return opt[1]
+                except Exception:
+                    return str(opt)
+
+            sel = _st.selectbox(
+                "Select sender to delete",
+                options,
+                format_func=_fmt_choice,
+                key="o4_sender_del",
+            )
+            if _st.button("Delete selected sender"):
+                try:
+                    sender_id = int(sel[0])
+                except Exception:
+                    sender_id = None
+                if sender_id:
+                    try:
+                        with conn:
+                            conn.execute(
+                                "DELETE FROM outreach_sender_accounts WHERE id=?;",
+                                (sender_id,),
+                            )
+                        _st.success("Sender deleted.")
+                    except Exception as e:
+                        _st.error(f"Delete failed: {e}")
+
 
 def render_outreach_mailmerge(conn):
     globals()['_O4_CONN'] = conn
