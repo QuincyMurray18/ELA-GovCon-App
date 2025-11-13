@@ -875,7 +875,7 @@ def _phase3_analyzer_inline(conn):
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     with open(path, "wb") as fh: fh.write(data)
                     try:
-                        conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES (?, ?, ?, ?, ?,?);", (rfp_id, f.name, path, f.type, len(data)))
+                        conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES (?, ?, ?, ?, ?);", (rfp_id, f.name, path, f.type, sqlite3.Binary(data)))
                     except Exception:
                         pass
             st.success(f"Saved {len(files)} file(s).")
@@ -893,7 +893,7 @@ def _phase3_analyzer_inline(conn):
                             fn = os.path.basename(p)
                             cur = conn.execute("SELECT 1 FROM rfp_files WHERE rfp_id=? AND filename=?;", (rfp_id, fn))
                             if not cur.fetchone():
-                                conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES (?, ?, ?, ?, ?,?);", (rfp_id, fn, p, "downloaded", os.path.getsize(p)))
+                                conn.execute("INSERT INTO rfp_files(rfp_id, filename, path, kind, bytes) VALUES (?, ?, ?, ?, ?);", (rfp_id, fn, p, "downloaded", sqlite3.Binary(open(p, "rb").read())))
                 if pulled: st.success(f"Pulled {len(pulled)} attachment(s).")
                 else: st.info("No attachments found from API/HTML.")
                 if errs:
@@ -4327,111 +4327,81 @@ def _split_chunks(text: str, max_chars: int = 1200, overlap: int = 180) -> list[
         i = max(j - overlap, j)
     return chunks
 
+
 def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, rebuild: bool = False) -> dict:
     """
-    Build or update the semantic search index for all files attached to an RFP.
-
-    This reads rfp_files for the given rfp_id, extracts text per page, optionally OCRs,
-    splits into overlapping chunks, embeds each chunk, and stores into rfp_chunks.
+    Build or rebuild the semantic index for an RFP's files.
     """
     _ensure_y1_schema(conn)
     try:
         df_bytes = pd.read_sql_query(
-            "SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;",
+            "SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
             conn,
             params=(int(rfp_id),),
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
-
     if df_bytes is None or df_bytes.empty:
         return {"ok": False, "error": "No linked files"}
-
     added = 0
     skipped = 0
-
     for _, row in df_bytes.iterrows():
         fid = int(row["id"])
         name = row.get("filename") or f"file_{fid}"
-        mime = row.get("mime") or "application/octet-stream"
-
-        # bytes may come back as memoryview or buffer-type from SQLite
-        try:
-            b = row["bytes"]
-            if isinstance(b, memoryview):
-                b = b.tobytes()
-        except Exception:
+        b = row.get("bytes")
+        if b is None:
+            # attempt to load from path if available
+            p = row.get("path")
+            if p:
+                try:
+                    with open(p, "rb") as fh:
+                        b = fh.read()
+                except Exception:
+                    b = None
+        if b is None:
             continue
-
-        # Extract text pages, fallback to OCR if empty
+        mime = row.get("mime") or _guess_mime_from_name(str(name).lower())
         try:
             pages = extract_text_pages(b, mime) or []
         except Exception:
             pages = []
         if pages:
             try:
-                pages, _ = ocr_pages_if_empty(b, mime, pages)
+                pages, _ocrn = ocr_pages_if_empty(b, mime, pages)
             except Exception:
-                # If OCR fails, keep whatever pages we had
                 pass
-
         if not pages:
             continue
-
         pages = pages[:max_pages]
-
-        for pi, txt_page in enumerate(pages, start=1):
-            if not txt_page:
-                continue
-
-            chunks = _split_chunks(str(txt_page), 1600, 200)
-            if not chunks:
-                continue
-
-            for ci, ch in enumerate(chunks):
-                # Skip if chunk already exists and we are not forcing rebuild
+        for pi, txt in enumerate(pages, start=1):
+            parts = _split_chunks(txt or "", 1600, 200)
+            for ci, ch in enumerate(parts):
+                if not ch.strip():
+                    continue
                 if not rebuild:
                     try:
-                        q = pd.read_sql_query(
+                        existing = pd.read_sql_query(
                             "SELECT id FROM rfp_chunks WHERE rfp_file_id=? AND page=? AND chunk_idx=?;",
                             conn,
-                            params=(fid, pi, ci),
+                            params=(fid, int(pi), int(ci)),
                         )
-                        if q is not None and not q.empty:
+                        if existing is not None and not existing.empty:
                             skipped += 1
                             continue
                     except Exception:
-                        # If this check fails, just continue to insert
                         pass
-
-                try:
-                    emb = _embed_texts([ch])[0]
-                except Exception:
-                    continue
-
-                try:
-                    with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            """
-                            INSERT OR REPLACE INTO rfp_chunks(
-                                rfp_id,
-                                rfp_file_id,
-                                file_name,
-                                page,
-                                chunk_idx,
-                                text,
-                                emb
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?);
-                            """,
-                            (int(rfp_id), fid, name, int(pi), int(ci), ch, emb),
+                emb = _embed_texts([ch])[0]
+                with closing(conn.cursor()) as cur:
+                    cur.execute(
+                        """
+                        INSERT OR REPLACE INTO rfp_chunks(
+                            rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb
                         )
-                    conn.commit()
-                    added += 1
-                except Exception:
-                    # If an insert fails, continue with the next chunk
-                    continue
-
+                        VALUES (?, ?, ?, ?, ?, ?, ?);
+                        """,
+                        (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)),
+                    )
+                added += 1
     return {"ok": True, "added": added, "skipped": skipped}
 def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
@@ -6872,7 +6842,7 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
         pages_text, ocr_count = ocr_pages_if_empty(file_bytes, mime, pages_text)
         pages = len(pages_text) if pages_text else None
         cur.execute(
-            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES (?, ?, ?, ?, ?,?,?, datetime('now'));",
+            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
             (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
         )
         rid = cur.lastrowid
@@ -8372,29 +8342,54 @@ def _run_rfp_analyzer_phase3(conn):
     # Build pages for One-Page Analyzer
     try:
         df_files = pd.read_sql_query(
-            "SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-            conn, params=(int(_ensure_selected_rfp_id(conn)),)
+            "SELECT filename, mime, bytes, pages, path, kind FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            conn,
+            params=(int(_ensure_selected_rfp_id(conn)),),
         )
     except Exception:
         df_files = None
-    pages = []
+    pages: list[dict] = []
     if df_files is not None and not df_files.empty:
         for _, r in df_files.iterrows():
-            b = r.get("bytes"); mime = r.get("mime") or ""
+            b = r.get("bytes")
+            if b is None and r.get("path"):
+                try:
+                    with open(r.get("path"), "rb") as fh:
+                        b = fh.read()
+                except Exception:
+                    b = None
+            if b is None:
+                continue
+            fname = (r.get("filename") or "").lower()
+            mime = (r.get("mime") or "") or _guess_mime_from_name(fname)
             try:
                 texts = extract_text_pages(b, mime) or []
             except Exception:
                 texts = []
+            if not texts:
+                # last-resort OCR per file
+                try:
+                    texts, _ = ocr_pages_if_empty(b, mime, texts)
+                except Exception:
+                    texts = []
             for i, t in enumerate(texts[:100], start=1):
                 pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
     if not pages:
-        st.warning("No readable pages found in linked files for this RFP.")
-    else:
+        # Fallback: try combined text extractor
+        try:
+            fallback_text = y5_extract_from_rfp(conn, int(_ensure_selected_rfp_id(conn))) or ""
+        except Exception:
+            fallback_text = ""
+        if fallback_text.strip():
+            pages = [{"file": "combined", "page": 1, "text": fallback_text}]
+        else:
+            st.warning("No readable pages found in linked files for this RFP.")
+    if pages:
         try:
             run_rfp_analyzer_onepage(pages)
             st.stop()
         except Exception as e:
-            st.error(f"One-Page Analyzer error: {e}")
+            st.error(f"One‑page analyzer failed: {e}")
 
     def _noop():
         yield
@@ -17263,3 +17258,61 @@ def _chat_plus_call_openai(messages: list[dict], temperature: float | int = 0.15
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         return f"[AI unavailable] {e}"
+
+# --- patched Phase 3 schema override ---
+
+def _ensure_phase3_schema(conn):
+    """Ensure rfp_records and rfp_files tables exist with all required columns."""
+    import sqlite3 as _sqlite3  # noqa: F401
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rfp_records (
+                    id INTEGER PRIMARY KEY,
+                    notice_id TEXT,
+                    title TEXT,
+                    sam_url TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rfp_files (
+                    id INTEGER PRIMARY KEY,
+                    rfp_id INTEGER,
+                    filename TEXT,
+                    mime TEXT,
+                    sha256 TEXT,
+                    pages INTEGER,
+                    bytes BLOB,
+                    path TEXT,
+                    kind TEXT,
+                    extracted_path TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY(rfp_id) REFERENCES rfp_records(id)
+                );
+                """
+            )
+            try:
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(rfp_files);").fetchall()]
+            except Exception:
+                cols = []
+            needed = {
+                "mime": "TEXT",
+                "sha256": "TEXT",
+                "pages": "INTEGER",
+                "path": "TEXT",
+                "kind": "TEXT",
+                "extracted_path": "TEXT",
+                "created_at": "TEXT",
+            }
+            for col, decl in needed.items():
+                if col not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE rfp_files ADD COLUMN {col} {decl};")
+                    except Exception:
+                        pass
+    except Exception:
+        return
