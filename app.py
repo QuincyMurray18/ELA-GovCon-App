@@ -974,8 +974,7 @@ def _phase3_analyzer_inline(conn):
         _ensure_phase3_schema(conn)
 
     st.markdown("### 🧠 Phase 3 — One‑Page Analyzer")
-    _notice_ctx = st.session_state.get("rfp_selected_notice")
-    notice = _notice_ctx if isinstance(_notice_ctx, dict) else {}
+    notice = st.session_state.get("rfp_selected_notice") or {}
     title = notice.get("Title") or notice.get("Solicitation") or "Untitled RFP"
     sam_url = notice.get("SAM Link") or notice.get("URL") or ""
 
@@ -1796,8 +1795,7 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
             pass
         # Phase 1: auto-fetch SAM attachments if we have a notice context
     try:
-        _ctx_raw = st.session_state.get('rfp_selected_notice')
-        _ctx = _ctx_raw if isinstance(_ctx_raw, dict) else {}
+        _ctx = st.session_state.get('rfp_selected_notice') or {}
         _rid = int(st.session_state.get('current_rfp_id') or 0)
         _nid = _ctx.get('Notice ID') or _ctx.get('noticeId') or _ctx.get('id') or ''
         if _rid and _nid:
@@ -6483,6 +6481,16 @@ def get_db() -> sqlite3.Connection:
 
         """)
 
+        # Minimal migration: ensure tenants table has expected columns
+        try:
+            cur.execute("PRAGMA table_info(tenants);")
+            cols = [r[1] for r in cur.fetchall()]
+            if "name" not in cols:
+                cur.execute("ALTER TABLE tenants ADD COLUMN name TEXT;")
+            if "created_at" not in cols:
+                cur.execute("ALTER TABLE tenants ADD COLUMN created_at TEXT;")
+        except Exception:
+            pass
         cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'Default');")
 
         cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
@@ -8000,16 +8008,6 @@ def run_sam_watch(conn) -> None:
                                     try:
                                         cur.execute("UPDATE deals SET status=?, stage=? rfp_deadline=?,  WHERE id=?", (STAGES_ORDERED[0], STAGES_ORDERED[0], str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, deal_id))
                                         cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'))", (deal_id, STAGES_ORDERED[0]))
-                                    except Exception:
-                                        pass
-                                    # Normalize new deal's stage/status so it appears in Kanban + summaries
-                                    try:
-                                        with _closing(_db.cursor()) as cur2:
-                                            cur2.execute(
-                                                "UPDATE deals SET status=?, stage=? WHERE id=?;",
-                                                (STAGES_ORDERED[0], STAGES_ORDERED[0], deal_id),
-                                            )
-                                            _db.commit()
                                     except Exception:
                                         pass
                                     _db.commit()
@@ -10226,7 +10224,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                             cur.execute(
                                 """
                                 INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?)
                                 ;
                                 """,
                                 (
@@ -10272,7 +10270,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                         cur.execute(
                             """
                             INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?)
                             ;
                             """,
                             (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
@@ -11229,14 +11227,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                               format_func=lambda rid: "None" if rid is None else f"#{rid} — {df_rf.loc[df_rf['id']==rid,'title'].values[0]}")
     if rfp_id:
         ctx = _load_rfp_context(conn, int(rfp_id))
-        meta = ctx.get("rfp") or {}
-        if isinstance(meta, dict):
-            title = meta.get("title") or meta.get("Title") or ""
-        else:
-            try:
-                title = str(meta.iloc[0].get("title") or meta.iloc[0].get("Title") or "")
-            except Exception:
-                title = ""
+        title = (ctx["rfp"].iloc[0]["title"] if _df_nonempty(ctx.get("rfp")) else "")
         secs = ctx.get("sections", pd.DataFrame())
         # Compute scores
         scores = []
@@ -11746,7 +11737,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     
         # Weighted Pipeline view
         st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, COALESCE(status, stage, '') AS status, COALESCE(value, 0) AS value, rfp_deadline FROM deals ORDER BY id DESC;", conn, params=())
+        df = pd.read_sql_query("SELECT id, title, agency, status, value, rfp_deadline FROM deals_t ORDER BY id DESC;", conn, params=())
         if df.empty:
             st.info("No deals")
         else:
@@ -11875,9 +11866,6 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             if df_edit.empty:
                 st.write("No deals yet")
             else:
-                # Normalize rfp_deadline to real dates so DateColumn works
-                if "rfp_deadline" in df_edit.columns:
-                    df_edit["rfp_deadline"] = pd.to_datetime(df_edit["rfp_deadline"], errors="coerce").dt.date
                 df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
                 df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
                 edited = st.data_editor(
@@ -11894,74 +11882,22 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     try:
                         df_orig = df_edit.set_index("id")
                         from contextlib import closing as _closing
-                        import sqlite3 as _sqlite3  # for IntegrityError type
                         with _closing(conn.cursor()) as cur:
-                            # Relax foreign key checks during pipeline updates so legacy
-                            # rows do not block simple field edits from the UI.
-                            try:
-                                cur.execute("PRAGMA foreign_keys = OFF;")
-                            except Exception:
-                                pass
                             for _, r in edited.iterrows():
                                 rid = int(r["id"])
                                 old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
-                                new_status = str(r.get("status") or "New")
-                                # Normalize deadline to ISO string for storage
-                                r_deadline = r.get("rfp_deadline")
-                                # Accept pandas Timestamps, datetime.date, or anything with strftime
-                                if hasattr(r_deadline, "strftime"):
-                                    try:
-                                        r_deadline_str = r_deadline.strftime("%Y-%m-%d")
-                                    except Exception:
-                                        r_deadline_str = None
-                                elif isinstance(r_deadline, str) and r_deadline.strip():
-                                    try:
-                                        _tmp_dt = pd.to_datetime(r_deadline, errors="coerce")
-                                        r_deadline_str = _tmp_dt.date().strftime("%Y-%m-%d") if _tmp_dt is not pd.NaT else None
-                                    except Exception:
-                                        r_deadline_str = None
-                                else:
-                                    r_deadline_str = None
+                                new_status = str(r["status"] or "New")
                                 cur.execute(
-                                    """
-                                    UPDATE deals
-                                    SET title = ?,
-                                        agency = ?,
-                                        status = ?,
-                                        stage = ?,
-                                        value = ?,
-                                        rfp_deadline = ?,
-                                        sam_url = ?,
-                                        updated_at = datetime('now')
-                                    WHERE id = ?;
-                                    """,
-                                    (
-                                        str(r.get("title", "") or "").strip(),
-                                        str(r.get("agency", "") or "").strip(),
-                                        new_status,
-                                        new_status,
-                                        float(r.get("value") or 0.0),
-                                        r_deadline_str,
-                                        str(r.get("sam_url", "") or "").strip(),
-                                        rid,
-                                    ),
+                                    "UPDATE deals SET title=?, agency=?, status=?, stage=?, value=?, sam_url=?, updated_at=datetime('now') WHERE id=?;",
+                                    (str(r.get("title","") or "").strip(),
+                                     str(r.get("agency","") or "").strip(),
+                                     new_status, new_status,
+                                     float(r.get("value") or 0.0),
+                                     str(r.get("sam_url","") or "").strip(),
+                                     rid)
                                 )
                                 if new_status != old_status:
-                                    try:
-                                        cur.execute(
-                                            """
-                                            INSERT INTO deal_stage_log(deal_id, stage, changed_at)
-                                            VALUES(?, ?, datetime('now'));
-                                            """,
-                                            (rid, new_status),
-                                        )
-                                    except Exception:
-                                        # Ignore logging failures so edits still succeed
-                                        pass
-                            try:
-                                cur.execute("PRAGMA foreign_keys = ON;")
-                            except Exception:
-                                pass
+                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (rid, new_status))
                             conn.commit()
                         st.success("Pipeline updated")
                     except Exception as e:
@@ -12848,8 +12784,7 @@ def run_rfp_analyzer(conn) -> None:
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
         st.info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
-        _ctx0_raw = st.session_state.get("rfp_selected_notice")
-        ctx0 = _ctx0_raw if isinstance(_ctx0_raw, dict) else {}
+        ctx0 = st.session_state.get("rfp_selected_notice") or {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_new_title")
         s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_new_sol")
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_new_sam", placeholder="https://sam.gov/")
@@ -12910,8 +12845,7 @@ def run_rfp_analyzer(conn) -> None:
 
     # New RFP inline form (always available)
     with st.expander("➕ Start a new RFP", expanded=False):
-        _ctx0_raw = st.session_state.get("rfp_selected_notice")
-        ctx0 = _ctx0_raw if isinstance(_ctx0_raw, dict) else {}
+        ctx0 = st.session_state.get("rfp_selected_notice") or {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title")
         s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol")
         u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam", placeholder="https://sam.gov/")
