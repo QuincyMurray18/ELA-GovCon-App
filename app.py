@@ -16417,12 +16417,6 @@ except NameError:
     pass
 # ===================== END PATCH =====================
 
-if __name__ == '__main__':
-    try:
-        main()
-    except NameError:
-        # fallback: run default entry if main() not defined in this build
-        pass
 
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
@@ -17667,3 +17661,11 @@ def _ensure_phase3_schema(conn):
                         pass
     except Exception:
         return
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except NameError:
+        # fallback: run default entry if main() not defined in this build
+        pass
