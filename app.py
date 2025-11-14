@@ -891,9 +891,21 @@ def _normalize_section_name(name: str) -> str:
 def _section_blueprint(section_title: str) -> str:
     k = _normalize_section_name(section_title)
     if k == "technical":
-        return ("Write only the Technical Approach. Include: dependencies; step-by-step procedure; "
-                "tools and materials; interfaces; schedule with dependencies; acceptance criteria and QC checks. "
-                "Do not include management, staffing, risks, or crosswalks.")
+        return (
+            "Write only the Technical Approach. "
+            "Focus on HOW ELA Management will perform the work for this specific RFP. "
+            "Structure the content as:\n"
+            "1) Technical understanding (one short paragraph mirroring the SOW or PWS language).\n"
+            "2) Dependencies and constraints (site access, GFP, schedules, safety, weather, security, union or local rules).\n"
+            "3) Approach by task or CLIN (for each major requirement or CLIN: inputs, step by step procedure, tools and equipment, "
+            "in line QC checks, outputs or completion criteria).\n"
+            "4) Interfaces and coordination (how we coordinate with the CO, COR, on site POC, and any subcontractors or other vendors).\n"
+            "5) Schedule and milestones (how we sequence work, maintain operations, and meet key dates or service levels).\n"
+            "6) Acceptance criteria and QC (what the Government will inspect to accept the work, and what we verify before acceptance).\n"
+            "7) Differentiators (one short paragraph stating why this approach is lower risk and higher value than typical vendors).\n"
+            "Do not discuss org charts, staffing bios, corporate history, pricing, or formal risk lists here. "
+            "Do not write other sections in this answer."
+        )
     if k == "management":
         return ("Write only the Management Approach. Include: organization; RACI; communications; "
                 "risk control loop; reporting cadence; change control. "
@@ -5125,6 +5137,25 @@ def _y3_build_messages_psych(conn: "sqlite3.Connection", rfp_id: int, section_ti
     meta = ctx.get("meta") or {}
     meta_str = "\n".join(f"- {k}: {v}" for k,v in meta.items()) if isinstance(meta, dict) and meta else ""
 
+    # Section specific guidance
+    try:
+        k_sec = _normalize_section_name(section_title)
+    except Exception:
+        k_sec = ""
+    extra_guidance = ""
+    if k_sec == "technical":
+        extra_guidance = (
+            "\nSection specific instructions for Technical Approach:\n"
+            "- Focus only on HOW the work will be performed, not who is on the team or corporate history.\n"
+            "- Tie steps directly to SOW or PWS tasks and CLINs where possible.\n"
+            "- For each major task or CLIN: state inputs, step by step procedure, tools and equipment, quality checks inside the workflow, and outputs.\n"
+            "- Call out dependencies and constraints (access, GFP, weather, safety, security) early.\n"
+            "- Describe interfaces with the CO, COR, on site POC, and any subcontractors.\n"
+            "- Describe schedule and milestones in plain language, not Gantt charts.\n"
+            "- Make acceptance criteria explicit so evaluators see exactly how they will know the work is done.\n"
+            "- Do NOT discuss org charts, resumes, pricing, or formal risk lists here."
+        )
+
     user = f"""
 Draft the section: {section_title}
 
@@ -5139,6 +5170,8 @@ Guidance:
 - Lead with mission empathy. Then logic. Then verification.
 - Show reciprocity and mutual gains.
 - Use concrete steps, QC, metrics, timeline, roles.
+
+{extra_guidance}
 
 Apply this blueprint strictly:
 {_section_blueprint(section_title)}
