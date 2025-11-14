@@ -330,28 +330,6 @@ def _one_idea_per_paragraph(text: str) -> str:
 
 
 # ===== Structure-aware drafting helpers =====
-def _normalize_section_name(name: str) -> str:
-    n = (name or "").strip().lower()
-    aliases = {
-        "technical approach": "technical",
-        "management approach": "management",
-        "staffing and key personnel": "staffing",
-        "quality assurance / qc": "qc",
-        "quality assurance": "qc",
-        "qa": "qc",
-        "qc": "qc",
-        "risks and mitigations": "risk",
-        "risk management": "risk",
-        "executive summary": "exec",
-        "cover letter": "cover",
-        "pricing narrative": "price",
-        "pricing narrative (non-cost)": "price",
-        "compliance crosswalk": "compliance",
-        "past performance": "past",
-        "understanding of requirements": "exec",
-        "subcontractor plan": "subs",
-    }
-    return aliases.get(n, n)
 
 def _section_structure_rules(section_title: str) -> dict:
     k = _normalize_section_name(section_title)
@@ -891,21 +869,9 @@ def _normalize_section_name(name: str) -> str:
 def _section_blueprint(section_title: str) -> str:
     k = _normalize_section_name(section_title)
     if k == "technical":
-        return (
-            "Write only the Technical Approach. "
-            "Focus on HOW ELA Management will perform the work for this specific RFP. "
-            "Structure the content as:\n"
-            "1) Technical understanding (one short paragraph mirroring the SOW or PWS language).\n"
-            "2) Dependencies and constraints (site access, GFP, schedules, safety, weather, security, union or local rules).\n"
-            "3) Approach by task or CLIN (for each major requirement or CLIN: inputs, step by step procedure, tools and equipment, "
-            "in line QC checks, outputs or completion criteria).\n"
-            "4) Interfaces and coordination (how we coordinate with the CO, COR, on site POC, and any subcontractors or other vendors).\n"
-            "5) Schedule and milestones (how we sequence work, maintain operations, and meet key dates or service levels).\n"
-            "6) Acceptance criteria and QC (what the Government will inspect to accept the work, and what we verify before acceptance).\n"
-            "7) Differentiators (one short paragraph stating why this approach is lower risk and higher value than typical vendors).\n"
-            "Do not discuss org charts, staffing bios, corporate history, pricing, or formal risk lists here. "
-            "Do not write other sections in this answer."
-        )
+        return ("Write only the Technical Approach. Include: dependencies; step-by-step procedure; "
+                "tools and materials; interfaces; schedule with dependencies; acceptance criteria and QC checks. "
+                "Do not include management, staffing, risks, or crosswalks.")
     if k == "management":
         return ("Write only the Management Approach. Include: organization; RACI; communications; "
                 "risk control loop; reporting cadence; change control. "
@@ -1124,35 +1090,6 @@ def _phase3_analyzer_inline(conn):
                     st.caption("No extracted text yet. Click One-Click Analyze.")
 
 # === Phase 3: RFP ingest schema & helpers ===
-def _ensure_phase3_schema(conn):
-    """Minimal schema for RFP records & files (idempotent)."""
-    try:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS rfp_records (
-                    id INTEGER PRIMARY KEY,
-                    notice_id TEXT,
-                    title TEXT,
-                    sam_url TEXT,
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS rfp_files (
-                    id INTEGER PRIMARY KEY,
-                    rfp_id INTEGER,
-                    filename TEXT,
-                    path TEXT,
-                    kind TEXT,
-                    extracted_path TEXT,
-                    bytes INTEGER,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    FOREIGN KEY(rfp_id) REFERENCES rfp_records(id)
-                );
-            """)
-    except Exception as e:
-        try: st.warning(f"Phase 3 schema init failed: {e}")
-        except Exception: pass
 
 def _ensure_phase3_dirs():
     base = "./rfp_store"
@@ -1266,11 +1203,6 @@ def _get_flag(name: str, default: bool = False) -> bool:
     except Exception:
         pass
 
-def _set_flag(name: str, value: bool) -> None:
-    try:
-        st.session_state[name] = bool(value)
-    except Exception:
-        pass
 
 # === Phase 2.5 helpers (canonical) ===
 def notify(msg: str, level: str = "info"):
@@ -2123,32 +2055,10 @@ def _cached_ai_answer(question: str, context_hash: str = ""):
     return _inner(_ai_cache_key(question, context_hash), question, context_hash)
 
 # Expand Phase 0 write guard to clear caches after commits
-def _write_guard(conn, fn, *args, **kwargs):
-    import streamlit as st
-
-    with conn:
-        out = fn(*args, **kwargs)
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-    return out
 
 # ELA Phase1 bootstrap
 
 # Safe dataframe wrapper and monkey patch to avoid height=None issues
-def _styled_dataframe(df, use_container_width=True, height=None, hide_index=True, column_config=None):
-    kwargs = {"use_container_width": use_container_width}
-    if height is not None:
-        try:
-            kwargs["height"] = int(height) if height != "stretch" else "stretch"
-        except Exception:
-            if isinstance(height, str):
-                kwargs["height"] = height
-    try:
-        return st.dataframe(df, hide_index=hide_index, column_config=column_config, **kwargs)
-    except TypeError:
-        return st.dataframe(df, **kwargs)
 
 # Monkey patch st.dataframe to drop height=None safely
 if not hasattr(st, "_orig_dataframe"):
@@ -2181,65 +2091,9 @@ if "apply_theme" not in globals():
         st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout and tables</div>", unsafe_allow_html=True)
 
 # ===== Phase 1 Theme (auto-injected) =====
-def _apply_theme_old():
-    import streamlit as st
-
-    if st.session_state.get("_phase1_theme_applied"):
-        return
-    st.session_state["_phase1_theme_applied"] = True
-    st.markdown('''
-    <style>
-    .block-container {padding-top: 1.2rem; padding-bottom: 1.2rem; max-width: 1400px;}
-    h1, h2, h3 {margin-bottom: .4rem;}
-    .ela-subtitle {color: rgba(49,51,63,0.65); font-size: .95rem; margin-bottom: 1rem;}
-    /* Dataframe polish */
-    div[data-testid="stDataFrame"] thead th {position: sticky; top: 0; background: #fff; z-index: 2;}
-    div[data-testid="stDataFrame"] tbody tr:hover {background: rgba(64,120,242,0.06);}
-    /* Cards & expanders */
-    [data-testid="stExpander"] {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; margin-bottom: 10px;}
-    [data-testid="stExpander"] summary {font-weight: 600;}
-    .ela-card {border: 1px solid rgba(49,51,63,0.16); border-radius: 12px; padding: 12px; margin-bottom: 12px;}
-    .ela-chip {display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-right:6px; background: rgba(49,51,63,.06);}
-    .ela-ok {background: rgba(0,200,83,.12);} .ela-warn {background: rgba(251,140,0,.12);} .ela-bad {background: rgba(229,57,53,.12);}
-    /* Inputs & buttons */
-    .stTextInput>div>div>input, .stNumberInput input, .stTextArea textarea {border-radius: 10px !important;}
-    button[kind="primary"] {box-shadow: 0 1px 4px rgba(0,0,0,.08);}
-    /* Banner */
-    .ela-banner {position: sticky; top: 0; z-index: 999; background: linear-gradient(90deg, #4068f2, #7a9cff); color: #fff; padding: 6px 12px; border-radius: 8px; margin-bottom: 10px;}
-    </style>
-    ''', unsafe_allow_html=True)
-    st.markdown("<div class='ela-banner'>Phase 1 theme active · polished layout & tables</div>", unsafe_allow_html=True)
 
 # ===== injected early helpers (do not remove) =====
-def _safe_int(x, default=0):
-    try:
-        if x is None:
-            return int(default)
-        if isinstance(x, int):
-            return x
-        s = str(x).strip()
-        if s == "" or s.lower() in ("none", "nan"):
-            return int(default)
-        # try float first (handles "123.0")
-        try:
-            return int(float(s))
-        except Exception:
-            pass
-        # fallback: keep only digits
-        digits = "".join(ch for ch in s if ch.isdigit())
-        return int(digits) if digits else int(default)
-    except Exception:
-        return int(default)
 
-def _uniq_key(base: str, rfp_id: int) -> str:
-    try:
-        k = f"__uniq_counter_{base}_{rfp_id}"
-        n = int(st.session_state.get(k, 0))
-        st.session_state[k] = n + 1
-        return f"{base}_{rfp_id}_{n}"
-    except Exception:
-        import time
-        return f"{base}_{rfp_id}_{int(time.time()*1000)%100000}"
 # ===== end injected early helpers =====
 
 def y3_get_rfp_files(_conn, rfp_id: int):
@@ -2710,18 +2564,7 @@ except NameError:
 
 _O4_CONN = globals().get("_O4_CONN", None)
 
-def ensure_dirs():
-    from pathlib import Path as _Path
-    _Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
-def get_db():
-    import sqlite3
-    from contextlib import closing as _closing
-    ensure_dirs()
-    conn = _db_connect(DB_PATH, check_same_thread=False)
-    with _closing(conn.cursor()) as cur:
-        cur.execute("PRAGMA foreign_keys = ON;")
-    return conn
 
 def get_o4_conn():
     import streamlit as st
@@ -3535,18 +3378,6 @@ def y6_render_co_box(conn, rfp_id=None, *, key_prefix: str, title: str, help_tex
 # === end Y6 helper ===
 
 # === Global extractors to avoid NameError in early calls ===
-def _extract_naics(text: str) -> str:
-    import re as _re
-    if not text:
-        return ""
-    m = _re.search(r'(?i)NAICS(?:\s*Code)?\s*[:#]?\s*([0-9]{5,6})', text)
-    if m:
-        return m.group(1)[:6]
-    m = _re.search(r'(?i)NAICS[^\n]{0,50}?([0-9]{6})', text)
-    if m:
-        return m.group(1)
-    m = _re.search(r'(?i)(?:industry|classification)[^\n]{0,50}?([0-9]{6})', text)
-    return m.group(1) if m else ""
 
 def _extract_set_aside(text: str) -> str:
     import re as _re
@@ -3605,63 +3436,8 @@ def _resolve_openai_client():
     except Exception:
         return None
 
-def _resolve_model():
-    try:
-        import streamlit as st
-        return st.secrets.get('openai_model') or st.secrets.get('OPENAI_MODEL') or 'gpt-4o-mini'
-    except Exception:
-        return 'gpt-4o-mini'
 
 
-def _rfp_highlight_css():
-    """Inject CSS once for highlighted previews with human-friendly ChatGPT-like typography."""
-    try:
-        import streamlit as _st
-        if not _st.session_state.get("_rfp_hl_css", False):
-            _st.markdown(
-                """
-                <style>
-                :root {
-                  --rfp-font-size: 0.98rem;
-                  --rfp-line: 1.7;
-                  --rfp-max: 72ch;
-                }
-                .hl-req   { background: #fff3b0; padding: 0 3px; border-radius: 4px; }
-                .hl-due   { background: #ffd6a5; padding: 0 3px; border-radius: 4px; }
-                .hl-poc   { background: #caffbf; padding: 0 3px; border-radius: 4px; }
-                .hl-price { background: #bde0fe; padding: 0 3px; border-radius: 4px; }
-                .hl-task  { background: #e0bbff; padding: 0 3px; border-radius: 4px; }
-                .hl-clin  { background: #bbf7d0; padding: 0 3px; border-radius: 4px; }
-                .hl-mark  { background: #f1f1f1; padding: 0 3px; border-radius: 4px; }
-
-                .rfp-typo {
-                  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-                  font-size: var(--rfp-font-size);
-                  line-height: var(--rfp-line);
-                  letter-spacing: .005em;
-                  -webkit-font-smoothing: antialiased;
-                  text-rendering: optimizeLegibility;
-                  color: inherit;
-                  word-break: normal;
-                  hyphens: auto;
-                  max-width: var(--rfp-max);
-                }
-                .rfp-typo p { margin: 0 0 1rem; }
-                .rfp-typo p + p { margin-top: 0; }
-                .rfp-typo ul, .rfp-typo ol { margin: 0 0 1rem 1.25rem; padding: 0; }
-                .rfp-typo li { margin: .25rem 0; }
-                .rfp-typo a { color: inherit; text-decoration: underline; }
-                .rfp-typo code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: .92em; }
-                @media (max-width: 640px) {
-                  .rfp-typo { font-size: 1rem; line-height: 1.8; max-width: 100%; }
-                }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
-            _st.session_state["_rfp_hl_css"] = True
-    except Exception:
-        pass
 
 
 def _render_highlights_panel(conn, rid):
@@ -3733,102 +3509,8 @@ def _rfp_render_summary(txt: str):
     _rfp_highlight_css()
     _st.markdown(_rfp_highlight_html(txt or ""), unsafe_allow_html=True)
 
-def _rfp_highlight_html(txt: str) -> str:
-    """Return HTML wrapping ORIGINAL Markdown with selective highlights. No escaping. GPT-like typography."""
-    import re
-    _rfp_highlight_css()  # ensure styles are present
-    if not txt:
-        return "<div class='rfp-typo'>(empty)</div>"
-    src = txt or ""  # do NOT escape; we want Markdown to render
 
-    # Priority: due > price > poc/email/phone > clin > req > task
-    patterns = [
-        ("due",   re.compile(r"(?i)\b(proposal due|response due|closing (?:date|time)|due date|submission deadline|closing)\b")),
-        ("price", re.compile(r"(?i)\b(price(?:\s+(?:realism|reasonableness))?|pricing|cost|bid|quote|fee|far\s*15\.4|service contract act|sca|davis[- ]bacon|wage determination|wd)\b")),
-        ("poc",   re.compile(r"(?i)\b(point of contact|poc|contracting officer|co|contract specialist)\b")),
-        ("poc",   re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}")),
-        ("poc",   re.compile(r"(?i)\+?1?\s*\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")),
-        ("clin",  re.compile(r"(?i)\bCLIN\s*[:#-]?\s*[0-9A-Z.-]+\b")),
-        ("req",   re.compile(r"(?i)\b(shall|must|required|mandatory|shall not|no later than|will)\b")),
-        ("task",  re.compile(r"(?i)\b(scope of work|statement of work|sow|performance work statement|pws|deliverables?|requirements?|period of performance|pop|place of performance|provide|deliver|implement|support|manage|prepare|submit|develop|perform|test|train)\b")),
-    ]
 
-    out_lines = []
-    for line in src.splitlines(True):  # keep newline chars
-        # Leave blank lines untouched
-        if not line.strip():
-            out_lines.append(line)
-            continue
-
-        # Respect leading indentation/bullets so Markdown renders correctly
-        stripped = line.lstrip()
-        prefix = line[:len(line)-len(stripped)]
-        content = stripped
-
-        # One highlight max per visual line
-        best = None
-        for cls, pat in patterns:
-            m = pat.search(content)
-            if not m:
-                continue
-            st = m.start()
-            if best is None or st < best[0]:
-                best = (st, m.end(), cls)
-            if best and best[0] == 0:
-                break
-
-        if best is None:
-            out_lines.append(line)
-        else:
-            a, b, cls = best
-            highlighted = content[:a] + f"<span class='hl-{cls}'>" + content[a:b] + "</span>" + content[b:]
-            out_lines.append(prefix + highlighted)
-
-    result = "".join(out_lines)
-    return "<div class='rfp-typo'>\n" + result + "\n</div>"
-
-def _extract_pricing_factors_text(text: str, max_hits: int = 20) -> list[str]:
-    if not text:
-        return []
-    hits = []
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    keys = re.compile(r"(?i)\\b(price realism|price reasonableness|best value|tradeoff|lpta|basis of award|evaluation factors? for award|most advantageous|lowest price)\\b")
-    for ln in lines:
-        if keys.search(ln):
-            hits.append(ln)
-            if len(hits) >= max_hits:
-                break
-    return hits
-
-def _extract_task_lines(text: str, max_hits: int = 30) -> list[str]:
-    if not text:
-        return []
-    hits = []
-    lines = [l.strip() for l in text.splitlines()]
-    section = None
-    for ln in lines:
-        low = ln.lower()
-        if any(h in low for h in ["scope of work", "statement of work", "performance work statement", "pws", "sow", "tasks", "deliverables"]):
-            section = "task"
-        if section == "task":
-            # Collect bullets or numbered lines as tasks
-            if re.match(r"^\\s*(?:[-*•\\u2022]|\\(?[a-z0-9]\\)|\\d+\\.)\\s+", ln, re.IGNORECASE):
-                hits.append(ln.strip())
-                if len(hits) >= max_hits:
-                    break
-            # Stop if a new all-caps section header appears
-            if re.match(r"^[A-Z][A-Z \\-/]{6,}$", ln.strip()):
-                section = None
-    # Fallback: catch "shall" sentences
-    if not hits:
-        for ln in lines:
-            if re.search(r"(?i)\\b(shall|must)\\b", ln):
-                hits.append(ln.strip())
-                if len(hits) >= max_hits:
-                    break
-    return hits
-
-    return st.secrets.get("openai_model") or st.secrets.get("OPENAI_MODEL") or "gpt-4o-mini"
 
 def _ai_chat(prompt: str) -> str:
     client = _resolve_openai_client()
@@ -5137,25 +4819,6 @@ def _y3_build_messages_psych(conn: "sqlite3.Connection", rfp_id: int, section_ti
     meta = ctx.get("meta") or {}
     meta_str = "\n".join(f"- {k}: {v}" for k,v in meta.items()) if isinstance(meta, dict) and meta else ""
 
-    # Section specific guidance
-    try:
-        k_sec = _normalize_section_name(section_title)
-    except Exception:
-        k_sec = ""
-    extra_guidance = ""
-    if k_sec == "technical":
-        extra_guidance = (
-            "\nSection specific instructions for Technical Approach:\n"
-            "- Focus only on HOW the work will be performed, not who is on the team or corporate history.\n"
-            "- Tie steps directly to SOW or PWS tasks and CLINs where possible.\n"
-            "- For each major task or CLIN: state inputs, step by step procedure, tools and equipment, quality checks inside the workflow, and outputs.\n"
-            "- Call out dependencies and constraints (access, GFP, weather, safety, security) early.\n"
-            "- Describe interfaces with the CO, COR, on site POC, and any subcontractors.\n"
-            "- Describe schedule and milestones in plain language, not Gantt charts.\n"
-            "- Make acceptance criteria explicit so evaluators see exactly how they will know the work is done.\n"
-            "- Do NOT discuss org charts, resumes, pricing, or formal risk lists here."
-        )
-
     user = f"""
 Draft the section: {section_title}
 
@@ -5170,8 +4833,6 @@ Guidance:
 - Lead with mission empathy. Then logic. Then verification.
 - Show reciprocity and mutual gains.
 - Use concrete steps, QC, metrics, timeline, roles.
-
-{extra_guidance}
 
 Apply this blueprint strictly:
 {_section_blueprint(section_title)}
@@ -5365,68 +5026,6 @@ def y3_stream_draft(conn: "sqlite3.Connection", rfp_id: int, section_title: str,
         return _text
 
 
-def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
-    def wc(t: str) -> int:
-        try:
-            import re as _re_wc
-            return len(_re_wc.findall(r"\b\w+\b", str(t or "")))
-        except Exception:
-            return len(str(t or "").split())
-    try:
-        mw = int(max_words) if max_words else 0
-    except Exception:
-        mw = 0
-    if not mw or mw <= 0:
-        return drafted or ""
-    lower = int(max(1, round(0.97 * mw)))
-    hard_cap = mw + 60
-    text_acc = (drafted or "").strip()
-    if wc(text_acc) >= lower:
-        return text_acc
-    client = get_ai()
-    model_name = _resolve_model()
-    attempts = 0
-    while wc(text_acc) < lower and attempts < 6 and wc(text_acc) < hard_cap:
-        attempts += 1
-        cur = wc(text_acc)
-        remaining = max(0, lower - cur)
-        ask_up_to = max(80, min(200, remaining + 40))
-        system = (
-            "You are a veteran federal proposal writer with $70M+ in awards. "
-            "Append continuation only. Do not repeat or modify prior text. "
-            "Preserve bullets and paragraph breaks. Keep style unchanged."
-        )
-        user = (
-            f"Continue the following section for RFP {int(rfp_id)}.\n"
-            f"Goal: reach at least {lower} words and at most {hard_cap} words. Current count: {cur}. Append up to {ask_up_to} words.\n"
-            "Rules:\n"
-            "- Append continuation only. No rewrites.\n"
-            "- Finish the last sentence if near the end, even if slightly over the soft cap.\n"
-            "- Keep one idea per paragraph. Short sentences.\n"
-            "- Include concrete steps, QC points, metrics, and verification.\n\n"
-            "--- EXISTING DRAFT START ---\n"
-            f"{text_acc}\n"
-            "--- EXISTING DRAFT END ---\n\n"
-            "Append continuation only:"
-        )
-        try:
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role":"system","content": system}, {"role":"user","content": user}],
-                temperature=0.15,
-                stream=False,
-            )
-            add = ""
-            if hasattr(resp, "choices") and resp.choices:
-                add = getattr(resp.choices[0].message, "content", "") or ""
-        except Exception:
-            add = ""
-        add = str(add).strip()
-        if add:
-            text_acc = (text_acc + "\n\n" + add).strip()
-        else:
-            break
-    return text_acc.strip()
 
 
 def _y3_top_off_precise(conn, rfp_id: int, section_title: str, notes: str, drafted: str, max_words: int | None):
@@ -10844,112 +10443,9 @@ def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) ->
     return res
 
 
-def _list_rfps(conn) -> list[tuple[str, str]]:
-    """Return list of (rfp_id, label). Defensive over possible schemas."""
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [r[0] for r in cur.fetchall()]
-    except Exception:
-        return []
-    # candidate tables likely to hold RFP metadata
-    candidates = [t for t in tables if re.search(r"rfp", t, re.I)]
-    results = []
-    for t in candidates:
-        # probe common id/title columns
-        id_cols = ["id","rfp_id","rid"]
-        title_cols = ["title","name","subject","rfp_title"]
-        for idc in id_cols:
-            for tc in title_cols:
-                try:
-                    cur.execute(f"SELECT {idc}, {tc} FROM {t} ORDER BY 1 DESC LIMIT 50")
-                    for rid, title in cur.fetchall():
-                        rid_s = str(rid)
-                        title_s = str(title) if title is not None else ""
-                        label = f"{rid_s} — {title_s} [{t}]"
-                        results.append((rid_s, label))
-                    if results:
-                        return results
-                except Exception:
-                    pass
-        # fallback: only id
-        for idc in id_cols:
-            try:
-                cur.execute(f"SELECT {idc} FROM {t} ORDER BY 1 DESC LIMIT 50")
-                for (rid,) in cur.fetchall():
-                    rid_s = str(rid)
-                    label = f"{rid_s} [{t}]"
-                    results.append((rid_s, label))
-                if results:
-                    return results
-            except Exception:
-                pass
-    return results
-
-def _load_rfp_context(conn, rfp_id: str, max_chars: int = 200000) -> str:
-    """Try multiple table/column patterns to get joined text for a given rfp_id."""
-    if not conn or not rfp_id:
-        return ""
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [r[0] for r in cur.fetchall()]
-    except Exception:
-        return ""
-    candidates = [t for t in tables if re.search(r"rfp", t, re.I)]
-    text_cols = ["text","content","full_text","page_text","body"]
-    id_cols = ["rfp_id","id","rid"]
-    chunks = []
-    for t in candidates:
-        for idc in id_cols:
-            for tc in text_cols:
-                try:
-                    cur.execute(f"SELECT {tc} FROM {t} WHERE {idc}=? LIMIT 500", (rfp_id,))
-                    rows = cur.fetchall()
-                    if rows:
-                        for (val,) in rows:
-                            if isinstance(val, (bytes, bytearray)):
-                                try:
-                                    val = val.decode("utf-8", errors="ignore")
-                                except Exception:
-                                    val = val.decode("latin-1", errors="ignore")
-                            if val:
-                                chunks.append(str(val))
-                except Exception:
-                    pass
-    text = "\n\n---\n\n".join(chunks)
-    if not text and candidates:
-        # last resort: any rows from 'context' tables
-        for t in candidates:
-            if re.search(r"context|pages|docs", t, re.I):
-                for tc in text_cols:
-                    try:
-                        cur.execute(f"SELECT {tc} FROM {t} LIMIT 200")
-                        rows = cur.fetchall()
-                        if rows:
-                            for (val,) in rows[:50]:
-                                if isinstance(val, (bytes, bytearray)):
-                                    try:
-                                        val = val.decode("utf-8", errors="ignore")
-                                    except Exception:
-                                        val = val.decode("latin-1", errors="ignore")
-                                if val:
-                                    chunks.append(str(val))
-                    except Exception:
-                        pass
-                if chunks:
-                    break
-    return (text or "\n\n---\n\n".join(chunks))[:max_chars]
 
 
-def run_chat_assistant(conn: "sqlite3.Connection") -> None:
-    import streamlit as st
-    st.header("Chat Assistant — Y2")
-    st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
-    try:
-        y2_ui_threaded_chat(conn)
-    except Exception as _e:
-        st.error(f"Chat Assistant failed: {type(_e).__name__}: {_e}")
+
 
 def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]:
     try:
@@ -13132,29 +12628,6 @@ def ns(scope: str, key: str) -> str:
 # === S1 Subcontractor Finder: Google Places ===
 
 
-def router(page: str, conn: "sqlite3.Connection") -> None:
-    """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
-    import re as _re
-    name = "run_" + _re.sub(r"[^a-z0-9]+", "_", (page or "").lower()).strip("_")
-    fn = globals().get(name)
-    # explicit fallbacks for known variant names
-    if not callable(fn):
-        alt = {
-            "L and M Checklist": ["run_l_and_m_checklist", "run_lm_checklist"],
-            "Backup & Data": ["run_backup_data", "run_backup_and_data"],
-        }.get((page or "").strip(), [])
-        for a in alt:
-            fn = globals().get(a)
-            if callable(fn):
-                break
-    if not callable(fn):
-        import streamlit as _st
-        _st.warning(f"No handler for page '{page}' resolved as {name}.")
-        return
-    _safe_route_call(fn, conn)
-    # Hooks
-    if (page or "").strip() == "Proposal Builder":
-        _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
 def main() -> None:
     # Phase 1 re-init inside main
     # Bootstrap UI and sidebar
@@ -16463,49 +15936,7 @@ def _score_snippets_by_query(snippets: list[str], query: str, top_k: int = 8) ->
     scored.sort(key=lambda x: x[0], reverse=True)
     return [s for _, s in scored[:max(1, int(top_k))]]
 
-def _chat_plus_compose_messages(context_text: str, history: list[dict], question: str, mode: str = "Auto") -> list[dict]:
-    rules = []
-    m = (mode or "Auto").lower()
-    if m.startswith("checklist"):
-        rules.append("Format as a concise checklist with imperative items and short sub-bullets.")
-    elif m.startswith("phone"):
-        rules.append("Return a phone call script with opener, 6-10 targeted questions, and a closing commitment line.")
-    elif m.startswith("email"):
-        rules.append("Draft a succinct business email with Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date.")
-    elif m.startswith("pricing"):
-        rules.append("List the exact pricing inputs you need, clarify unit drivers, and note risk flags or missing data.")
-    else:
-        rules.append("Write a direct answer. Use short, declarative sentences. No citations.")
 
-    system = (
-        "You are a federal contracting chat assistant. "
-        "Use only the user's attachments and chat history as your source. "
-        "If a fact is not present, say what is missing. "
-        "No citations. No tags. Be precise. "
-        "When asked for vendor outreach or subcontractor questions, output concrete, verifiable asks."
-    )
-    msgs = [{"role": "system", "content": system}]
-    for h in history or []:
-        if h.get("role") in ("user", "assistant") and (h.get("content") or "").strip():
-            msgs.append({"role": h["role"], "content": h["content"]})
-    if (context_text or "").strip():
-        msgs.append({"role": "system", "content": "Attachment context:\n" + context_text[:24000]})
-    msgs.append({"role": "user", "content": question.strip() + "\\n\\nRules: " + " ".join(rules)})
-    return msgs
-
-def _chat_plus_call_openai(messages: list[dict], temperature: float = 0.2) -> str:
-    client = _resolve_openai_client()
-    if not client:
-        return "AI unavailable. Configure OPENAI_API_KEY in Streamlit secrets."
-    try:
-        resp = client.chat.completions.create(
-            model=_resolve_model(),
-            messages=messages,
-            temperature=float(temperature),
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"AI error: {e}"
 
 
 def _list_rfps(conn) -> list[tuple[str, str]]:
