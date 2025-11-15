@@ -5863,7 +5863,7 @@ def find_clins_all(conn: "sqlite3.Connection", rfp_id: int) -> int:
             key = (r.get("clin",""), r.get("description",""))
             if key in existing:
                 continue
-            cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);",
+            cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?, ?, ?);",
                         (int(rfp_id), r.get("clin"), r.get("description"), r.get("qty"), r.get("unit"), r.get("unit_price"), r.get("extended_price")))
             added += 1
         conn.commit()
@@ -8849,7 +8849,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
                                             (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
                             for r in clins:
-                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);",
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?, ?, ?);",
                                             (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
                             for d in dates:
                                 cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
@@ -8935,7 +8935,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO lm_items(rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
                                             (rfp_id, it, 1 if re.search(r'\\b(shall|must|required|mandatory|no later than|shall not|will)\\b', it, re.IGNORECASE) else 0, "Open"))
                             for r in clins:
-                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);",
+                                cur.execute("INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?, ?, ?);",
                                             (rfp_id, r.get('clin'), r.get('description'), r.get('qty'), r.get('unit'), r.get('unit_price'), r.get('extended_price')))
                             for d in dates:
                                 cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
@@ -9387,7 +9387,7 @@ def _run_rfp_analyzer_phase3(conn):
                         for _, r in ed_c.fillna('').iterrows():
                             if not any(str(r.get(col,'')).strip() for col in ['clin','description','qty','unit','unit_price','extended_price']):
                                 continue
-                            cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
+                            cur.execute('INSERT INTO clin_lines(rfp_id, clin, description, qty, unit, unit_price, extended_price) VALUES (?, ?, ?, ?, ?, ?, ?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('clin','')), str(r.get('description','')), str(r.get('qty','')), str(r.get('unit','')), str(r.get('unit_price','')), str(r.get('extended_price',''))))
                         conn.commit()
                     st.success('CLINs saved.')
             with tab_dates:
@@ -10576,7 +10576,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
             with closing(conn.cursor()) as cur:
                 cur.execute("""
                     INSERT INTO pricing_scenarios(rfp_id, name, overhead_pct, gna_pct, fee_pct, contingency_pct, created_at)
-                    VALUES (?, ?, ?, ?, ?,?,?,?);
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
                 """, (int(rfp_id), name.strip(), float(overhead), float(gna), float(fee), float(contingency), datetime.utcnow().isoformat()))
                 conn.commit()
             st.success("Scenario created.")
@@ -12302,7 +12302,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT INTO rfq_packs(rfp_id, deal_id, title, instructions, due_date, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?,?,datetime('now'),datetime('now'));
+                        VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'));
                     """, (rf_opt if rf_opt else None, None, title.strip(), instr.strip(), str(due)))
                     conn.commit()
                 st.success("Created"); st.rerun()
@@ -12340,7 +12340,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
         with closing(conn.cursor()) as cur:
             cur.execute("""
                 INSERT INTO rfq_lines(pack_id, clin_code, description, qty, unit, naics, psc)
-                VALUES (?, ?, ?, ?, ?,?,?,?);
+                VALUES (?, ?, ?, ?, ?, ?, ?);
             """, (int(pk_sel), l_code.strip(), l_desc.strip(), float(l_qty or 0), l_unit.strip(), l_naics.strip(), l_psc.strip()))
             conn.commit()
         st.success("Line added"); st.rerun()
