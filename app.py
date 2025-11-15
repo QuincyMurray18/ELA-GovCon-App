@@ -6454,6 +6454,13 @@ def get_db() -> sqlite3.Connection:
         
 
         # Ensure tenants and current pointer exist
+        # If an old view named 'tenants' exists from a previous version, drop it so we can
+        # create the real tenants table. This avoids sqlite3.OperationalError like
+        # "cannot modify tenants because it is a view" at startup.
+        cur.execute("SELECT type FROM sqlite_master WHERE name='tenants';")
+        row = cur.fetchone()
+        if row and row[0] != 'table':
+            cur.execute("DROP VIEW IF EXISTS tenants;")
 
         cur.execute("""
 
