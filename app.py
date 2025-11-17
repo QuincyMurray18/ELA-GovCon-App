@@ -10141,6 +10141,15 @@ def _export_docx(
     h = doc.add_heading(title_text, level=0)
     _style_paragraph(h, is_heading=True)
 
+    # Meta summary (acts as intro on title page)
+    if metadata:
+        _para(doc, "Summary", bold=True)
+        for k, v in metadata.items():
+            _para(doc, f"{k}: {v}")
+
+    # New page for Table of Contents (second page)
+    doc.add_page_break()
+
     # Table of Contents (Word will populate when you update fields)
     toc_heading = doc.add_paragraph()
     _style_paragraph(toc_heading, is_heading=True)
@@ -10155,18 +10164,15 @@ def _export_docx(
     fld.set(qn("w:instr"), 'TOC \\o "1-3" \\h \\z \\u')
     toc_para._p.append(fld)
 
-    # Meta summary
-    if metadata:
-        _para(doc, "Summary", bold=True)
-        for k, v in metadata.items():
-            _para(doc, f"{k}: {v}")
+    # Page break after TOC into main content
+    doc.add_page_break()
 
     # CLIN table
     if clins:
         rows = []
         for row in clins:
             try:
-                r = dict(row)
+r = dict(row)
             except Exception:
                 r = {"clin": str(row)}
             clin = r.get("clin") or r.get("code") or r.get("CLIN") or ""
