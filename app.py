@@ -10187,13 +10187,32 @@ def _export_docx(
             _para(doc, f"• {label}{txt}")
 
     # Sections in the order user selected
-    for sec in sections:
+    # Insert page breaks before major sections (but not before the very first one)
+    major_break_titles = [
+        "Executive Summary",
+        "Technical Approach",
+        "Management Plan",
+        "Management & Staffing Plan",
+        "Staffing Plan",
+        "Past Performance",
+        "Pricing",
+        "Price Volume",
+        "Appendix",
+        "Annex",
+    ]
+
+    for idx, sec in enumerate(sections):
         try:
             title = sec.get("title") or "Section"
             body = sec.get("body") or ""
         except Exception:
             title = "Section"
             body = str(sec)
+
+        # Smart page break: only for later sections with "major" titles
+        normalized = str(title or "").strip()
+        if idx > 0 and any(normalized.startswith(t) for t in major_break_titles):
+            doc.add_page_break()
 
         heading = doc.add_heading(title, level=1)
         _style_paragraph(heading, is_heading=True)
@@ -10208,8 +10227,6 @@ def _export_docx(
         except Exception:
             pass
         return None
-
-
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
