@@ -9938,7 +9938,7 @@ def _export_docx(
             except Exception:
                 pass
         # Filter obvious LLM metadata keys
-        if any(ch in s for ch in (""analysis"", ""tool_calls"", ""choices"")):
+        if any(ch in s for ch in ("analysis", "tool_calls", "choices")):
             return True
         return False
 
