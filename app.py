@@ -9807,6 +9807,8 @@ def _export_docx(
         from docx import Document  # type: ignore
         from docx.shared import Pt, Inches, RGBColor  # type: ignore
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING  # type: ignore
+        from docx.oxml import OxmlElement  # type: ignore
+        from docx.oxml.ns import qn  # type: ignore
     except Exception as e:
         try:
             st.error(f"DOCX export unavailable: {e}")
@@ -10138,6 +10140,20 @@ def _export_docx(
     title_text = doc_title or "Proposal"
     h = doc.add_heading(title_text, level=0)
     _style_paragraph(h, is_heading=True)
+
+    # Table of Contents (Word will populate when you update fields)
+    toc_heading = doc.add_paragraph()
+    _style_paragraph(toc_heading, is_heading=True)
+    toc_run = toc_heading.add_run("Table of Contents")
+    toc_run.bold = True
+    toc_run.font.name = font_name
+    toc_run.font.size = Pt(font_size_pt + 1)
+
+    toc_para = doc.add_paragraph()
+    _style_paragraph(toc_para)
+    fld = OxmlElement("w:fldSimple")
+    fld.set(qn("w:instr"), 'TOC \\o "1-3" \\h \\z \\u')
+    toc_para._p.append(fld)
 
     # Meta summary
     if metadata:
