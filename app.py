@@ -10310,7 +10310,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
-        font_name = st.selectbox("Font", ["Times New Roman", "Calibri"], index=0)
+        font_name = st.selectbox("Font", ["Times New Roman", "Calibri", "Arial"], index=0)
         font_size = st.number_input("Font size", min_value=10, max_value=12, value=11)
         page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
 
