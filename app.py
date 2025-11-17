@@ -9792,10 +9792,16 @@ def _export_docx(
     metadata=None,
     font_name: str = "Calibri",
     font_size_pt: int = 11,
-    spacing: str | float | int = "1.0",
+    spacing: str | float | int = "1.15",
     **kwargs,
 ) -> str | None:
-    """Build a proposal DOCX that mirrors the on screen preview formatting."""
+    """
+    Build a proposal DOCX that looks clean and professional:
+    - Comfortable line spacing (default ~1.15)
+    - Small space between paragraphs
+    - Clear spacing before/after headings
+    - Real bullets and tables
+    """
 
     try:
         from docx import Document  # type: ignore
@@ -9831,25 +9837,25 @@ def _export_docx(
 
     # Robust spacing handling to support values like "Single", "1.15", "Double"
     def _coerce_spacing(spacing_val) -> float:
-        # default single
-        default_ls = 1.0
+        default_ls = 1.15
         if spacing_val is None:
             return default_ls
-        # numeric directly
         if isinstance(spacing_val, (int, float)):
-            return float(spacing_val) if float(spacing_val) > 0 else default_ls
+            v = float(spacing_val)
+            return v if v > 0 else default_ls
         s = str(spacing_val).strip()
         if not s:
             return default_ls
-        # try direct float first
+        # try direct float
         try:
             return float(s.replace(",", "."))
         except Exception:
             pass
-        # map common labels
         s_low = s.lower()
-        if s_low in ("single", "1", "1.0", "1,0", "1.15", "1,15"):
+        if s_low in ("single", "1", "1.0", "1,0"):
             return 1.0
+        if s_low in ("1.15", "1,15"):
+            return 1.15
         if s_low in ("1.5", "1,5"):
             return 1.5
         if s_low in ("double", "2", "2.0", "2,0"):
@@ -9858,26 +9864,40 @@ def _export_docx(
 
     line_spacing = _coerce_spacing(spacing)
     if line_spacing <= 0:
-        line_spacing = 1.0
+        line_spacing = 1.15
 
     font_name = font_name or "Calibri"
     font_size_pt = int(font_size_pt or 11)
 
     import re as _re
 
-    def _style_paragraph(p):
+    # Paragraph styling for normal text and bullets
+    def _style_paragraph(p, *, is_heading: bool = False, is_list: bool = False):
         fmt = p.paragraph_format
-        fmt.space_before = Pt(0)
-        fmt.space_after = Pt(0)
-        # Map <=1.05 to Word single, otherwise use MULTIPLE with factor
+        # Vertical spacing
+        if is_heading:
+            fmt.space_before = Pt(12)
+            fmt.space_after = Pt(6)
+        else:
+            fmt.space_before = Pt(0)
+            fmt.space_after = Pt(6)  # small gap between paragraphs for readability
+
+        # Line spacing
         if line_spacing <= 1.05:
             fmt.line_spacing_rule = WD_LINE_SPACING.SINGLE
             fmt.line_spacing = None
         else:
             fmt.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
             fmt.line_spacing = line_spacing
-        fmt.left_indent = Inches(0)
-        fmt.first_line_indent = Inches(0)
+
+        # Indentation: indent bullets slightly, normal paragraphs flush left
+        if is_list:
+            fmt.left_indent = Inches(0.25)
+            fmt.first_line_indent = Inches(0)
+        else:
+            fmt.left_indent = Inches(0)
+            fmt.first_line_indent = Inches(0)
+
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     def _likely_json_line(txt: str) -> bool:
@@ -9890,7 +9910,7 @@ def _export_docx(
             return False
         if ":" not in s:
             return False
-        if any(ch in s for ch in ("\"analysis\"", "\"tool_calls\"", "\"choices\"")):
+        if any(ch in s for ch in (""analysis"", ""tool_calls"", ""choices"")):
             return True
         return False
 
@@ -9913,7 +9933,7 @@ def _export_docx(
         except Exception:
             p = doc.add_paragraph()
 
-        _style_paragraph(p)
+        _style_paragraph(p, is_heading=False, is_list=is_bullet)
 
         # Split into markdown style segments
         pattern = r"(\*\*[^*]+\*\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\))"
@@ -9976,7 +9996,6 @@ def _export_docx(
         parts = [p for p in parts if p]
         if len(parts) < 2:
             return False
-        # At least one non numeric column to avoid mistaking data lines for headers
         has_non_numeric = any(not p.replace(".", "", 1).isdigit() for p in parts)
         return has_non_numeric
 
@@ -10040,7 +10059,16 @@ def _export_docx(
                 cell = tbl.rows[i].cells[j]
                 cell.text = str(row.get(col, "") or "")
                 for par in cell.paragraphs:
-                    _style_paragraph(par)
+                    # table paragraphs: no extra space, but match line spacing
+                    fmt = par.paragraph_format
+                    fmt.space_before = Pt(0)
+                    fmt.space_after = Pt(0)
+                    if line_spacing <= 1.05:
+                        fmt.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                        fmt.line_spacing = None
+                    else:
+                        fmt.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+                        fmt.line_spacing = line_spacing
                     for run in par.runs:
                         f = run.font
                         f.name = font_name
@@ -10084,7 +10112,7 @@ def _export_docx(
     # Build document
     doc = Document()
 
-    # Base style: black, Calibri (or chosen), single spaced
+    # Base style: black, Calibri (or chosen)
     base = doc.styles["Normal"]
     base.font.name = font_name
     base.font.size = Pt(font_size_pt)
@@ -10093,18 +10121,23 @@ def _export_docx(
     except Exception:
         pass
 
-    # Make headings black as well
+    # Make headings black as well and adjust heading spacing
     for style_name in ("Title", "Heading 1", "Heading 2", "Heading 3"):
         try:
             s = doc.styles[style_name]
             s.font.name = font_name
-            s.font.size = Pt(font_size_pt + (2 if style_name == "Title" else 1))
+            s.font.size = Pt(font_size_pt + (4 if style_name == "Title" else 2))
             s.font.color.rgb = RGBColor(0, 0, 0)
+            # tweak heading spacing to avoid crowding
+            for p in s.paragraph_format.__dict__.keys():
+                pass
         except Exception:
             continue
 
     # Title
-    doc.add_heading(doc_title or "Proposal", level=0)
+    title_text = doc_title or "Proposal"
+    h = doc.add_heading(title_text, level=0)
+    _style_paragraph(h, is_heading=True)
 
     # Meta summary
     if metadata:
@@ -10162,7 +10195,8 @@ def _export_docx(
             title = "Section"
             body = str(sec)
 
-        doc.add_heading(title, level=1)
+        heading = doc.add_heading(title, level=1)
+        _style_paragraph(heading, is_heading=True)
         _write_body_markdown(doc, body)
 
     try:
