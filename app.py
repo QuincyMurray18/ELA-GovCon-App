@@ -9910,7 +9910,7 @@ def _export_docx(
             return False
         if ":" not in s:
             return False
-        if any(ch in s for ch in (""analysis"", ""tool_calls"", ""choices"")):
+                if any(ch in s for ch in ("analysis", "tool_calls", "choices")):
             return True
         return False
 
