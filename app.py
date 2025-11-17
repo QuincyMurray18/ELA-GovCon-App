@@ -9783,240 +9783,372 @@ def _estimate_pages(total_words: int, spacing: str = "1.15", words_per_page: Opt
         wpp = max(50, int(words_per_page))
     return round((total_words or 0) / float(wpp), 2)
 
-def _export_docx(path: str, doc_title: str, sections: list[dict], clins: "pd.DataFrame|None" = None, checklist: "pd.DataFrame|None" = None, metadata: dict | None = None,
-                 font_name: str = "Times New Roman",
-                 font_size_pt: int = 11,
-                 spacing: str = "1.15") -> str | None:
-    """
-    Clean DOCX export.
-    - Converts Markdown to Word: headings, numbered bullets, bullets, **bold**/*italic*, and Markdown tables -> real DOCX tables.
-    - Filters raw JSON lines so no dict dumps reach the file.
-    - Adds CLIN and Checklist DataFrames as tables if provided.
-    """
+def _export_docx(
+    path: str,
+    doc_title: str | None = None,
+    sections=None,
+    clins=None,
+    checklist=None,
+    metadata=None,
+    font_name: str = "Calibri",
+    font_size_pt: int = 11,
+    spacing: float = 1.0,
+    **kwargs,
+):
+    """Build a proposal DOCX that mirrors the on screen preview formatting."""
+
     try:
-        from docx import Document  # type: ignore
-        from docx.shared import Pt  # type: ignore
-        from docx.enum.text import WD_LINE_SPACING  # type: ignore
-    except Exception:
-        st.error("python-docx is required. pip install python-docx")
+        from docx import Document
+        from docx.shared import Pt, Inches, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+    except Exception as e:
+        try:
+            import streamlit as _st
+            _st.error(f"DOCX export unavailable: {e}")
+        except Exception:
+            pass
         return None
 
-    import re, json
-
-    spacing_map = {
-        "single": WD_LINE_SPACING.SINGLE, "1": WD_LINE_SPACING.SINGLE, "1.0": WD_LINE_SPACING.SINGLE,
-        "1.15": WD_LINE_SPACING.SINGLE, "1,15": WD_LINE_SPACING.SINGLE,
-        "1.5": WD_LINE_SPACING.ONE_POINT_FIVE, "double": WD_LINE_SPACING.DOUBLE,
-        "2": WD_LINE_SPACING.DOUBLE, "2.0": WD_LINE_SPACING.DOUBLE,
-    }
-    line_spacing = spacing_map.get((spacing or "1.15").lower(), WD_LINE_SPACING.SINGLE)
-
-    # ---------- helpers ----------
-    def _likely_json_line(s: str) -> bool:
-        s = (s or "").strip()
-        if not s:
-            return False
-        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+    # Normalize inputs
+    def _as_rows(obj):
+        if obj is None:
+            return []
+        if hasattr(obj, "to_dict"):
             try:
-                json.loads(s)
-                return True
-            except Exception:
-                return False
-        return False
-
-    _bold_pat = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
-    _ital_pat = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|_(.+?)_")
-
-    def _add_inline_runs(p, text: str):
-        # render **bold** and *italic* into runs
-        i = 0
-        while i < len(text):
-            # bold
-            m_b = _bold_pat.search(text, i)
-            m_i = _ital_pat.search(text, i)
-            m = None
-            kind = None
-            if m_b and (not m_i or m_b.start() <= m_i.start()):
-                m = m_b; kind = "b"
-            elif m_i:
-                m = m_i; kind = "i"
-            if not m:
-                run = p.add_run(text[i:])
-                return
-            # pre-text
-            if m.start() > i:
-                p.add_run(text[i:m.start()])
-            # inner
-            inner = m.group(1) or m.group(2) or ""
-            run = p.add_run(inner)
-            if kind == "b":
-                run.bold = True
-            else:
-                run.italic = True
-            i = m.end()
-
-    def _para(doc, text: str, style: str | None = None):
-        p = doc.add_paragraph()
-        if style:
-            try:
-                p.style = style
+                return list(obj.to_dict("records"))
             except Exception:
                 pass
-        _add_inline_runs(p, text)
+        if isinstance(obj, dict):
+            return [obj]
         try:
-            p.paragraph_format.line_spacing_rule = line_spacing
-            for r in p.runs:
-                r.font.name = font_name; r.font.size = Pt(font_size_pt)
+            return list(obj)
+        except Exception:
+            return [obj]
+
+    sections = _as_rows(sections)
+    clins = _as_rows(clins)
+    checklist = _as_rows(checklist)
+    metadata = dict(metadata or {})
+
+    line_spacing = float(spacing or 1.0)
+    if line_spacing <= 0:
+        line_spacing = 1.0
+    font_name = font_name or "Calibri"
+    font_size_pt = int(font_size_pt or 11)
+
+    import re as _re
+
+    def _style_paragraph(p):
+        fmt = p.paragraph_format
+        fmt.space_before = Pt(0)
+        fmt.space_after = Pt(0)
+        if line_spacing <= 1.05:
+            fmt.line_spacing_rule = WD_LINE_SPACING.SINGLE
+            fmt.line_spacing = None
+        else:
+            fmt.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+            fmt.line_spacing = line_spacing
+        fmt.left_indent = Inches(0)
+        fmt.first_line_indent = Inches(0)
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    def _likely_json_line(txt: str) -> bool:
+        s = (txt or "").strip()
+        if not s:
+            return False
+        if not (s.startswith("{") or s.startswith("[")):
+            return False
+        if len(s) < 4:
+            return False
+        if ":" not in s:
+            return False
+        if any(ch in s for ch in ("\"analysis\"", "\"tool_calls\"", "\"choices\"")):
+            return True
+        return False
+
+    def _add_inline_runs(doc, text: str):
+        """Add a normal paragraph or bullet, honoring simple markdown (**bold**, _italics_)."""
+
+        raw = text or ""
+
+        # Detect bullet line
+        m_bullet = _re.match(r"^\s*[-*\u2022]\s+(.*)", raw)
+        is_bullet = bool(m_bullet)
+        if is_bullet:
+            raw = m_bullet.group(1)
+
+        try:
+            if is_bullet:
+                p = doc.add_paragraph(style="List Bullet")
+            else:
+                p = doc.add_paragraph()
+        except Exception:
+            p = doc.add_paragraph()
+
+        _style_paragraph(p)
+
+        # Split into markdown style segments
+        pattern = r"(\*\*[^*]+\*\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\))"
+        parts = _re.split(pattern, raw)
+
+        for seg in parts:
+            if not seg:
+                continue
+
+            if seg.startswith("**") and seg.endswith("**"):
+                txt = seg[2:-2]
+                run = p.add_run(txt)
+                run.bold = True
+            elif seg.startswith("_") and seg.endswith("_"):
+                txt = seg[1:-1]
+                run = p.add_run(txt)
+                run.italic = True
+            elif seg.startswith("`") and seg.endswith("`"):
+                txt = seg[1:-1]
+                run = p.add_run(txt)
+                run.font.name = "Consolas"
+                run.font.size = Pt(font_size_pt)
+            elif seg.startswith("[") and "](" in seg and seg.endswith(")"):
+                label = seg[1 : seg.index("](")]
+                run = p.add_run(label)
+                run.underline = True
+            else:
+                run = p.add_run(seg)
+
+            # Enforce font and color
+            f = run.font
+            f.name = font_name
+            f.size = Pt(font_size_pt)
+            try:
+                f.color.rgb = RGBColor(0, 0, 0)
+            except Exception:
+                pass
+
+        return p
+
+    def _para(doc, text: str, bold: bool = False):
+        p = doc.add_paragraph()
+        _style_paragraph(p)
+        run = p.add_run(text or "")
+        run.bold = bool(bold)
+        f = run.font
+        f.name = font_name
+        f.size = Pt(font_size_pt)
+        try:
+            f.color.rgb = RGBColor(0, 0, 0)
         except Exception:
             pass
         return p
 
-    def _looks_table_header(lns: list[str], idx: int) -> bool:
-        try:
-            a = lns[idx].strip()
-            b = lns[idx+1].strip()
-            if not (a.startswith("|") and a.endswith("|")):
-                return False
-            if set(b.replace("|","").replace(" ", "")) <= set("-:"):
-                return True
+    def _looks_table_header(line: str) -> bool:
+        s = (line or "").strip()
+        if not s.startswith("|") or "|" not in s[1:]:
             return False
-        except Exception:
+        parts = [c.strip() for c in s.strip().strip("|").split("|")]
+        parts = [p for p in parts if p]
+        if len(parts) < 2:
             return False
+        # At least one non numeric column to avoid mistaking data lines for headers
+        has_non_numeric = any(not p.replace(".", "", 1).isdigit() for p in parts)
+        return has_non_numeric
 
-    def _parse_table_block(lns: list[str], start: int):
-        # returns end_index (exclusive), headers, rows
-        headers = [c.strip() for c in lns[start].strip().strip("|").split("|")]
-        sep_idx = start + 1
+    def _parse_table_block(lines, start_idx: int):
+        header_line = lines[start_idx]
+        headers = [c.strip() for c in header_line.strip().strip("|").split("|")]
+        headers = [h for h in headers if h]
         rows = []
-        i = sep_idx + 1
-        while i < len(lns):
-            ln = lns[i].rstrip()
+        i = start_idx + 1
+
+        # Optional delimiter row like |---|---|
+        if i < len(lines):
+            test = lines[i].strip().strip("|").replace("-", "").replace(" ", "")
+            if test == "":
+                i += 1
+
+        while i < len(lines):
+            ln = lines[i]
             if not ln.strip().startswith("|"):
                 break
             cols = [c.strip() for c in ln.strip().strip("|").split("|")]
-            # pad
             while len(cols) < len(headers):
                 cols.append("")
-            rows.append(cols[:len(headers)])
+            row = {headers[j]: cols[j] for j in range(len(headers))}
+            rows.append(row)
             i += 1
-        return i, headers, rows
 
-    def _add_table(doc, maybe_title: str | None, headers: list[str], rows: list[list[str]]):
-        if (maybe_title or "").strip():
-            try:
-                doc.add_paragraph(maybe_title.strip()).runs[0].bold = True
-            except Exception:
-                pass
-        # build table
-        t = doc.add_table(rows=len(rows) + 1, cols=len(headers))
-        t.style = "Table Grid"
-        for j, h in enumerate(headers):
-            cell = t.cell(0, j)
-            cell.text = str(h)
-            try:
-                for r in cell.paragraphs[0].runs:
-                    r.bold = True
-            except Exception:
-                pass
+        return rows, i
+
+    def _add_table(doc, maybe_title: str, rows):
+        if not rows:
+            return
+        if maybe_title:
+            _para(doc, maybe_title, bold=True)
+
+        cols = list(rows[0].keys())
+        tbl = doc.add_table(rows=len(rows) + 1, cols=len(cols))
+        try:
+            tbl.style = "Table Grid"
+        except Exception:
+            pass
+
+        # Header row
+        for j, col in enumerate(cols):
+            cell = tbl.rows[0].cells[j]
+            cell.text = str(col or "")
+            for par in cell.paragraphs:
+                for run in par.runs:
+                    run.bold = True
+                    f = run.font
+                    f.name = font_name
+                    f.size = Pt(font_size_pt)
+                    try:
+                        f.color.rgb = RGBColor(0, 0, 0)
+                    except Exception:
+                        pass
+
+        # Data rows
         for i, row in enumerate(rows, start=1):
-            for j, val in enumerate(row):
-                t.cell(i, j).text = str(val)
+            for j, col in enumerate(cols):
+                cell = tbl.rows[i].cells[j]
+                cell.text = str(row.get(col, "") or "")
+                for par in cell.paragraphs:
+                    _style_paragraph(par)
+                    for run in par.runs:
+                        f = run.font
+                        f.name = font_name
+                        f.size = Pt(font_size_pt)
+                        try:
+                            f.color.rgb = RGBColor(0, 0, 0)
+                        except Exception:
+                            pass
 
-    def _write_markdown(doc, text: str):
-        if not isinstance(text, str):
-            text = str(text or "")
-        # drop raw json lines
-        lines = [ln for ln in text.splitlines() if not _likely_json_line(ln)]
-        i = 0
-        while i < len(lines):
-            ln = lines[i].rstrip()
-            if not ln.strip():
-                doc.add_paragraph("")
-                i += 1
-                continue
-            # headings #
-            m_h = re.match(r"^(#{1,6})\s+(.*)$", ln)
-            if m_h:
-                level = min(6, len(m_h.group(1)))
-                h = doc.add_heading(m_h.group(2).strip(), level=level)
-                try:
-                    h.paragraph_format.line_spacing_rule = line_spacing
-                    for run in h.runs:
-                        run.font.name = font_name; run.font.size = Pt(font_size_pt)
-                except Exception:
-                    pass
-                i += 1
-                continue
-            # ordered
-            if re.match(r"^\d+[\.)]\s+", ln):
-                text_i = re.sub(r"^\d+[\.)]\s+", "", ln).strip()
-                _para(doc, text_i, style="List Number")
-                i += 1
-                continue
-            # bullet
-            if re.match(r"^[-*•]\s+", ln):
-                text_i = re.sub(r"^[-*•]\s+", "", ln).strip()
-                _para(doc, text_i, style="List Bullet")
-                i += 1
-                continue
-            # markdown table
-            if i + 1 < len(lines) and _looks_table_header(lines, i):
-                # capture optional title line immediately before header if it is bold label like "**Risk Table**"
-                maybe_title = None
-                if i > 0 and lines[i-1].strip().endswith("**"):
-                    tline = lines[i-1].strip()
-                    # remove emphasis markers
-                    maybe_title = re.sub(r"^\*{0,2}|\*{0,2}$", "", tline).strip()
-                end_idx, headers, rows = _parse_table_block(lines, i)
-                _add_table(doc, maybe_title, headers, rows)
-                i = end_idx
-                continue
-            # normal paragraph with inline marks
-            _para(doc, ln.strip())
-            i += 1
+    def _write_body_markdown(doc, text: str):
+        """Very small markdown subset: paragraphs, bullets, and pipe tables."""
+        if not text:
+            return
 
-    # ---------- build document ----------
-    doc = Document()  # do NOT call docx.Document(), we imported Document above
-    title = (doc_title or "Proposal").strip()
-    doc.add_heading(title, level=1)
+        lines = text.splitlines()
+        idx = 0
+        n = len(lines)
+
+        while idx < n:
+            raw = lines[idx].rstrip("\n")
+            if not raw.strip():
+                idx += 1
+                continue
+
+            # Skip obvious JSON blobs from AI output
+            if _likely_json_line(raw):
+                idx += 1
+                continue
+
+            # Table block starting with a header line
+            if raw.lstrip().startswith("|") and _looks_table_header(raw):
+                rows, idx2 = _parse_table_block(lines, idx)
+                _add_table(doc, None, rows)
+                idx = idx2
+                continue
+
+            # Normal or bullet paragraph
+            _add_inline_runs(doc, raw)
+            idx += 1
+
+    # Build document
+    doc = Document()
+
+    # Base style: black, Calibri (or chosen), single spaced
+    base = doc.styles["Normal"]
+    base.font.name = font_name
+    base.font.size = Pt(font_size_pt)
+    try:
+        base.font.color.rgb = RGBColor(0, 0, 0)
+    except Exception:
+        pass
+
+    # Make headings black as well
+    for style_name in ("Title", "Heading 1", "Heading 2", "Heading 3"):
+        try:
+            s = doc.styles[style_name]
+            s.font.name = font_name
+            s.font.size = Pt(font_size_pt + (2 if style_name == "Title" else 1))
+            s.font.color.rgb = RGBColor(0, 0, 0)
+        except Exception:
+            continue
+
+    # Title
+    doc.add_heading(doc_title or "Proposal", level=0)
+
+    # Meta summary
     if metadata:
-        meta_line = " | ".join(f"{k}: {v}" for k, v in metadata.items() if str(v).strip())
-        if meta_line:
-            _para(doc, meta_line)
+        _para(doc, "Summary", bold=True)
+        for k, v in metadata.items():
+            _para(doc, f"{k}: {v}")
 
-    for s in (sections or []):
-        title = str(s.get("title","")).strip()
-        body = str(s.get("body","")).strip()
-        if title:
-            doc.add_heading(title, level=2)
-        _write_markdown(doc, body)
+    # CLIN table
+    if clins:
+        rows = []
+        for row in clins:
+            try:
+                r = dict(row)
+            except Exception:
+                r = {"clin": str(row)}
+            clin = r.get("clin") or r.get("code") or r.get("CLIN") or ""
+            desc = r.get("description") or r.get("desc") or r.get("Description") or ""
+            qty = r.get("qty") or r.get("quantity") or ""
+            unit = r.get("unit") or r.get("uom") or ""
+            price = r.get("unit_price") or r.get("price") or r.get("Unit Price") or ""
+            ext = r.get("extended_price") or r.get("ext_price") or r.get("Extended Price") or ""
+            rows.append(
+                {
+                    "CLIN": str(clin or ""),
+                    "Description": str(desc or ""),
+                    "Qty": str(qty or ""),
+                    "Unit": str(unit or ""),
+                    "Unit Price": str(price or ""),
+                    "Extended Price": str(ext or ""),
+                }
+            )
+        if rows:
+            _para(doc, "CLIN Summary", bold=True)
+            _add_table(doc, None, rows)
 
-    # Add CLINs table if provided
-    try:
-        import pandas as _pd  # lazy
-        if isinstance(clins, _pd.DataFrame) and not clins.empty:
-            cols = [c for c in clins.columns if c not in {"score"}]
-            doc.add_heading("CLINs", level=2)
-            _add_table(doc, None, [str(c) for c in cols], [[clins.iloc[i][c] for c in cols] for i in range(min(len(clins), 200))])
-    except Exception:
-        pass
+    # Checklist
+    if checklist:
+        _para(doc, "Checklist", bold=True)
+        for row in checklist:
+            try:
+                r = dict(row)
+            except Exception:
+                r = {"text": str(row)}
+            txt = r.get("item_text") or r.get("text") or r.get("item") or ""
+            must = bool(r.get("is_must") or r.get("must"))
+            label = "[MUST] " if must else ""
+            _para(doc, f"• {label}{txt}")
 
-    # Add Checklist table if provided
-    try:
-        import pandas as _pd  # lazy
-        if isinstance(checklist, _pd.DataFrame) and not checklist.empty:
-            cols = list(checklist.columns)
-            doc.add_heading("Compliance Checklist", level=2)
-            _add_table(doc, None, [str(c) for c in cols], [[checklist.iloc[i][c] for c in cols] for i in range(min(len(checklist), 400))])
-    except Exception:
-        pass
+    # Sections in the order user selected
+    for sec in sections:
+        try:
+            title = sec.get("title") or "Section"
+            body = sec.get("body") or ""
+        except Exception:
+            title = "Section"
+            body = str(sec)
+
+        doc.add_heading(title, level=1)
+        _write_body_markdown(doc, body)
 
     try:
         doc.save(path)
-        return path
     except Exception as e:
-        st.error(f"Save failed: {e}")
+        try:
+            import streamlit as _st
+            _st.error(f"Save DOCX failed: {e}")
+        except Exception:
+            pass
         return None
+
+    return path
+
 
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
