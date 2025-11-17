@@ -10172,7 +10172,7 @@ def _export_docx(
         rows = []
         for row in clins:
             try:
-r = dict(row)
+                r = dict(row)
             except Exception:
                 r = {"clin": str(row)}
             clin = r.get("clin") or r.get("code") or r.get("CLIN") or ""
