@@ -9792,19 +9792,18 @@ def _export_docx(
     metadata=None,
     font_name: str = "Calibri",
     font_size_pt: int = 11,
-    spacing: float = 1.0,
+    spacing: str | float | int = "1.0",
     **kwargs,
-):
+) -> str | None:
     """Build a proposal DOCX that mirrors the on screen preview formatting."""
 
     try:
-        from docx import Document
-        from docx.shared import Pt, Inches, RGBColor
-        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+        from docx import Document  # type: ignore
+        from docx.shared import Pt, Inches, RGBColor  # type: ignore
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING  # type: ignore
     except Exception as e:
         try:
-            import streamlit as _st
-            _st.error(f"DOCX export unavailable: {e}")
+            st.error(f"DOCX export unavailable: {e}")
         except Exception:
             pass
         return None
@@ -9830,9 +9829,37 @@ def _export_docx(
     checklist = _as_rows(checklist)
     metadata = dict(metadata or {})
 
-    line_spacing = float(spacing or 1.0)
+    # Robust spacing handling to support values like "Single", "1.15", "Double"
+    def _coerce_spacing(spacing_val) -> float:
+        # default single
+        default_ls = 1.0
+        if spacing_val is None:
+            return default_ls
+        # numeric directly
+        if isinstance(spacing_val, (int, float)):
+            return float(spacing_val) if float(spacing_val) > 0 else default_ls
+        s = str(spacing_val).strip()
+        if not s:
+            return default_ls
+        # try direct float first
+        try:
+            return float(s.replace(",", "."))
+        except Exception:
+            pass
+        # map common labels
+        s_low = s.lower()
+        if s_low in ("single", "1", "1.0", "1,0", "1.15", "1,15"):
+            return 1.0
+        if s_low in ("1.5", "1,5"):
+            return 1.5
+        if s_low in ("double", "2", "2.0", "2,0"):
+            return 2.0
+        return default_ls
+
+    line_spacing = _coerce_spacing(spacing)
     if line_spacing <= 0:
         line_spacing = 1.0
+
     font_name = font_name or "Calibri"
     font_size_pt = int(font_size_pt or 11)
 
@@ -9842,6 +9869,7 @@ def _export_docx(
         fmt = p.paragraph_format
         fmt.space_before = Pt(0)
         fmt.space_after = Pt(0)
+        # Map <=1.05 to Word single, otherwise use MULTIPLE with factor
         if line_spacing <= 1.05:
             fmt.line_spacing_rule = WD_LINE_SPACING.SINGLE
             fmt.line_spacing = None
@@ -10139,15 +10167,13 @@ def _export_docx(
 
     try:
         doc.save(path)
+        return path
     except Exception as e:
         try:
-            import streamlit as _st
-            _st.error(f"Save DOCX failed: {e}")
+            st.error(f"Save DOCX failed: {e}")
         except Exception:
             pass
         return None
-
-    return path
 
 
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
