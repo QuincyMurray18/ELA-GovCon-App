@@ -9796,11 +9796,14 @@ def _export_docx(
     **kwargs,
 ) -> str | None:
     """
-    Build a proposal DOCX that looks clean and professional:
-    - Comfortable line spacing (default ~1.15)
-    - Small space between paragraphs
-    - Clear spacing before/after headings
-    - Real bullets and tables
+    Build a clean, professional proposal DOCX.
+
+    Features
+    - Comfortable line spacing (default ~1.15) and small space between paragraphs.
+    - Clear spacing before/after headings.
+    - Uniform bullets and tables across all sections, including compliance and appendices.
+    - Table of Contents after title/summary.
+    - Smart page breaks before major sections.
     """
 
     try:
@@ -9816,8 +9819,10 @@ def _export_docx(
             pass
         return None
 
-    # Normalize inputs
+    # -------- helpers --------
+
     def _as_rows(obj):
+        """Normalize clins / checklist / sections input into list of dicts or values."""
         if obj is None:
             return []
         if hasattr(obj, "to_dict"):
@@ -9832,10 +9837,10 @@ def _export_docx(
         except Exception:
             return [obj]
 
-    sections = _as_rows(sections)
-    clins = _as_rows(clins)
-    checklist = _as_rows(checklist)
-    metadata = dict(metadata or {})
+    sections_list = _as_rows(sections)
+    clins_list = _as_rows(clins)
+    checklist_list = _as_rows(checklist)
+    meta = dict(metadata or {})
 
     # Robust spacing handling to support values like "Single", "1.15", "Double"
     def _coerce_spacing(spacing_val) -> float:
@@ -9848,7 +9853,7 @@ def _export_docx(
         s = str(spacing_val).strip()
         if not s:
             return default_ls
-        # try direct float
+        # Try direct float
         try:
             return float(s.replace(",", "."))
         except Exception:
@@ -9872,6 +9877,7 @@ def _export_docx(
     font_size_pt = int(font_size_pt or 11)
 
     import re as _re
+    import json as _json
 
     # Paragraph styling for normal text and bullets
     def _style_paragraph(p, *, is_heading: bool = False, is_list: bool = False):
@@ -9902,17 +9908,37 @@ def _export_docx(
 
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
+    def _is_code_or_rule_line(s: str) -> bool:
+        s = (s or "").strip()
+        if not s:
+            return False
+        if s.startswith("```") or s.startswith("~~~"):
+            return True
+        if s in ("---", "***", "___"):
+            return True
+        return False
+
     def _likely_json_line(txt: str) -> bool:
+        """Filter out raw JSON/config lines often present in appendices."""
         s = (txt or "").strip()
         if not s:
             return False
-        if not (s.startswith("{") or s.startswith("[")):
-            return False
-        if len(s) < 4:
-            return False
-        if ":" not in s:
-            return False
-        if any(ch in s for ch in ("analysis", "tool_calls", "choices")):
+        if _is_code_or_rule_line(s):
+            return True
+        # Simple JSON-ish heuristics
+        if (s.startswith("{") and "}" in s) or (s.startswith("[") and "]" in s):
+            if ":" in s or "," in s:
+                return True
+        # Try very small json detection
+        if len(s) <= 500 and (s.startswith("{") or s.startswith("[")):
+            try:
+                obj = _json.loads(s)
+                if isinstance(obj, (dict, list)):
+                    return True
+            except Exception:
+                pass
+        # Filter obvious LLM metadata keys
+        if any(ch in s for ch in (""analysis"", ""tool_calls"", ""choices"")):
             return True
         return False
 
@@ -10061,7 +10087,6 @@ def _export_docx(
                 cell = tbl.rows[i].cells[j]
                 cell.text = str(row.get(col, "") or "")
                 for par in cell.paragraphs:
-                    # table paragraphs: no extra space, but match line spacing
                     fmt = par.paragraph_format
                     fmt.space_before = Pt(0)
                     fmt.space_after = Pt(0)
@@ -10081,7 +10106,13 @@ def _export_docx(
                             pass
 
     def _write_body_markdown(doc, text: str):
-        """Very small markdown subset: paragraphs, bullets, and pipe tables."""
+        """
+        Small markdown subset:
+        - ATX headings (#, ##, ###) -> Word headings
+        - Paragraphs and bullets
+        - Pipe tables
+        - Filters out raw JSON / code / LLM metadata lines.
+        """
         if not text:
             return
 
@@ -10091,12 +10122,26 @@ def _export_docx(
 
         while idx < n:
             raw = lines[idx].rstrip("\n")
+
             if not raw.strip():
                 idx += 1
                 continue
 
-            # Skip obvious JSON blobs from AI output
             if _likely_json_line(raw):
+                idx += 1
+                continue
+
+            if _is_code_or_rule_line(raw):
+                idx += 1
+                continue
+
+            # Headings like ###, ##, #
+            m_h = _re.match(r"^(#{1,6})\s+(.*)", raw)
+            if m_h:
+                hashes, title = m_h.groups()
+                level = min(len(hashes), 3)  # map 1-3 to Word Heading 1-3
+                heading = doc.add_heading(title.strip(), level=level)
+                _style_paragraph(heading, is_heading=True)
                 idx += 1
                 continue
 
@@ -10111,10 +10156,10 @@ def _export_docx(
             _add_inline_runs(doc, raw)
             idx += 1
 
-    # Build document
+    # -------- Build document --------
     doc = Document()
 
-    # Base style: black, Calibri (or chosen)
+    # Base style: black, chosen font
     base = doc.styles["Normal"]
     base.font.name = font_name
     base.font.size = Pt(font_size_pt)
@@ -10123,16 +10168,13 @@ def _export_docx(
     except Exception:
         pass
 
-    # Make headings black as well and adjust heading spacing
+    # Make headings black as well
     for style_name in ("Title", "Heading 1", "Heading 2", "Heading 3"):
         try:
             s = doc.styles[style_name]
             s.font.name = font_name
             s.font.size = Pt(font_size_pt + (4 if style_name == "Title" else 2))
             s.font.color.rgb = RGBColor(0, 0, 0)
-            # tweak heading spacing to avoid crowding
-            for p in s.paragraph_format.__dict__.keys():
-                pass
         except Exception:
             continue
 
@@ -10142,9 +10184,9 @@ def _export_docx(
     _style_paragraph(h, is_heading=True)
 
     # Meta summary (acts as intro on title page)
-    if metadata:
+    if meta:
         _para(doc, "Summary", bold=True)
-        for k, v in metadata.items():
+        for k, v in meta.items():
             _para(doc, f"{k}: {v}")
 
     # New page for Table of Contents (second page)
@@ -10168,9 +10210,9 @@ def _export_docx(
     doc.add_page_break()
 
     # CLIN table
-    if clins:
+    if clins_list:
         rows = []
-        for row in clins:
+        for row in clins_list:
             try:
                 r = dict(row)
             except Exception:
@@ -10196,9 +10238,9 @@ def _export_docx(
             _add_table(doc, None, rows)
 
     # Checklist
-    if checklist:
+    if checklist_list:
         _para(doc, "Checklist", bold=True)
-        for row in checklist:
+        for row in checklist_list:
             try:
                 r = dict(row)
             except Exception:
@@ -10223,7 +10265,7 @@ def _export_docx(
         "Annex",
     ]
 
-    for idx, sec in enumerate(sections):
+    for idx, sec in enumerate(sections_list):
         try:
             title = sec.get("title") or "Section"
             body = sec.get("body") or ""
@@ -10231,7 +10273,6 @@ def _export_docx(
             title = "Section"
             body = str(sec)
 
-        # Smart page break: only for later sections with "major" titles
         normalized = str(title or "").strip()
         if idx > 0 and any(normalized.startswith(t) for t in major_break_titles):
             doc.add_page_break()
@@ -10249,6 +10290,9 @@ def _export_docx(
         except Exception:
             pass
         return None
+
+
+
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
@@ -10349,7 +10393,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     with right:
         st.subheader("Guidance and limits")
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
-        font_name = st.selectbox("Font", ["Times New Roman", "Calibri", "Arial"], index=0)
+        font_name = st.selectbox("Font", ["Times New Roman", "Calibri"], index=0)
         font_size = st.number_input("Font size", min_value=10, max_value=12, value=11)
         page_limit = st.number_input("Page limit for narrative", min_value=1, max_value=200, value=10)
 
