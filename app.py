@@ -9807,8 +9807,6 @@ def _export_docx(
         from docx import Document  # type: ignore
         from docx.shared import Pt, Inches, RGBColor  # type: ignore
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING  # type: ignore
-        from docx.oxml import OxmlElement  # type: ignore
-        from docx.oxml.ns import qn  # type: ignore
     except Exception as e:
         try:
             st.error(f"DOCX export unavailable: {e}")
@@ -10141,38 +10139,18 @@ def _export_docx(
     h = doc.add_heading(title_text, level=0)
     _style_paragraph(h, is_heading=True)
 
-    # Meta summary (acts as intro on title page)
+    # Meta summary
     if metadata:
         _para(doc, "Summary", bold=True)
         for k, v in metadata.items():
             _para(doc, f"{k}: {v}")
-
-    # New page for Table of Contents (second page)
-    doc.add_page_break()
-
-    # Table of Contents (Word will populate when you update fields)
-    toc_heading = doc.add_paragraph()
-    _style_paragraph(toc_heading, is_heading=True)
-    toc_run = toc_heading.add_run("Table of Contents")
-    toc_run.bold = True
-    toc_run.font.name = font_name
-    toc_run.font.size = Pt(font_size_pt + 1)
-
-    toc_para = doc.add_paragraph()
-    _style_paragraph(toc_para)
-    fld = OxmlElement("w:fldSimple")
-    fld.set(qn("w:instr"), 'TOC \\o "1-3" \\h \\z \\u')
-    toc_para._p.append(fld)
-
-    # Page break after TOC into main content
-    doc.add_page_break()
 
     # CLIN table
     if clins:
         rows = []
         for row in clins:
             try:
-r = dict(row)
+                r = dict(row)
             except Exception:
                 r = {"clin": str(row)}
             clin = r.get("clin") or r.get("code") or r.get("CLIN") or ""
