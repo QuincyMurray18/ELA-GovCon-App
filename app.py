@@ -375,6 +375,20 @@ def _s1d_haversine_mi(lat1, lon1, lat2, lon2):
 from html import escape as _esc
 
 
+
+import logging
+
+# === Architecture layers ======================================================
+# Data layer: database connections and raw SQL helpers.
+# Service layer: business operations that orchestrate data functions.
+# UI layer: Streamlit rendering and user interaction.
+# New work should respect this separation to keep behavior stable and extensible.
+# ==============================================================================
+logger = logging.getLogger("ela_app")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
+# ==============================================================================
+
 import sqlite3 as _sq  # global alias
 
 # === One-paragraph-per-idea enforcement ===
@@ -7087,6 +7101,77 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
         conn.commit()
         return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
 
+
+# === Data layer: RFP records ==================================================
+def data_insert_rfp(conn, title: str, solnum: str, sam_url: str) -> int:
+    """Insert an RFP shell row and return its id."""
+    from contextlib import closing as _closing
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) "
+                "VALUES (?,?,?,?,?, datetime('now'));",
+                (
+                    (title or "Untitled RFP").strip(),
+                    (solnum or "").strip(),
+                    (_parse_sam_notice_id(sam_url) or ""),
+                    (sam_url or "").strip(),
+                    "",
+                ),
+            )
+            new_id = cur.lastrowid
+            conn.commit()
+        return int(new_id)
+    except Exception as e:
+        logger.exception("data_insert_rfp failed")
+        raise
+
+
+def data_save_rfp_uploads(conn, rfp_id: int, uploads) -> int:
+    """Persist uploaded files for an RFP, expanding ZIPs, and return count saved."""
+    import io as _io
+    import zipfile as _zip
+
+    saved = 0
+    for f in (uploads or []):
+        try:
+            name = (getattr(f, "name", "upload") or "").lower()
+            b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+        except Exception:
+            logger.exception("Failed to read upload bytes")
+            name, b = "upload", b""
+        if not b:
+            continue
+        if name.endswith(".zip"):
+            try:
+                zf = _zip.ZipFile(_io.BytesIO(b))
+                for zname in zf.namelist()[:80]:
+                    if zname.endswith("/"):
+                        continue
+                    try:
+                        save_rfp_file_db(conn, int(rfp_id), zname.split("/")[-1], zf.read(zname))
+                        saved += 1
+                    except Exception:
+                        logger.exception("Failed to save file from ZIP")
+            except Exception:
+                logger.exception("Failed to expand ZIP upload")
+        else:
+            try:
+                save_rfp_file_db(conn, int(rfp_id), getattr(f, "name", "upload"), b)
+                saved += 1
+            except Exception:
+                logger.exception("Failed to save direct upload")
+    return saved
+
+# === Service layer: RFP Analyzer =============================================
+def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploads):
+    """Create an RFP record and ingest any uploaded files. Returns (rfp_id, saved_count)."""
+    new_id = data_insert_rfp(conn, title, solnum, sam_url)
+    saved = data_save_rfp_uploads(conn, new_id, uploads)
+    return new_id, saved
+
+# === End RFP data/service helpers ============================================
+
 def extract_sections_L_M(text: str) -> dict:
     out = {}
     if not text:
@@ -11895,6 +11980,32 @@ def _ensure_deal_owner_schema(conn: "sqlite3.Connection") -> None:
     except Exception:
         pass
 
+
+# === Data layer: Deals ========================================================
+def data_get_all_deals_for_detail(conn):
+    """Return a DataFrame of deals for detail view."""
+    import pandas as pd
+    try:
+        df = pd.read_sql_query(
+            "SELECT id, title, agency, COALESCE(status, '') AS status, "
+            "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
+            "COALESCE(owner, '') AS owner "
+            "FROM deals ORDER BY id DESC;",
+            conn,
+            params=(),
+        )
+        return df
+    except Exception as e:
+        logger.exception("data_get_all_deals_for_detail failed")
+        return None
+
+# === Service layer: Deals =====================================================
+def svc_get_deals_for_detail(conn):
+    """Business-friendly wrapper for deal detail view."""
+    return data_get_all_deals_for_detail(conn)
+
+# === End Deals data/service helpers ==========================================
+
 def run_crm(conn: "sqlite3.Connection") -> None:
     _ensure_deal_owner_schema(conn)
     st.header("CRM")
@@ -12290,15 +12401,10 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         with ptab_detail:
             # Simple deal detail view to avoid overwhelming the main pipeline
             try:
-                df_all = pd.read_sql_query(
-                    "SELECT id, title, agency, COALESCE(status, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
-                    "COALESCE(owner, '') AS owner "
-                    "FROM deals ORDER BY id DESC;",
-                    conn,
-                    params=(),
-                )
-            except Exception:
+                df_all = svc_get_deals_for_detail(conn)
+            except Exception as e:
+                logger.exception("Deal detail lookup failed")
+                ui_error("Could not load detailed deal information.", str(e))
                 df_all = None
             if df_all is None or df_all.empty:
                 ui_info("No deals available to inspect.")
@@ -13257,51 +13363,14 @@ def run_rfp_analyzer(conn) -> None:
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_create_ingest"):
             try:
-                with _closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                        ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
-                    )
-                    new_id = cur.lastrowid
-                    conn.commit()
-                # Save uploads (ZIPs expanded)
-                import io as _io, zipfile as _zip
-                saved = 0
-                for f in (ups or []):
-                    try:
-                        name = (getattr(f, "name", "upload") or "").lower()
-                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                    except Exception:
-                        name, b = "upload", b""
-                    if name.endswith(".zip") and b:
-                        try:
-                            zf = _zip.ZipFile(_io.BytesIO(b))
-                            for zname in zf.namelist()[:80]:
-                                if zname.endswith("/"):
-                                    continue
-                                try:
-                                    save_rfp_file_db(conn, int(new_id), zname.split("/")[-1], zf.read(zname))
-                                    saved += 1
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            save_rfp_file_db(conn, int(new_id), getattr(f, "name", "upload"), b)
-                            saved += 1
-                        except Exception:
-                            pass
-                try:
-                    y1_index_rfp(conn, int(new_id), rebuild=False)
-                except Exception:
-                    pass
-                st.session_state["current_rfp_id"] = int(new_id)
-                st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
-                st.session_state["nav_target"] = "RFP Analyzer"
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
+                ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
+                st.session_state['current_rfp_id'] = int(new_id)
                 st.rerun()
             except Exception as e:
-                ui_error("Create & ingest failed.", str(e))
+                logger.exception("Create RFP and ingest failed")
+                ui_error("Could not create the RFP and ingest files.", str(e))
+
         return
 
     # RFP workflow steps
@@ -13322,50 +13391,14 @@ def run_rfp_analyzer(conn) -> None:
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_inline_create"):
             try:
-                with _closing(conn.cursor()) as cur:
-                    cur.execute(
-                        "INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));",
-                        ((t0 or "Untitled RFP").strip(), (s0 or "").strip(), (_parse_sam_notice_id(u0) or ""), (u0 or "").strip(), "")
-                    )
-                    new_id = cur.lastrowid
-                    conn.commit()
-                # Save uploads (ZIPs expanded)
-                import io as _io, zipfile as _zip
-                saved = 0
-                for f in (ups or []):
-                    try:
-                        name = (getattr(f, "name", "upload") or "").lower()
-                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                    except Exception:
-                        name, b = "upload", b""
-                    if name.endswith(".zip") and b:
-                        try:
-                            zf = _zip.ZipFile(_io.BytesIO(b))
-                            for zname in zf.namelist()[:80]:
-                                if zname.endswith("/"):
-                                    continue
-                                try:
-                                    save_rfp_file_db(conn, int(new_id), zname.split("/")[-1], zf.read(zname))
-                                    saved += 1
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            save_rfp_file_db(conn, int(new_id), getattr(f, "name", "upload"), b)
-                            saved += 1
-                        except Exception:
-                            pass
-                try:
-                    y1_index_rfp(conn, int(new_id), rebuild=False)
-                except Exception:
-                    pass
-                st.session_state["current_rfp_id"] = int(new_id)
-                st.success(f"RFP #{int(new_id)} created with {saved} file(s). Jumping to analysis…")
-                st.session_state["nav_target"] = "RFP Analyzer"
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
+                ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
+                st.session_state['current_rfp_id'] = int(new_id)
                 st.rerun()
             except Exception as e:
+                logger.exception("Create RFP and ingest failed")
+                ui_error("Could not create the RFP and ingest files.", str(e))
+
                 st.error(f"Create & ingest failed: {e}")
 
 
@@ -13395,7 +13428,8 @@ def run_rfp_analyzer(conn) -> None:
                 st.success(f"Deleted RFP #{int(rid)}.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Delete failed: {e}")
+                logger.exception("Delete RFP failed")
+                ui_error("Could not delete this RFP.", str(e))
 
     # Controls
     c1, c2, c3 = st.columns([1,1,2])
@@ -13408,21 +13442,24 @@ def run_rfp_analyzer(conn) -> None:
                     st.success(f"Attempted: {res.get('attempts',0)} — New/updated files: {res.get('new_files',0)}")
                     if errs: st.warning("Notes/Errors:\n- " + "\n- ".join(errs))
                 except Exception as e:
-                    st.error(f"SAM update check failed: {e}")
+                    logger.exception("SAM update check failed")
+                    ui_error("Could not check SAM for updates.", str(e))
     with c2:
         if st.button("Ensure Deal & Contacts", key="p3_crm_wire"):
             try:
                 _p3_ensure_deal_and_contacts(conn, int(_ensure_selected_rfp_id(conn)))
                 st.success("CRM wiring complete (best-effort).")
             except Exception as e:
-                st.error(f"CRM wiring failed: {e}")
+                logger.exception("CRM wiring failed")
+                ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
             try:
                 _one_click_analyze(conn, int(_ensure_selected_rfp_id(conn)))
                 st.rerun()
             except Exception as e:
-                st.error(f"Ingest failed: {e}")
+                logger.exception("RFP ingest/analyze failed")
+                ui_error("Could not ingest and analyze the RFP.", str(e))
 
     # Add files
     with st.container(border=True):
