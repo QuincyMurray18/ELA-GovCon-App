@@ -3998,107 +3998,97 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
         return
 
     # Combine texts
-    by_file = {}
+    by_file: Dict[str, List[str]] = {}
     for p in pages:
         by_file.setdefault(p.get("file") or "Unknown", []).append(p.get("text") or "")
     combined = "\n\n".join(["\n".join(v) for v in by_file.values()])
 
-    # Header key facts
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("NAICS", _extract_naics(combined) or "—")
-    with c2: st.metric("Due Date", _extract_due_date(combined) or "—")
-    with c3: st.metric("POP (State)", _extract_pop_state(combined) or "—")
-    with c4: st.metric("# Files", str(len(by_file)))
-
-    # Summaries panel
-    st.subheader("Summaries")
-    if st.button("Summarize All Documents ▶", type="primary"):
-        sums = {}
-        for fname, texts in by_file.items():
-            t = "\n".join(texts)
-            prompt = f"Summarize the document '{fname}' for a federal proposal team. Use bullets and include key deliverables, dates, and Section L/M obligations.\n\n{t[:12000]}"
-            sums[fname] = _ai_chat(prompt)
-        st.session_state["onepage_summaries"] = sums
-    sums = st.session_state.get("onepage_summaries") or {}
-    if sums:
-        for fname, ss in sums.items():
-            with st.expander(f"Summary — {fname}", expanded=False):
-                _rfp_highlight_css()
-                st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
-
-    # Compliance (auto-extracted)
-    st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
-    reqs = _find_requirements(combined)
-    if not reqs:
-        st.info("No clear 'shall/must' obligations detected. (Section L/M not found or documents are scanned.)")
-    else:
-        # If we have a draft, check light coverage
-        draft_map = st.session_state.get("onepage_draft") or {}
-        drafted_all = "\n\n".join(draft_map.values()) if draft_map else ""
-        covered = 0
-        for r in reqs[:100]:
-            hit = (len(r) > 20 and r[:20].lower() in drafted_all.lower())
-            st.checkbox(("✅ " if hit else "⬜️ ") + r, value=bool(hit), key=f"req_{abs(hash(r))}")
-            covered += int(bool(hit))
-        st.caption(f"Coverage (light heuristic): {covered} / {min(100, len(reqs))} shown.")
-
-    # Drafting panel
-    st.subheader("Proposal Draft")
-    sel = st.multiselect("Sections to draft", DEFAULT_SECTIONS, default=DEFAULT_SECTIONS)
-    if st.button("Draft All Sections ▶", type="primary", help="Generate a first-pass draft for the selected sections."):
-        draft = {}
-        for sec in sel:
-            draft[sec] = _draft_section(sec, combined)
-        st.session_state["onepage_draft"] = draft
-    draft = st.session_state.get("onepage_draft") or {}
-    if draft:
-        for sec, body in draft.items():
-            with st.expander(f"📝 {sec}", expanded=False):
-                st.text_area("Text", value=body, height=240, key=f"ta_{abs(hash(sec))}")
-    st.download_button(
-        "Download Full Draft (Markdown)",
-        data="\n\n".join([f"# {k}\n\n{v}" for k, v in (st.session_state.get('onepage_draft') or {}).items()]).encode("utf-8"),
-        file_name="proposal_draft.md",
-        mime="text/markdown",
-        disabled=not bool(st.session_state.get("onepage_draft"))
+    tab_overview, tab_require, tab_proposal, tab_notes = st.tabs(
+        ["Overview", "Requirements & Compliance", "Proposal Draft", "Notes & Search"]
     )
 
-    # Search panel (simple)
-    st.subheader("Quick Search (full text)")
-    q = st.text_input("Find", placeholder="evaluation factor, CLIN, deliverables...")
-    if q:
-        hits = [ (i, s) for i, s in enumerate(_sentences(combined), start=1) if q.lower() in s.lower() ]
-        if not hits:
-            st.info("No matches.")
+    # Overview: key facts and document summaries
+    with tab_overview:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("NAICS", _extract_naics(combined) or "—")
+        with c2:
+            st.metric("Due Date", _extract_due_date(combined) or "—")
+        with c3:
+            st.metric("POP (State)", _extract_pop_state(combined) or "—")
+        with c4:
+            st.metric("# Files", str(len(by_file)))
+
+        st.subheader("Summaries")
+        if st.button("Summarize All Documents ▶", type="primary", key="onepage_summarize_all"):
+            sums: Dict[str, str] = {}
+            for fname, texts in by_file.items():
+                t = "\n".join(texts)
+                prompt = (
+                    f"Summarize the document '{fname}' for a federal government contracting capture/proposal team. "
+                    "Highlight scope, key deliverables, key dates, Section L instructions, and Section M evaluation factors.\n\n"
+                    f"{t[:12000]}"
+                )
+                sums[fname] = _ai_chat(prompt)
+            st.session_state["onepage_summaries"] = sums
+        sums = st.session_state.get("onepage_summaries") or {}
+        if sums:
+            for fname, ss in sums.items():
+                with st.expander(f"Summary — {fname}", expanded=False):
+                    _rfp_highlight_css()
+                    st.markdown(_rfp_highlight_html(ss or ""), unsafe_allow_html=True)
+
+    # Requirements & compliance view
+    with tab_require:
+        st.subheader("Compliance Snapshot (auto-extracted L/M obligations)")
+        reqs = _find_requirements(combined)
+        if not reqs:
+            st.info("No clear 'shall/must' obligations detected. (Section L/M not found or documents are scanned.)")
         else:
-            for i, s in hits[:100]:
-                st.write(f"**{i}.** {s}")
+            draft_map = st.session_state.get("onepage_draft") or {}
+            drafted_all = "\n\n".join(draft_map.values()) if draft_map else ""
+            covered = 0
+            for r in reqs[:100]:
+                hit = (len(r) > 20 and r[:20].lower() in drafted_all.lower())
+                st.checkbox(("✅ " if hit else "⬜️ ") + r, value=bool(hit), key=f"req_{abs(hash(r))}")
+                covered += int(bool(hit))
+            st.caption(f"Coverage (light heuristic): {covered} / {min(100, len(reqs))} shown.")
 
-# === END: inlined One-Page Analyzer ===
-# --- Optional PDF backends for Phase X1 ---
-try:
-    import pdfplumber as _pdfplumber  # type: ignore
-except Exception:
-    _pdfplumber = None
-try:
-    import PyPDF2 as _pypdf  # type: ignore
-except Exception:
-    try:
-        import pypdf as _pypdf  # type: ignore
-    except Exception:
-        _pypdf = None
+    # Proposal drafting workspace
+    with tab_proposal:
+        st.subheader("Proposal Draft")
+        sel = st.multiselect("Sections to draft", DEFAULT_SECTIONS, default=DEFAULT_SECTIONS, key="onepage_sections_to_draft")
+        if st.button("Draft All Sections ▶", type="primary", help="Generate a first-pass draft for the selected sections.", key="onepage_draft_all"):
+            draft: Dict[str, str] = {}
+            for sec in sel:
+                draft[sec] = _draft_section(sec, combined)
+            st.session_state["onepage_draft"] = draft
+        draft = st.session_state.get("onepage_draft") or {}
+        if draft:
+            for sec, body in draft.items():
+                with st.expander(f"📝 {sec}", expanded=False):
+                    st.text_area("Text", value=body, height=240, key=f"ta_{abs(hash(sec))}")
+        st.download_button(
+            "Download Full Draft (Markdown)",
+            data="\n\n".join([f"# {k}\n\n{v}" for k, v in (st.session_state.get('onepage_draft') or {}).items()]).encode("utf-8"),
+            file_name="proposal_draft.md",
+            mime="text/markdown",
+            disabled=not bool(st.session_state.get("onepage_draft")),
+            key="onepage_download_draft",
+        )
 
-# --- hashing helper ---
-def compute_sha256(b: bytes) -> str:
-    try:
-        return hashlib.sha256(b or b"").hexdigest()
-    except Exception:
-        import hashlib as _h
-        return _h.sha256(b or b"").hexdigest()
+    # Notes and full-text search
+    with tab_notes:
+        st.subheader("Quick Search (full text)")
+        q = st.text_input("Find text", placeholder="evaluation factor, CLIN, deliverables...", key="onepage_search")
+        if q:
+            hits = [(i, s) for i, s in enumerate(_sentences(combined), start=1) if q.lower() in s.lower()]
+            if not hits:
+                st.info("No matches.")
+            else:
+                for i, s in hits[:100]:
+                    st.write(f"**{i}.** {s}")
 
-# Phase X unified settings
-from types import SimpleNamespace as _NS
-from openai import OpenAI
 
 def getenv_int(name: str, default: int) -> int:
     try:
@@ -12034,262 +12024,296 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         st.success("Updated")
     # --- Pipeline
     with tabs[2]:
-        # Add Deal (moved from Deals)
-        with st.form("add_deal", clear_on_submit=True):
-            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
-            with c1:
-                title = st.text_input("Title")
-            with c2:
-                agency = st.text_input("Agency")
-            with c3:
-                status = st.selectbox("Status", STAGES_ORDERED)
-            with c4:
-                value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
-            with c5:
-                owner_sel_opts = ["Quincy", "Collin", "Charles"]
-                _ctx_owner = st.session_state.get("deal_owner_ctx")
-                _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
-                owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
-            d_due = st.date_input("Due date (optional)", key="deal_due_date")
-            submitted = st.form_submit_button("Add Deal")
-        if submitted and title:
-            try:
-                from contextlib import closing as _closing
-                with _closing(conn.cursor()) as cur:
-
-                        cur.execute(
-                            "INSERT INTO deals(title, agency, status, stage, value, owner, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
-                            (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val)
-                        )
-                        cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
-                        conn.commit()
-            except Exception as e:
-                st.error(f"Error saving deal {e}")
-    
-        # Weighted Pipeline view
-        st.subheader("Weighted Pipeline")
-        df = pd.read_sql_query("SELECT id, title, agency, COALESCE(status, stage, '') AS status, COALESCE(value, 0) AS value, rfp_deadline FROM deals ORDER BY id DESC;", conn, params=())
-        if df.empty:
-            st.info("No deals")
-        else:
-            df["prob_%"] = df["status"].apply(_stage_probability)
-            df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
-            _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
-        st.subheader("Kanban")
-
-        # Bulk delete controls for deals in current view
-        try:
-            _df_del = df_k.copy() if 'df_k' in locals() else df.copy()
-            _opts = {str(int(r['id'])): f"#{int(r['id'])} — {str(r.get('title') or '')[:60]}" for _, r in _df_del.iterrows()}
-            _sel = st.multiselect("Delete deals", options=list(_opts.keys()), format_func=lambda k: _opts.get(k, k), key="kanban_delete_sel")
-            if _sel and st.button("Delete selected", key="kanban_delete_btn"):
-                with conn:
-                    for _id in _sel:
-                        conn.execute("DELETE FROM deals WHERE id=?", (int(_id),))
-                st.success(f"Deleted {len(_sel)} deal(s)")
-                st.rerun()
-        except Exception as _e:
-            pass
-
-        try:
-            # Prefer base table. Include owner-null when filtering so old deals still show and can be assigned.
-            if deal_owner_ctx != "All":
-                df_k = pd.read_sql_query(
-                    "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
-                    "FROM deals WHERE (owner = ? OR owner IS NULL OR owner = '') "
-                    "ORDER BY id DESC;",
-                    conn, params=(deal_owner_ctx,)
-                )
-            else:
-                df_k = pd.read_sql_query(
-                    "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                    "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
-                    "FROM deals ORDER BY id DESC;",
-                    conn, params=()
-                )
-        except Exception:
-            # Fallback to view without owner column
-            try:
-                df_k = pd.read_sql_query(
-                    "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
-                    conn, params=()
-                )
-            except Exception:
-                df_k = None
-        if df_k is None or df_k.empty:
-            st.caption("No deals to display")
-        else:
-            cols = st.columns(len(STAGES_ORDERED))
-            for idx, stage in enumerate(STAGES_ORDERED):
-                with cols[idx]:
-                    st.markdown(f"**{stage}**")
-                    sdf = df_k[df_k["status"] == stage]
-                    if sdf.empty:
-                        st.caption("—")
-                    for _, r in sdf.iterrows():
-                        with st.container(border=True):
-                            did = int(r["id"])
-                            st.markdown(f"#{did} · **{r.get('title') or ''}**")
-                            st.caption(str(r.get("agency") or ""))
-                            if r.get('rfp_deadline'):
-                                st.caption(f"Due: {r['rfp_deadline']}")
-                            v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
-                            owner_opts = ["Quincy","Collin","Charles"]
-                            owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
-                            owner_new = st.selectbox("Owner", owner_opts, index=(owner_opts.index(owner_cur) if owner_cur in owner_opts else 0), key=f"k_owner_{did}")
-
-                            ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
-                            c1, c2, c3 = st.columns([1,1,1])
-                            with c1:
-                                if st.button("◀", key=f"k_prev_{did}"):
-                                    ns2 = _stage_prev(stage)
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, did))
-                                        if ns2 != stage:
-                                            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
-                                        cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
-                                        conn.commit()
-                                    st.rerun()
-                            with c2:
-                                if st.button("Save", key=f"k_save_{did}"):
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, rfp_deadline=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
-                                        if ns != stage:
-                                            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
-                                        conn.commit()
-                                    st.rerun()
-                            with c3:
-                                if st.button("▶", key=f"k_next_{did}"):
-                                    ns2 = _stage_next(stage)
-                                    from contextlib import closing as _closing
-                                    with _closing(conn.cursor()) as cur:
-                                        cur.execute("UPDATE deals SET status=?, stage=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, did))
-                                        if ns2 != stage:
-                                            cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
-                                        cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
-                                        conn.commit()
-                                    st.rerun()
-
-    
-            st.subheader("Summary by Stage")
-            summary = df.groupby("status").agg(
-                deals=("id","count"),
-                value=("value","sum"),
-                expected=("weighted_value","sum")
-            ).reset_index().sort_values("expected", ascending=False)
-            _styled_dataframe(summary, use_container_width=True, hide_index=True)
-            if st.button("Export Pipeline CSV", key="pipe_export"):
-                path = str(Path(DATA_DIR) / "pipeline.csv")
-                df.to_csv(path, index=False)
-                st.markdown(f"[Download CSV]({path})")
-    
-        # Editable pipeline table with stage logging
-        st.subheader("Edit Pipeline")
-        try:
-            df_edit = pd.read_sql_query(
-                "SELECT id, title, agency, status, value, rfp_deadline, sam_url FROM deals_t ORDER BY id DESC;",
-                conn,
-                params=(),
-            )
-            if df_edit.empty:
-                st.write("No deals yet")
-            else:
-                # Normalize rfp_deadline to real dates so DateColumn works
-                if "rfp_deadline" in df_edit.columns:
-                    df_edit["rfp_deadline"] = pd.to_datetime(df_edit["rfp_deadline"], errors="coerce").dt.date
-                df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
-                df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
-                edited = st.data_editor(
-                    df_edit,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={"status": st.column_config.SelectboxColumn(options=STAGES_ORDERED), "owner": st.column_config.SelectboxColumn(options=["Quincy","Collin","Charles"]),
-                        "rfp_deadline": st.column_config.DateColumn(format="YYYY-MM-DD"), "prob_%": st.column_config.NumberColumn(disabled=True),
-                        "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
-                    },
-                    key="crm_deals_editor",
-                )
-                if st.button("Save Edits", key="crm_deals_save"):
+        ptab_pipeline, ptab_detail = st.tabs(["Pipeline view", "Deal detail"])
+        with ptab_pipeline:
+                # Add Deal (moved from Deals)
+                with st.form("add_deal", clear_on_submit=True):
+                    c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
+                    with c1:
+                        title = st.text_input("Title")
+                    with c2:
+                        agency = st.text_input("Agency")
+                    with c3:
+                        status = st.selectbox("Status", STAGES_ORDERED)
+                    with c4:
+                        value = st.number_input("Est Value", min_value=0.0, step=1000.0, format="%.2f")
+                    with c5:
+                        owner_sel_opts = ["Quincy", "Collin", "Charles"]
+                        _ctx_owner = st.session_state.get("deal_owner_ctx")
+                        _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
+                        owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
+                    d_due = st.date_input("Due date (optional)", key="deal_due_date")
+                    submitted = st.form_submit_button("Add Deal")
+                if submitted and title:
                     try:
-                        df_orig = df_edit.set_index("id")
                         from contextlib import closing as _closing
-                        import sqlite3 as _sqlite3  # for IntegrityError type
                         with _closing(conn.cursor()) as cur:
-                            # Relax foreign key checks during pipeline updates so legacy
-                            # rows do not block simple field edits from the UI.
-                            try:
-                                cur.execute("PRAGMA foreign_keys = OFF;")
-                            except Exception:
-                                pass
-                            for _, r in edited.iterrows():
-                                rid = int(r["id"])
-                                old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
-                                new_status = str(r.get("status") or "New")
-                                # Normalize deadline to ISO string for storage
-                                r_deadline = r.get("rfp_deadline")
-                                # Accept pandas Timestamps, datetime.date, or anything with strftime
-                                if hasattr(r_deadline, "strftime"):
-                                    try:
-                                        r_deadline_str = r_deadline.strftime("%Y-%m-%d")
-                                    except Exception:
-                                        r_deadline_str = None
-                                elif isinstance(r_deadline, str) and r_deadline.strip():
-                                    try:
-                                        _tmp_dt = pd.to_datetime(r_deadline, errors="coerce")
-                                        r_deadline_str = _tmp_dt.date().strftime("%Y-%m-%d") if _tmp_dt is not pd.NaT else None
-                                    except Exception:
-                                        r_deadline_str = None
-                                else:
-                                    r_deadline_str = None
+        
                                 cur.execute(
-                                    """
-                                    UPDATE deals
-                                    SET title = ?,
-                                        agency = ?,
-                                        status = ?,
-                                        stage = ?,
-                                        value = ?,
-                                        rfp_deadline = ?,
-                                        sam_url = ?,
-                                        updated_at = datetime('now')
-                                    WHERE id = ?;
-                                    """,
-                                    (
-                                        str(r.get("title", "") or "").strip(),
-                                        str(r.get("agency", "") or "").strip(),
-                                        new_status,
-                                        new_status,
-                                        float(r.get("value") or 0.0),
-                                        r_deadline_str,
-                                        str(r.get("sam_url", "") or "").strip(),
-                                        rid,
-                                    ),
+                                    "INSERT INTO deals(title, agency, status, stage, value, owner, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
+                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val)
                                 )
-                                if new_status != old_status:
+                                cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
+                                conn.commit()
+                    except Exception as e:
+                        st.error(f"Error saving deal {e}")
+            
+                # Weighted Pipeline view
+                st.subheader("Weighted Pipeline")
+                df = pd.read_sql_query("SELECT id, title, agency, COALESCE(status, stage, '') AS status, COALESCE(value, 0) AS value, rfp_deadline FROM deals ORDER BY id DESC;", conn, params=())
+                if df.empty:
+                    st.info("No deals")
+                else:
+                    df["prob_%"] = df["status"].apply(_stage_probability)
+                    df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
+                    _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
+                st.subheader("Kanban")
+        
+                # Bulk delete controls for deals in current view
+                try:
+                    _df_del = df_k.copy() if 'df_k' in locals() else df.copy()
+                    _opts = {str(int(r['id'])): f"#{int(r['id'])} — {str(r.get('title') or '')[:60]}" for _, r in _df_del.iterrows()}
+                    _sel = st.multiselect("Delete deals", options=list(_opts.keys()), format_func=lambda k: _opts.get(k, k), key="kanban_delete_sel")
+                    if _sel and st.button("Delete selected", key="kanban_delete_btn"):
+                        with conn:
+                            for _id in _sel:
+                                conn.execute("DELETE FROM deals WHERE id=?", (int(_id),))
+                        st.success(f"Deleted {len(_sel)} deal(s)")
+                        st.rerun()
+                except Exception as _e:
+                    pass
+        
+                try:
+                    # Prefer base table. Include owner-null when filtering so old deals still show and can be assigned.
+                    if deal_owner_ctx != "All":
+                        df_k = pd.read_sql_query(
+                            "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
+                            "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                            "FROM deals WHERE (owner = ? OR owner IS NULL OR owner = '') "
+                            "ORDER BY id DESC;",
+                            conn, params=(deal_owner_ctx,)
+                        )
+                    else:
+                        df_k = pd.read_sql_query(
+                            "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
+                            "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                            "FROM deals ORDER BY id DESC;",
+                            conn, params=()
+                        )
+                except Exception:
+                    # Fallback to view without owner column
+                    try:
+                        df_k = pd.read_sql_query(
+                            "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
+                            conn, params=()
+                        )
+                    except Exception:
+                        df_k = None
+                if df_k is None or df_k.empty:
+                    st.caption("No deals to display")
+                else:
+                    cols = st.columns(len(STAGES_ORDERED))
+                    for idx, stage in enumerate(STAGES_ORDERED):
+                        with cols[idx]:
+                            st.markdown(f"**{stage}**")
+                            sdf = df_k[df_k["status"] == stage]
+                            if sdf.empty:
+                                st.caption("—")
+                            for _, r in sdf.iterrows():
+                                with st.container(border=True):
+                                    did = int(r["id"])
+                                    st.markdown(f"#{did} · **{r.get('title') or ''}**")
+                                    st.caption(str(r.get("agency") or ""))
+                                    if r.get('rfp_deadline'):
+                                        st.caption(f"Due: {r['rfp_deadline']}")
+                                    v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
+                                    owner_opts = ["Quincy","Collin","Charles"]
+                                    owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
+                                    owner_new = st.selectbox("Owner", owner_opts, index=(owner_opts.index(owner_cur) if owner_cur in owner_opts else 0), key=f"k_owner_{did}")
+        
+                                    ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
+                                    c1, c2, c3 = st.columns([1,1,1])
+                                    with c1:
+                                        if st.button("◀", key=f"k_prev_{did}"):
+                                            ns2 = _stage_prev(stage)
+                                            from contextlib import closing as _closing
+                                            with _closing(conn.cursor()) as cur:
+                                                cur.execute("UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, did))
+                                                if ns2 != stage:
+                                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
+                                                cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
+                                                conn.commit()
+                                            st.rerun()
+                                    with c2:
+                                        if st.button("Save", key=f"k_save_{did}"):
+                                            from contextlib import closing as _closing
+                                            with _closing(conn.cursor()) as cur:
+                                                cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, rfp_deadline=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
+                                                if ns != stage:
+                                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
+                                                conn.commit()
+                                            st.rerun()
+                                    with c3:
+                                        if st.button("▶", key=f"k_next_{did}"):
+                                            ns2 = _stage_next(stage)
+                                            from contextlib import closing as _closing
+                                            with _closing(conn.cursor()) as cur:
+                                                cur.execute("UPDATE deals SET status=?, stage=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, did))
+                                                if ns2 != stage:
+                                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
+                                                cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
+                                                conn.commit()
+                                            st.rerun()
+        
+            
+                    st.subheader("Summary by Stage")
+                    summary = df.groupby("status").agg(
+                        deals=("id","count"),
+                        value=("value","sum"),
+                        expected=("weighted_value","sum")
+                    ).reset_index().sort_values("expected", ascending=False)
+                    _styled_dataframe(summary, use_container_width=True, hide_index=True)
+                    if st.button("Export Pipeline CSV", key="pipe_export"):
+                        path = str(Path(DATA_DIR) / "pipeline.csv")
+                        df.to_csv(path, index=False)
+                        st.markdown(f"[Download CSV]({path})")
+            
+                # Editable pipeline table with stage logging
+                st.subheader("Edit Pipeline")
+                try:
+                    df_edit = pd.read_sql_query(
+                        "SELECT id, title, agency, status, value, rfp_deadline, sam_url FROM deals_t ORDER BY id DESC;",
+                        conn,
+                        params=(),
+                    )
+                    if df_edit.empty:
+                        st.write("No deals yet")
+                    else:
+                        # Normalize rfp_deadline to real dates so DateColumn works
+                        if "rfp_deadline" in df_edit.columns:
+                            df_edit["rfp_deadline"] = pd.to_datetime(df_edit["rfp_deadline"], errors="coerce").dt.date
+                        df_edit["prob_%"] = df_edit["status"].apply(_stage_probability)
+                        df_edit["weighted_value"] = (df_edit["value"].fillna(0).astype(float) * df_edit["prob_%"] / 100.0).round(2)
+                        edited = st.data_editor(
+                            df_edit,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={"status": st.column_config.SelectboxColumn(options=STAGES_ORDERED), "owner": st.column_config.SelectboxColumn(options=["Quincy","Collin","Charles"]),
+                                "rfp_deadline": st.column_config.DateColumn(format="YYYY-MM-DD"), "prob_%": st.column_config.NumberColumn(disabled=True),
+                                "weighted_value": st.column_config.NumberColumn(disabled=True, help="value × stage probability"),
+                            },
+                            key="crm_deals_editor",
+                        )
+                        if st.button("Save Edits", key="crm_deals_save"):
+                            try:
+                                df_orig = df_edit.set_index("id")
+                                from contextlib import closing as _closing
+                                import sqlite3 as _sqlite3  # for IntegrityError type
+                                with _closing(conn.cursor()) as cur:
+                                    # Relax foreign key checks during pipeline updates so legacy
+                                    # rows do not block simple field edits from the UI.
                                     try:
+                                        cur.execute("PRAGMA foreign_keys = OFF;")
+                                    except Exception:
+                                        pass
+                                    for _, r in edited.iterrows():
+                                        rid = int(r["id"])
+                                        old_status = str(df_orig.loc[rid, "status"]) if rid in df_orig.index else ""
+                                        new_status = str(r.get("status") or "New")
+                                        # Normalize deadline to ISO string for storage
+                                        r_deadline = r.get("rfp_deadline")
+                                        # Accept pandas Timestamps, datetime.date, or anything with strftime
+                                        if hasattr(r_deadline, "strftime"):
+                                            try:
+                                                r_deadline_str = r_deadline.strftime("%Y-%m-%d")
+                                            except Exception:
+                                                r_deadline_str = None
+                                        elif isinstance(r_deadline, str) and r_deadline.strip():
+                                            try:
+                                                _tmp_dt = pd.to_datetime(r_deadline, errors="coerce")
+                                                r_deadline_str = _tmp_dt.date().strftime("%Y-%m-%d") if _tmp_dt is not pd.NaT else None
+                                            except Exception:
+                                                r_deadline_str = None
+                                        else:
+                                            r_deadline_str = None
                                         cur.execute(
                                             """
-                                            INSERT INTO deal_stage_log(deal_id, stage, changed_at)
-                                            VALUES(?, ?, datetime('now'));
+                                            UPDATE deals
+                                            SET title = ?,
+                                                agency = ?,
+                                                status = ?,
+                                                stage = ?,
+                                                value = ?,
+                                                rfp_deadline = ?,
+                                                sam_url = ?,
+                                                updated_at = datetime('now')
+                                            WHERE id = ?;
                                             """,
-                                            (rid, new_status),
+                                            (
+                                                str(r.get("title", "") or "").strip(),
+                                                str(r.get("agency", "") or "").strip(),
+                                                new_status,
+                                                new_status,
+                                                float(r.get("value") or 0.0),
+                                                r_deadline_str,
+                                                str(r.get("sam_url", "") or "").strip(),
+                                                rid,
+                                            ),
                                         )
+                                        if new_status != old_status:
+                                            try:
+                                                cur.execute(
+                                                    """
+                                                    INSERT INTO deal_stage_log(deal_id, stage, changed_at)
+                                                    VALUES(?, ?, datetime('now'));
+                                                    """,
+                                                    (rid, new_status),
+                                                )
+                                            except Exception:
+                                                # Ignore logging failures so edits still succeed
+                                                pass
+                                    try:
+                                        cur.execute("PRAGMA foreign_keys = ON;")
                                     except Exception:
-                                        # Ignore logging failures so edits still succeed
                                         pass
-                            try:
-                                cur.execute("PRAGMA foreign_keys = ON;")
-                            except Exception:
-                                pass
-                            conn.commit()
-                        st.success("Pipeline updated")
-                    except Exception as e:
-                        st.error(f"Save failed: {e}")
-        except Exception as e:
-            st.error(f"Pipeline load failed: {e}")
+                                    conn.commit()
+                                st.success("Pipeline updated")
+                            except Exception as e:
+                                st.error(f"Save failed: {e}")
+                except Exception as e:
+                    st.error(f"Pipeline load failed: {e}")
+
+        with ptab_detail:
+            # Simple deal detail view to avoid overwhelming the main pipeline
+            try:
+                df_all = pd.read_sql_query(
+                    "SELECT id, title, agency, COALESCE(status, '') AS status, "
+                    "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                    "COALESCE(owner, '') AS owner "
+                    "FROM deals ORDER BY id DESC;",
+                    conn,
+                    params=(),
+                )
+            except Exception:
+                df_all = None
+            if df_all is None or df_all.empty:
+                ui_info("No deals available to inspect.")
+            else:
+                sel_id = st.selectbox(
+                    "Select a deal",
+                    options=df_all["id"].tolist(),
+                    format_func=lambda i: f"#{i} — " + str(df_all.loc[df_all["id"] == i, "title"].values[0]),
+                    key="deal_detail_select",
+                )
+                row = df_all[df_all["id"] == sel_id].iloc[0]
+                body = (
+                    f"Agency: {row['agency']}\n\n"
+                    f"Status: {row['status']}\n\n"
+                    f"Estimated value: ${float(row['value'] or 0):,.2f}"
+                )
+                footer = f"Owner: {row.get('owner') or 'Unassigned'} | Due: {row.get('rfp_deadline') or '—'}"
+                render_card(f"Deal #{int(row['id'])} — {row['title']}", body=body, footer=footer)
+
 
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
     try:
@@ -13212,6 +13236,7 @@ def run_rfp_analyzer(conn) -> None:
 
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
+        st.markdown("**Steps:** 1) Select or create RFP  ›  2) Upload RFP files  ›  3) Run analysis  ›  4) Jump into Proposal Builder.")
         st.caption("Use this page to create RFP records, ingest files, and turn complex requirements into clear, organized analysis.")
         ui_info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
         render_empty_state("No RFPs yet", "Start by creating an RFP record and ingesting the files you want to analyze.")
@@ -13274,6 +13299,9 @@ def run_rfp_analyzer(conn) -> None:
             except Exception as e:
                 ui_error("Create & ingest failed.", str(e))
         return
+
+    # RFP workflow steps
+    st.markdown("**Steps:** 1) Select or create RFP  ›  2) Upload RFP files  ›  3) Run analysis  ›  4) Jump into Proposal Builder.")
 
     # New RFP inline form (always available)
     with st.expander("➕ Start a new RFP", expanded=False):
@@ -14386,12 +14414,12 @@ def run_outreach(conn):
     st.header("Outreach")
     st.caption("Use this page to send targeted email campaigns to agencies and vendors and track your outreach work.")
     st.markdown("**Primary action on this page:** build or pick a template, then use Mail Merge and Send to deliver batch emails.")
-    with st.expander("Compliance (O6)", expanded=False):
+    with st.expander("Advanced: Compliance & Unsubscribe (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
 
     # O6: handle unsubscribe links
     o6_handle_query_unsubscribe(conn)
-    with st.expander("Follow-ups & SLA (O5)", expanded=False):
+    with st.expander("Advanced: Follow-ups & SLA (O5)", expanded=False):
         render_outreach_o5_followups(conn)
 
     # Sender accounts (O4)
@@ -14414,7 +14442,7 @@ def run_outreach(conn):
         with st.expander("Mail Merge & Send", expanded=True):
             render_outreach_mailmerge(conn)
     except Exception as e:
-        st.error(f"Mail merge panel error: {e}")
+        ui_error("Mail merge panel error.", str(e))
 
 def _o3_ensure_schema(conn):
     with _o3c(conn.cursor()) as cur:
