@@ -45,6 +45,89 @@ def _ensure_selected_rfp_id(conn):
         pass
     return rid
 
+# ---- UI style guide and helpers ----
+"""
+Internal UI style guide (keep short and practical):
+
+- Page titles: use a single clear header at the top of each main page.
+- Section headings: use expanders or subheaders to group related controls.
+- Padding: leave a small visual gap between major blocks so content does not feel cramped.
+- Cards and tables: keep titles bold, supporting text in normal weight, and use captions for meta info.
+
+The helpers below are the preferred way to render new UI going forward.
+Older sections can be gradually updated to use them when you touch that area.
+"""
+
+def render_page_title(text: str, subtitle: str | None = None) -> None:
+    """Standard page title pattern for new screens."""
+    import streamlit as st
+    st.header(text)
+    if subtitle:
+        st.caption(subtitle)
+
+def render_section(title: str, help_text: str | None = None, expanded: bool = True):
+    """Standard section wrapper. Returns a container inside an expander."""
+    import streamlit as st
+    exp = st.expander(title, expanded=expanded)
+    with exp:
+        if help_text:
+            st.caption(help_text)
+        # Container allows the caller to further structure the section
+        return st.container()
+
+def render_card(title: str, body: str | None = None, footer: str | None = None):
+    """Simple card pattern for summary blocks and key info."""
+    import streamlit as st
+    with st.container():
+        st.markdown(f"**{title}**")
+        if body:
+            st.write(body)
+        if footer:
+            st.caption(footer)
+
+# ---- Status messaging and empty states ----
+
+def _ui_join(message: str, details: str | None = None) -> str:
+    if details:
+        return f"{message} — {details}"
+    return message
+
+def ui_success(message: str, details: str | None = None) -> None:
+    """Standard success message."""
+    import streamlit as st
+    st.success(_ui_join(f"Success: {message}", details))
+
+def ui_warning(message: str, details: str | None = None) -> None:
+    """Standard warning message."""
+    import streamlit as st
+    st.warning(_ui_join(f"Heads up: {message}", details))
+
+def ui_error(message: str, details: str | None = None) -> None:
+    """Standard error message."""
+    import streamlit as st
+    st.error(_ui_join(f"Something went wrong: {message}", details))
+
+def ui_info(message: str, details: str | None = None) -> None:
+    """Standard info / guidance message."""
+    import streamlit as st
+    st.info(_ui_join(f"FYI: {message}", details))
+
+def render_empty_state(title: str, description: str, primary_action_label: str | None = None, key: str | None = None):
+    """Friendly empty state with an optional primary action button.
+
+    Returns True if the primary action button is clicked.
+    """
+    import streamlit as st
+    with st.container():
+        st.markdown(f"### {title}")
+        st.caption(description)
+        clicked = False
+        if primary_action_label:
+            clicked = st.button(primary_action_label, key=key)
+        return clicked
+
+# ---- End UI helpers ----
+
 # === Proposal Builder normalization helpers ===
 
 def _delete_rfp_everywhere(conn, rfp_id: int) -> None:
@@ -13130,7 +13213,8 @@ def run_rfp_analyzer(conn) -> None:
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
         st.caption("Use this page to create RFP records, ingest files, and turn complex requirements into clear, organized analysis.")
-        st.info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
+        ui_info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
+        render_empty_state("No RFPs yet", "Start by creating an RFP record and ingesting the files you want to analyze.")
         ctx0 = st.session_state.get("rfp_selected_notice") or {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_new_title")
         s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_new_sol")
@@ -13188,7 +13272,7 @@ def run_rfp_analyzer(conn) -> None:
                 st.session_state["nav_target"] = "RFP Analyzer"
                 st.rerun()
             except Exception as e:
-                st.error(f"Create & ingest failed: {e}")
+                ui_error("Create & ingest failed.", str(e))
         return
 
     # New RFP inline form (always available)
