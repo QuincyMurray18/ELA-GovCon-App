@@ -7515,6 +7515,7 @@ def extract_clins_xlsx(file_bytes: bytes) -> list:
 # -------------------- Modules --------------------
 def run_contacts(conn: "sqlite3.Connection") -> None:
     st.header("Contacts")
+    st.caption("Use this page to manage contracting officers, partners, and agency contacts linked to your opportunities.")
     with st.form("add_contact", clear_on_submit=True):
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
@@ -7679,6 +7680,8 @@ def run_sam_watch(conn) -> None:
     from datetime import datetime, timedelta
 
     st.header("SAM Watch")
+    st.caption("Use this page to watch SAM for new opportunities, qualify good fits, and push the best notices into your deals pipeline.")
+    st.markdown("**Primary action on this page:** run a smart search, then use Add to Deals on any strong notice you want in your pipeline.")
 
 
     # If pagination was clicked, scroll viewport to top on rerun
@@ -10251,6 +10254,7 @@ def _export_docx(
         return None
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     st.header("Proposal Builder")
+    st.caption("Use this page to draft compliant proposals and assemble the major sections you need for submission.")
     df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
@@ -10425,6 +10429,7 @@ def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     return view, page, pages
 def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     st.header("Subcontractor Finder")
+    st.caption("Use this page to search for qualified subcontractors by location and service and add them to your pipeline.")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
     ctx = st.session_state.get("rfp_selected_notice", {})
@@ -10641,6 +10646,7 @@ def _calc_extended(qty: Optional[float], unit_price: Optional[float]) -> Optiona
 
 def run_quote_comparison(conn: "sqlite3.Connection") -> None:
     st.header("Quote Comparison")
+    st.caption("Use this page to compare vendor quotes side by side so you can pick competitive and profitable pricing.")
     df = pd.read_sql_query("SELECT id, title, solnum FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
         st.info("No RFPs in DB. Use RFP Analyzer to create one (Parse → Save).")
@@ -10790,6 +10796,7 @@ def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str,
 
 def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     st.header("Pricing Calculator")
+    st.caption("Use this page to build quick should cost estimates and translate inputs into structured pricing.")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer (parse & save) first.")
@@ -10902,6 +10909,7 @@ def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: O
 
 def run_win_probability(conn: "sqlite3.Connection") -> None:
     st.header("Win Probability")
+    st.caption("Use this page to score opportunities and estimate win probability based on fit, competition, and strategy.")
     df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer first.")
@@ -11150,6 +11158,7 @@ def _load_rfp_context(conn, rfp_id: str, max_chars: int = 200000) -> str:
 def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     import streamlit as st
     st.header("Chat Assistant — Y2")
+    st.caption("Use this page to ask questions, summarize documents, and get on demand capture and proposal support without leaving the app.")
     st.caption("CO Chat with memory. Uses One Page Analyzer context. Persists per RFP.")
     try:
         y2_ui_threaded_chat(conn)
@@ -11812,6 +11821,7 @@ def _ensure_deal_owner_schema(conn: "sqlite3.Connection") -> None:
 def run_crm(conn: "sqlite3.Connection") -> None:
     _ensure_deal_owner_schema(conn)
     st.header("CRM")
+    st.caption("Use this page to manage activities, tasks, and your deals pipeline so you always know what is moving and when revenue will land.")
     tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
 
     # Ensure Deals schema and CRM wiring are in sync
@@ -13119,6 +13129,7 @@ def run_rfp_analyzer(conn) -> None:
 
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
+        st.caption("Use this page to create RFP records, ingest files, and turn complex requirements into clear, organized analysis.")
         st.info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
         ctx0 = st.session_state.get("rfp_selected_notice") or {}
         t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_new_title")
@@ -13130,7 +13141,8 @@ def run_rfp_analyzer(conn) -> None:
         if 'op_new_files' in st.session_state and st.session_state.get('op_new_files'):
             st.session_state['_force_rfp_analyzer'] = True
             st.session_state['nav_target'] = 'RFP Analyzer'
-        if st.button("Create RFP & Ingest", key="op_create_ingest"):
+        st.markdown("### Primary action: Create RFP record and ingest")
+        if st.button("Create RFP record and ingest", key="op_create_ingest"):
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
@@ -13191,7 +13203,8 @@ def run_rfp_analyzer(conn) -> None:
         if 'op_inline_files' in st.session_state and st.session_state.get('op_inline_files'):
             st.session_state['_force_rfp_analyzer'] = True
             st.session_state['nav_target'] = 'RFP Analyzer'
-        if st.button("Create RFP & Ingest", key="op_inline_create"):
+        st.markdown("### Primary action: Create RFP record and ingest")
+        if st.button("Create RFP record and ingest", key="op_inline_create"):
             try:
                 with _closing(conn.cursor()) as cur:
                     cur.execute(
@@ -13723,6 +13736,7 @@ def run_capability_statement(conn):
             _orig_run_capability_statement(conn)
         else:
             st.header("Capability Statement")
+            st.caption("Use this page to generate and store tailored capability statements for specific agencies and NAICS codes.")
             st.info("Base UI not found in this build. Showing AI helper only.")
     except Exception as e:
         st.error(f"Capability Statement base UI error: {e}")
@@ -14286,6 +14300,8 @@ def run_outreach(conn):
         pass
 
     st.header("Outreach")
+    st.caption("Use this page to send targeted email campaigns to agencies and vendors and track your outreach work.")
+    st.markdown("**Primary action on this page:** build or pick a template, then use Mail Merge and Send to deliver batch emails.")
     with st.expander("Compliance (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
 
