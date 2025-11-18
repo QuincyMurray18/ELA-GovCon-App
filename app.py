@@ -4096,6 +4096,10 @@ def getenv_int(name: str, default: int) -> int:
     except Exception:
         return default
 
+
+import os
+from types import SimpleNamespace as _NS
+
 SETTINGS = _NS(
     APP_NAME=os.environ.get("ELA_APP_NAME", "ELA GovCon Suite"),
     APP_VERSION=os.environ.get("ELA_APP_VERSION", "X-Base"),
