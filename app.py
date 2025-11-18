@@ -11994,6 +11994,14 @@ def data_get_all_deals_for_detail(conn):
             conn,
             params=(),
         )
+        # Scope to current user when available
+        try:
+            import streamlit as st
+            _owner = st.session_state.get("current_user_name")
+            if _owner and "owner" in df.columns:
+                df = df[df["owner"].fillna("") == _owner]
+        except Exception:
+            pass
         return df
     except Exception as e:
         logger.exception("data_get_all_deals_for_detail failed")
@@ -13103,6 +13111,134 @@ def _import_csv_into_table(conn: "sqlite3.Connection", csv_file, table: str, sco
         st.error(f"Import failed: {e}")
         return 0
 
+
+# ---- Database schema doc & Postgres migration notes ----
+MIGRATION_NOTES = """### When to move from SQLite to Postgres
+
+Move to Postgres when:
+
+- Concurrent users regularly exceed 5–10 at the same time.
+- The SQLite database file grows beyond roughly 2–4 GB or you start to see frequent locking or "database is busy" errors.
+- You need stricter access control, row-level security, or high-availability features.
+- You plan to offer ELA GovCon as a multi-tenant SaaS to other companies and expect heavier load.
+
+### One-time migration plan
+
+1. Schema
+   - Create a Postgres database (for example: `ela_govcon`).
+   - Mirror the key SQLite tables (rfps, rfp_sections, deals, activities, tasks, contacts, vendors, rfq_packs, rfq_lines,
+     rfq_vendors, rfq_attach, proposals, proposal_sections, outreach_log, debug_log, saved_searches, alerts, chat tables, etc.)
+     with explicit types: INTEGER / BIGINT, NUMERIC, TEXT, TIMESTAMP WITH TIME ZONE, BOOLEAN.
+   - Keep the same primary keys and foreign keys. Preserve `tenant_id` and any `owner` / `user_id` columns.
+
+2. Data migration
+   - Put the app into maintenance mode so no new writes happen.
+   - Export each core table from SQLite to CSV using the Backup & Data tab or a small export script.
+   - For each table, use Postgres `\copy` from psql, for example:
+
+       \copy rfps(id, notice_id, title, status, due_date, agency, naics, set_aside, tenant_id)
+       FROM '/path/rfps.csv'
+       WITH (FORMAT csv, HEADER true);
+
+   - Spot-check row counts and a few sample records between SQLite and Postgres.
+
+3. Application connection changes
+   - Replace the `sqlite3.connect` call in `get_db()` with a Postgres driver (for example `psycopg2` or SQLAlchemy)
+     using a URL stored in `st.secrets`.
+   - Remove SQLite-only PRAGMAs and replace any `datetime('now')`, `INSERT OR IGNORE`, or `ON CONFLICT` patterns with
+     Postgres-friendly equivalents.
+   - Recreate the `schema_version` table in Postgres and run the migrations so future schema upgrades stay centralized.
+
+4. Cutover
+   - Point a test copy of the app at Postgres and validate SAM Watch, Deals, RFP Analyzer, Outreach, Subcontractor Finder,
+     and Proposal Builder end to end.
+   - When verified, point production to Postgres and keep the last SQLite file as a read-only backup.
+"""
+
+def _schema_markdown(conn: "sqlite3.Connection") -> str:
+    """Generate a simple schema document listing tables, columns, and types."""
+    from contextlib import closing as _closing
+    import pandas as _pd
+
+    lines: list[str] = []
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "SELECT name, type FROM sqlite_master "
+                "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' "
+                "ORDER BY type, name;"
+            )
+            entries = cur.fetchall()
+    except Exception:
+        return "Schema information not available."
+
+    # Short, human-friendly table descriptions (extend as needed).
+    table_desc: dict[str, str] = {
+        "rfps": "RFP / notice headers for each opportunity you are tracking.",
+        "rfp_sections": "Parsed RFP sections and L&M items for compliance tracking.",
+        "rfp_files": "Files attached to RFPs (PDF, DOCX, XLSX, etc.).",
+        "rfp_chunks": "Searchable text chunks used by the analyzer and chat tools.",
+        "deals": "Pipeline deals used by the CRM and win-probability dashboard.",
+        "activities": "CRM activities (calls, emails, tasks) linked to deals.",
+        "tasks": "Lightweight task list items linked to deals and contacts.",
+        "contacts": "COs, POCs, CORs, and other people in your CRM.",
+        "vendors": "Subcontractors / teaming partners and vendor metadata.",
+        "vendor_contacts": "Named contacts at each vendor (email, phone, role).",
+        "rfq_packs": "RFQ pricing packs created from CLINs or manual entry.",
+        "rfq_lines": "Individual RFQ line items with quantities and units.",
+        "rfq_vendors": "Vendor-specific RFQ metadata (quotes, status, notes).",
+        "rfq_attach": "Attachments linked to RFQ packs (exported worksheets, etc.).",
+        "lm_items": "Parsed L&M items and compliance checklist entries.",
+        "lm_meta": "Metadata for L&M parsing and checklist runs.",
+        "proposal_sections": "Stored proposal sections generated in Proposal Builder.",
+        "proposals": "Top-level proposals (name, rfp_id, version, status).",
+        "outreach_log": "Email blast log with per-recipient delivery status.",
+        "debug_log": "Internal debug log for errors and important events.",
+        "y2_threads": "Ask-the-CO / analyzer chat threads per RFP.",
+        "y2_messages": "Messages inside each y2 thread.",
+        "chat_plus_threads": "Chat+ threads linked to RFPs or generic topics.",
+        "chat_plus_messages": "Messages inside each Chat+ thread.",
+        "saved_searches": "Saved SAM Watch searches.",
+        "alerts": "SAM alert rules and their configuration.",
+        "smtp_settings": "Stored outbound SMTP sender accounts.",
+        "tenants": "Tenant records (for example: ELA, or future customer orgs).",
+        "current_tenant": "Pointer to the active tenant for this workspace.",
+    }
+
+    for name, obj_type in entries:
+        name = str(name)
+        obj_type = str(obj_type)
+        lines.append(f"### {name} ({obj_type})")
+        desc = table_desc.get(name)
+        if desc:
+            lines.append(desc)
+
+        try:
+            df_cols = _pd.read_sql_query(f"PRAGMA table_info({name});", conn)
+        except Exception:
+            df_cols = _pd.DataFrame()
+
+        if df_cols is not None and not df_cols.empty:
+            for _, row in df_cols.iterrows():
+                col_name = str(row.get("name", ""))
+                col_type = str(row.get("type") or "TEXT")
+                notnull = bool(row.get("notnull"))
+                dflt = row.get("dflt_value")
+                pk = bool(row.get("pk"))
+                meta_bits = [col_type]
+                if pk:
+                    meta_bits.append("PRIMARY KEY")
+                if notnull:
+                    meta_bits.append("NOT NULL")
+                if dflt not in (None, ""):
+                    meta_bits.append(f"DEFAULT {dflt}")
+                meta = ", ".join(meta_bits)
+                lines.append(f"- **{col_name}** — {meta}")
+        else:
+            lines.append("- (no column metadata available)")
+        lines.append("")
+
+    return "\n".join(lines) + "\n"
 def run_backup_and_data(conn: "sqlite3.Connection") -> None:
     st.header("Backup & Data")
     st.caption("WAL on; lightweight migrations; export/import CSV; backup/restore the SQLite DB.")
@@ -13163,7 +13299,8 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
     st.divider()
     st.subheader("Export / Import CSV")
     tables = ["rfps","lm_items","lm_meta","deals","activities","tasks","deal_stage_log",
-              "vendors","files","rfq_packs","rfq_lines","rfq_vendors","rfq_attach","contacts"]
+              "vendors","files","rfq_packs","rfq_lines","rfq_vendors","rfq_attach","contacts",
+              "proposals","proposal_sections","outreach_log","debug_log"]
     tsel = st.selectbox("Table", options=tables, key="persist_tbl")
     e1, e2 = st.columns([2,2])
     with e1:
@@ -13181,6 +13318,23 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
         if n:
             st.success(f"Imported {n} row(s) into {tsel}")
             st.rerun()
+
+    st.divider()
+    st.subheader("Schema document")
+    st.caption("Live view of the SQLite schema for this workspace (tables, columns, and types).")
+    try:
+        schema_md = _schema_markdown(conn)
+        st.markdown(schema_md)
+    except Exception as e:
+        st.info(f"Schema doc not available: {e}")
+
+    st.divider()
+    st.subheader("SQLite → Postgres migration plan")
+    st.caption("High-level checklist for moving this workspace to Postgres when you are ready.")
+    try:
+        st.markdown(MIGRATION_NOTES)
+    except Exception:
+        st.write("Set MIGRATION_NOTES for detailed migration guidance.")
 
 # ---------- Phase O: Global Theme & Layout ----------
 def _apply_theme_old() -> None:
@@ -13308,6 +13462,18 @@ def nav() -> str:
             break
 
     with st.sidebar:
+        st.markdown("#### User")
+        _known_users = ["Quincy", "Collin", "Charles"]
+        _current_default = st.session_state.get("current_user_name") or _known_users[0]
+        if _current_default not in _known_users:
+            _current_default = _known_users[0]
+        st.selectbox(
+            "Current user",
+            _known_users,
+            index=_known_users.index(_current_default),
+            key="current_user_name",
+        )
+
         st.markdown("#### Journeys")
         journey_labels = [j[0] for j in journeys]
         selected_journey = st.radio(
@@ -17526,6 +17692,14 @@ def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        try:
+            cur.execute("PRAGMA table_info(proposals);")
+            _cols = [r[1] for r in cur.fetchall()]
+            if "owner" not in _cols:
+                cur.execute("ALTER TABLE proposals ADD COLUMN owner TEXT;")
+        except Exception:
+            pass
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS proposal_sections(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17558,7 +17732,8 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
     if not title:
         title = f"Proposal for RFP #{int(rfp_id)}"
     with _closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO proposals(rfp_id, title) VALUES(?,?)", (int(rfp_id), title))
+        _owner = _x7_current_user()
+        cur.execute("INSERT INTO proposals(rfp_id, title, owner) VALUES(?,?,?)", (int(rfp_id), title, _owner))
         pid = cur.lastrowid
         for i, ln in enumerate(lines, start=1):
             cur.execute(
@@ -17567,6 +17742,16 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
             )
     conn.commit()
     return int(pid)
+
+
+def _x7_current_user() -> str:
+    """Return the current logical user name for scoping proposals."""
+    try:
+        import streamlit as st
+        val = st.session_state.get("current_user_name") or ""
+        return str(val).strip()
+    except Exception:
+        return ""
 
 def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
     import pandas as pd
@@ -18653,3 +18838,25 @@ def _ensure_phase3_schema(conn):
                         pass
     except Exception:
         return
+
+
+# --- User-scoped override for proposal listing --------------------------------
+def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
+    """
+    Return proposals for a given RFP, scoped to the current user when set.
+
+    Existing rows without an owner remain visible to all users; new rows
+    created after this build will set proposals.owner from _x7_current_user().
+    """
+    import pandas as pd
+    sql = "SELECT id, title, status, created_at FROM proposals WHERE rfp_id=?"
+    params = [int(rfp_id)]
+    _owner = _x7_current_user()
+    if _owner:
+        sql += " AND (owner = ? OR owner IS NULL)"
+        params.append(_owner)
+    sql += " ORDER BY id DESC;"
+    try:
+        return pd.read_sql_query(sql, conn, params=tuple(params))
+    except Exception:
+        return pd.DataFrame(columns=["id", "title", "status", "created_at"])
