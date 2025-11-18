@@ -9807,6 +9807,8 @@ def _export_docx(
         from docx import Document  # type: ignore
         from docx.shared import Pt, Inches, RGBColor  # type: ignore
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING  # type: ignore
+        from docx.oxml import OxmlElement  # type: ignore
+        from docx.oxml.ns import qn  # type: ignore
     except Exception as e:
         try:
             st.error(f"DOCX export unavailable: {e}")
@@ -10139,11 +10141,31 @@ def _export_docx(
     h = doc.add_heading(title_text, level=0)
     _style_paragraph(h, is_heading=True)
 
-    # Meta summary
+    # Meta summary (acts as intro on title page)
     if metadata:
         _para(doc, "Summary", bold=True)
         for k, v in metadata.items():
             _para(doc, f"{k}: {v}")
+
+    # New page for Table of Contents (second page)
+    doc.add_page_break()
+
+    # Table of Contents (Word will populate when you update fields)
+    toc_heading = doc.add_paragraph()
+    _style_paragraph(toc_heading, is_heading=True)
+    toc_run = toc_heading.add_run("Table of Contents")
+    toc_run.bold = True
+    toc_run.font.name = font_name
+    toc_run.font.size = Pt(font_size_pt + 1)
+
+    toc_para = doc.add_paragraph()
+    _style_paragraph(toc_para)
+    fld = OxmlElement("w:fldSimple")
+    fld.set(qn("w:instr"), 'TOC \\o "1-3" \\h \\z \\u')
+    toc_para._p.append(fld)
+
+    # Page break after TOC into main content
+    doc.add_page_break()
 
     # CLIN table
     if clins:
@@ -13005,39 +13027,82 @@ def nav() -> str:
     # Sidebar chrome
     st.sidebar.title("Workspace")
     st.sidebar.caption(BUILD_LABEL)
-    st.sidebar.caption(f"SHA {_file_hash()}")
+    try:
+        st.sidebar.caption(f"SHA {_file_hash()}")
+    except Exception:
+        pass
 
-    pages = [
-        "SAM Watch",
-        "RFP Analyzer",
-        "L and M Checklist",
-        "Proposal Builder",
-        "File Manager",
-        "Past Performance",
-        "White Paper Builder",
-        "Subcontractor Finder",
-        "Outreach",
-        "RFQ Pack",
-        "Backup & Data",
-        "Quote Comparison",
-        "Pricing Calculator",
-        "Win Probability",
-        "Chat Assistant",
-        "Capability Statement",
-        "Contacts",
-        "Deals",
+    # Journeys and grouped pages
+    journeys = [
+        ("SAM Watch", [
+            "SAM Watch",
+        ]),
+        ("RFP Analyzer", [
+            "RFP Analyzer",
+            "L and M Checklist",
+            "File Manager",
+            "Past Performance",
+            "White Paper Builder",
+            "RFQ Pack",
+        ]),
+        ("Deals and CRM", [
+            "Deals",
+            "Contacts",
+            "Quote Comparison",
+            "Pricing Calculator",
+            "Win Probability",
+        ]),
+        ("Proposal Builder", [
+            "Proposal Builder",
+            "Capability Statement",
+        ]),
+        ("Outreach", [
+            "Outreach",
+        ]),
+        ("Subcontractor Finder", [
+            "Subcontractor Finder",
+        ]),
+        ("Settings and Admin", [
+            "Backup & Data",
+            "Chat Assistant",
+        ]),
     ]
 
-    # Compute the index for the default page if any
-    if default_page in pages:
+    # Flat page list for defaults / compatibility
+    all_pages = [p for _, plist in journeys for p in plist]
+    if default_page not in all_pages:
+        default_page = all_pages[0]
+
+    # Pick default journey based on default_page
+    journey_index = 0
+    for idx, (_label, plist) in enumerate(journeys):
+        if default_page in plist:
+            journey_index = idx
+            break
+
+    with st.sidebar:
+        st.markdown("#### Journeys")
+        journey_labels = [j[0] for j in journeys]
+        selected_journey = st.radio(
+            "Choose a flow",
+            journey_labels,
+            index=journey_index,
+            key="nav_journey",
+        )
+
+        pages = dict(journeys)[selected_journey]
         try:
             default_index = pages.index(default_page)
         except ValueError:
             default_index = 0
-    else:
-        default_index = 0
 
-    choice = st.sidebar.selectbox("Go to", pages, index=default_index)
+        choice = st.selectbox(
+            "Page",
+            pages,
+            index=default_index,
+            key="nav_page",
+        )
+
     return choice
 
 def run_rfp_analyzer(conn) -> None:
