@@ -8182,10 +8182,8 @@ def run_sam_watch(conn) -> None:
     # Phase 3 Analyzer tab (renders even if Smart Search errors)
     with tab_analyzer:
         try:
-            if "run_rfp_analyzer" in globals():
-                run_rfp_analyzer(conn)
-            else:
-                _phase3_analyzer_inline(conn)
+            # Use the lightweight inline analyzer inside SAM Watch tabs
+            _phase3_analyzer_inline(conn)
         except Exception as e:
             st.exception(e)
     
