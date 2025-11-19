@@ -4136,25 +4136,122 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
     # Proposal drafting workspace
     with tab_proposal:
         st.subheader("Proposal Draft")
-        sel = st.multiselect("Sections to draft", DEFAULT_SECTIONS, default=DEFAULT_SECTIONS, key="onepage_sections_to_draft")
-        if st.button("Draft All Sections ▶", type="primary", help="Generate a first-pass draft for the selected sections.", key="onepage_draft_all"):
-            draft: Dict[str, str] = {}
-            for sec in sel:
-                draft[sec] = _draft_section(sec, combined)
-            st.session_state["onepage_draft"] = draft
+        sel = st.multiselect(
+            "Sections to draft",
+            DEFAULT_SECTIONS,
+            default=DEFAULT_SECTIONS,
+            key="onepage_sections_to_draft",
+        )
+
+        # Draft all sections via background job record
+        if st.button(
+            "Draft All Sections ▶",
+            type="primary",
+            help="Generate a first-pass draft for the selected sections.",
+            key="onepage_draft_all",
+        ):
+            from typing import Dict
+
+            if not sel:
+                st.warning("Select at least one section to draft.")
+            else:
+                # Enqueue job
+                conn_jobs = get_db()
+                payload = {
+                    "scope": "rfp_onepage_proposal_draft",
+                    "sections": list(sel),
+                    "notice_id": st.session_state.get("onepage_notice_id"),
+                }
+                job_id = jobs_enqueue(conn_jobs, job_type="pb_draft_all", payload=payload)
+                st.session_state["pb_draft_all_last_job_id"] = job_id
+
+                # Synchronous execution for now, but status is tracked in jobs table
+                try:
+                    total = max(len(sel), 1)
+                    jobs_update_status(
+                        conn_jobs,
+                        job_id,
+                        status="running",
+                        mark_started=True,
+                        progress=0.0,
+                    )
+                    draft: Dict[str, str] = {}
+                    for idx, sec in enumerate(sel):
+                        draft[sec] = _draft_section(sec, combined)
+                        jobs_update_status(
+                            conn_jobs,
+                            job_id,
+                            progress=(idx + 1) / float(total),
+                        )
+                    jobs_update_status(
+                        conn_jobs,
+                        job_id,
+                        status="done",
+                        mark_finished=True,
+                        result={"drafted_sections": list(draft.keys())},
+                    )
+                    st.session_state["onepage_draft"] = draft
+                    st.success("Drafted all selected sections.")
+                except Exception as exc:
+                    jobs_update_status(
+                        conn_jobs,
+                        job_id,
+                        status="failed",
+                        error_message=str(exc),
+                        mark_finished=True,
+                    )
+                    st.error(f"Drafting job failed: {exc!s}")
+
         draft = st.session_state.get("onepage_draft") or {}
         if draft:
             for sec, body in draft.items():
                 with st.expander(f"📝 {sec}", expanded=False):
                     st.text_area("Text", value=body, height=240, key=f"ta_{abs(hash(sec))}")
-        st.download_button(
-            "Download Full Draft (Markdown)",
-            data="\n\n".join([f"# {k}\n\n{v}" for k, v in (st.session_state.get('onepage_draft') or {}).items()]).encode("utf-8"),
-            file_name="proposal_draft.md",
-            mime="text/markdown",
-            disabled=not bool(st.session_state.get("onepage_draft")),
-            key="onepage_download_draft",
-        )
+
+        # Lightweight job status panel for this feature
+        with st.expander("Draft-all job status", expanded=False):
+            import pandas as _pd
+
+            conn_jobs = get_db()
+            ensure_jobs_schema(conn_jobs)
+
+            try:
+                _user_name = get_current_user_name()
+            except Exception:
+                _user_name = ""
+
+            if not _user_name:
+                st.caption("Select a user in the sidebar to see your jobs.")
+            else:
+                _df_jobs = jobs_list_for_user(conn_jobs, user_name=_user_name, limit=25)
+                if not _df_jobs.empty:
+                    try:
+                        _df_jobs = _df_jobs[_df_jobs["type"] == "pb_draft_all"]
+                    except Exception:
+                        pass
+                if _df_jobs.empty:
+                    st.caption("No 'Draft all sections' jobs for this user yet.")
+                else:
+                    cols = [
+                        c
+                        for c in [
+                            "id",
+                            "type",
+                            "status",
+                            "progress",
+                            "created_at",
+                            "started_at",
+                            "finished_at",
+                            "error_message",
+                        ]
+                        if c in _df_jobs.columns
+                    ]
+                    st.dataframe(
+                        _df_jobs[cols].head(10),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
 
     # Notes and full-text search
     with tab_notes:
