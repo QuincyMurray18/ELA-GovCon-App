@@ -8625,20 +8625,15 @@ def run_research_tab(conn: "sqlite3.Connection") -> None:
 import datetime as _dt, hashlib, re as _re
 
 def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
-    """Insert-or-skip helper used by Proposal Builder uploads.
-
-    This delegates to the Phase 1 helper so it always stays in sync with the
-    current rfp_files schema (bytes/pages/status/src_url, etc.).
-    """
-    return _insert_or_skip_rfp_file(
-        conn,
-        int(rfp_id),
-        filename,
-        blob or b"",
-        mime or "application/octet-stream",
-        src_url=None,
-        status="uploaded_from_proposal_builder",
-    )
+    from contextlib import closing as _closing
+    sha = hashlib.sha256(blob or b"").hexdigest()
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
+            "VALUES (?, ?, ?, ?, ?,NULL,?, datetime('now'))",
+            (int(rfp_id), filename, mime or "application/octet-stream", sha, blob)
+        )
+        conn.commit()
 
 def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
     try:
@@ -18791,6 +18786,234 @@ def jobs_update_status(
         pass
 
 
+
+# === Background jobs worker helpers (single-file worker mode) ===
+
+def _jobs_worker_connect_db():
+    """Open a new SQLite connection to the same DB as the app.
+
+    This is used by the background worker loop when the file is run
+    in "worker" mode, for example:
+
+        python app.py --worker
+
+    The same DB_PATH, schema and helpers are reused so the worker
+    stays in sync with the main application.
+    """
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+
+    db_path = _Path(DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = _sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = _sqlite3.Row  # convenient dict-like rows
+    ensure_jobs_schema(conn)
+    return conn
+
+
+def _jobs_worker_fetch_next_queued_job(conn):
+    """Atomically fetch the next queued job and mark it as running.
+
+    Returns (job_id, job_type, payload_dict) or None if nothing is queued.
+    """
+    import json as _json
+    cur = conn.cursor()
+    # BEGIN IMMEDIATE obtains a RESERVED lock; suitable for a single worker.
+    cur.execute("BEGIN IMMEDIATE;")
+    cur.execute(
+        "SELECT id, type, payload_json FROM jobs "
+        "WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1;"
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.execute("COMMIT;")
+        return None
+
+    job_id = int(row["id"])
+    job_type = str(row["type"] or "")
+    payload_json = row["payload_json"] or "{}"
+    try:
+        payload = _json.loads(payload_json) if payload_json else {}
+    except Exception:
+
+        payload = {}
+
+    # Mark as running and set started_at
+    cur.execute(
+        "UPDATE jobs SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE id = ?;",
+        (job_id,),
+    )
+    cur.execute("COMMIT;")
+    return job_id, job_type, payload
+
+
+def _jobs_worker_handle_backup_full(conn, job_id: int, payload: dict):
+    """Handler for job type='backup_full'.
+
+    Copies the SQLite DB file to a timestamped backup under a 'backups'
+    folder alongside the main DB file. Progress is written to jobs.progress
+    so the UI can display a progress bar.
+    """
+    import time as _time
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    db_path = _Path(payload.get("db_path") or DB_PATH)
+    if not db_path.exists():
+        raise FileNotFoundError(f"DB file not found at {db_path}")
+
+    backups_dir = db_path.parent / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = _time.strftime("%Y%m%d_%H%M%S")
+    backup_path = backups_dir / f"backup_{ts}.db"
+
+    # Start progress
+    try:
+        jobs_update_status(conn, job_id, progress=0.1, mark_started=True)
+    except Exception:
+        # best-effort; failure here should not abort the backup
+        pass
+
+    # Copy DB file
+    _shutil.copy2(str(db_path), str(backup_path))
+
+    # Finalize
+    jobs_update_status(
+        conn,
+        job_id,
+        status="done",
+        progress=1.0,
+        result={"backup_path": str(backup_path)},
+        mark_finished=True,
+    )
+
+
+def _jobs_worker_handle_restore_from_backup(conn, job_id: int, payload: dict):
+    """Handler for job type='restore_from_backup'.
+
+    Overwrites the live DB file with the uploaded backup path in
+    payload['upload_path']. Keeps a pre-restore copy of the current DB.
+    """
+    import time as _time
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    db_path = _Path(payload.get("db_path") or DB_PATH)
+    upload_path = _Path(payload.get("upload_path") or "")
+
+    if not upload_path.exists():
+        raise FileNotFoundError(f"Uploaded backup not found at {upload_path}")
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Optional safety: keep a pre-restore copy if DB exists
+    pre_backup_path = None
+    if db_path.exists():
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        pre_backup_path = db_path.parent / f"pre_restore_{ts}.db"
+        _shutil.copy2(str(db_path), str(pre_backup_path))
+
+    try:
+        jobs_update_status(conn, job_id, progress=0.25, mark_started=True)
+    except Exception:
+        pass
+
+    # Perform restore (overwrite DB)
+    _shutil.copy2(str(upload_path), str(db_path))
+
+    jobs_update_status(
+        conn,
+        job_id,
+        status="done",
+        progress=1.0,
+        result={
+            "restored_from": str(upload_path),
+            "db_path": str(db_path),
+            "pre_restore_backup": str(pre_backup_path) if pre_backup_path else None,
+        },
+        mark_finished=True,
+    )
+
+
+def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict):
+    """Fallback handler for job types the worker does not yet implement."""
+    jobs_update_status(
+        conn,
+        job_id,
+        status="failed",
+        error_message=f"Worker does not handle job type '{job_type}' yet.",
+        mark_finished=True,
+    )
+
+
+def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
+    """Dispatch a single job by type and handle errors uniformly."""
+    import traceback as _traceback
+
+    try:
+        if job_type == "backup_full":
+            _jobs_worker_handle_backup_full(conn, job_id, payload)
+        elif job_type == "restore_from_backup":
+            _jobs_worker_handle_restore_from_backup(conn, job_id, payload)
+        else:
+            _jobs_worker_handle_unknown(conn, job_id, job_type, payload)
+    except Exception as _exc:
+        err_msg = f"{_exc.__class__.__name__}: {_exc}"
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=err_msg[:500],
+                mark_finished=True,
+            )
+        except Exception:
+            _traceback.print_exc()
+
+
+def jobs_worker_loop(sleep_seconds: float = 3.0) -> None:
+    """Main background worker loop.
+
+    Usage (separate process):
+
+        python app.py --worker
+
+    It will:
+    - Connect to the same DB as the app
+    - Repeatedly fetch the next queued job
+    - Mark it as running
+    - Execute the handler
+    - Sleep briefly when there is no work
+    """
+    import time as _time
+    import traceback as _traceback
+
+    while True:
+        conn = None
+        try:
+            conn = _jobs_worker_connect_db()
+            job_info = _jobs_worker_fetch_next_queued_job(conn)
+            if not job_info:
+                _time.sleep(sleep_seconds)
+                continue
+
+            job_id, job_type, payload = job_info
+            print(f"[worker] Starting job #{job_id} type={job_type!r}")
+            _jobs_worker_run_single(conn, job_id, job_type, payload)
+            print(f"[worker] Finished job #{job_id} type={job_type!r}")
+        except Exception:
+            _traceback.print_exc()
+            _time.sleep(sleep_seconds)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
 def jobs_list_for_user(conn: "sqlite3.Connection", user_name: str, limit: int = 50):
     """Return a DataFrame of recent jobs for the given user name."""
     import pandas as _pd
@@ -18865,12 +19088,30 @@ def run_my_jobs(conn: "sqlite3.Connection") -> None:
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+
 if __name__ == '__main__':
-    try:
-        main()
-    except NameError:
-        # fallback: run default entry if main() not defined in this build
-        pass
+    import argparse as _argparse
+    import traceback as _traceback
+
+    _parser = _argparse.ArgumentParser(add_help=True)
+    _parser.add_argument(
+        "--worker",
+        action="store_true",
+        help="Run the background jobs worker loop instead of the Streamlit app.",
+    )
+    _args, _unknown = _parser.parse_known_args()
+
+    if getattr(_args, "worker", False):
+        try:
+            jobs_worker_loop()
+        except Exception:
+            _traceback.print_exc()
+    else:
+        try:
+            main()
+        except NameError:
+            # fallback: run default entry if main() not defined in this build
+            pass
 
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
