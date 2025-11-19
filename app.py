@@ -9601,12 +9601,72 @@ def _run_rfp_analyzer_phase3(conn):
                         st.error(out.get("error","Index error"))
             with c2:
                 if st.button("Rebuild index (overwrite)"):
+                    # Track FTS index rebuild as a background job.
+                    try:
+                        ensure_jobs_schema(conn)
+                    except Exception:
+                        pass
+
+                    try:
+                        try:
+                            _user_name = get_current_user_name()
+                        except Exception:
+                            _user_name = ""
+                        payload = {
+                            "scope": "fts_index_rebuild",
+                            "rfp_id": int(rid_y1),
+                        }
+                        job_id = jobs_enqueue(
+                            conn,
+                            job_type="fts_index_rebuild",
+                            payload=payload,
+                            created_by=_user_name or None,
+                        )
+                    except Exception:
+                        job_id = None
+
                     with st.spinner("Rebuilding"):
+                        try:
+                            if job_id:
+                                jobs_update_status(
+                                    conn,
+                                    job_id,
+                                    status="running",
+                                    progress=0.1,
+                                    mark_started=True,
+                                )
+                        except Exception:
+                            pass
+
                         out = y1_index_rfp(conn, int(rid_y1), rebuild=True)
+
                     if out.get("ok"):
                         st.success(f"Rebuilt. Added {out.get('added',0)} chunk(s).")
+                        try:
+                            if job_id:
+                                jobs_update_status(
+                                    conn,
+                                    job_id,
+                                    status="done",
+                                    progress=1.0,
+                                    mark_finished=True,
+                                    result={"added": out.get("added", 0)},
+                                )
+                        except Exception:
+                            pass
                     else:
                         st.error(out.get("error","Index error"))
+                        try:
+                            if job_id:
+                                jobs_update_status(
+                                    conn,
+                                    job_id,
+                                    status="failed",
+                                    error_message=str(out.get("error", "Index error")),
+                                    mark_finished=True,
+                                )
+                        except Exception:
+                            pass
             q_y1 = st.text_area("Your question", height=120, key="y1_q")
             k = y_auto_k(q_y1)
             if st.button("Ask with citations", type="primary"):
@@ -9741,11 +9801,63 @@ def _run_rfp_analyzer_phase3(conn):
                     st.success(f"Updated {len(ids)} item(s).")
                     st.rerun()
             # Export
+
             if st.button("Export Compliance Matrix (CSV)", key="lm_export_csv"):
+                # Track compliance report export as a job.
+                try:
+                    ensure_jobs_schema(conn)
+                except Exception:
+                    pass
+
+                try:
+                    try:
+                        _user_name = get_current_user_name()
+                    except Exception:
+                        _user_name = ""
+                    payload = {
+                        "scope": "compliance_report_export",
+                        "rfp_id": int(_ensure_selected_rfp_id(conn)),
+                    }
+                    job_id = jobs_enqueue(
+                        conn,
+                        job_type="compliance_report_export",
+                        payload=payload,
+                        created_by=_user_name or None,
+                    )
+                except Exception:
+                    job_id = None
+
                 out = df_lm.copy()
                 out.insert(0, "rfp_id", int(_ensure_selected_rfp_id(conn)))
                 csv_bytes = out.to_csv(index=False).encode("utf-8")
+
+                try:
+                    if job_id:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="running",
+                            progress=0.5,
+                            mark_started=True,
+                        )
+                except Exception:
+                    pass
+
                 st.download_button("Download CSV", data=csv_bytes, file_name=f"rfp_{rid}_compliance.csv", mime="text/csv", key="lm_dl")
+
+                try:
+                    if job_id:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="done",
+                            progress=1.0,
+                            mark_finished=True,
+                            result={"bytes": len(csv_bytes)},
+                        )
+                except Exception:
+                    pass
+
 
     # ---------------- CLINs / Dates / POCs ----------------
     with tab_data:
@@ -10983,8 +11095,48 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
         out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
         out_path = os.path.join(DATA_DIR, out_name)
+
         if st.button("Export DOCX", type="primary"):
+            # Track this heavy export as a background job in the jobs table.
+            try:
+                ensure_jobs_schema(conn)
+            except Exception:
+                pass
+
+            try:
+                try:
+                    _user_name = get_current_user_name()
+                except Exception:
+                    _user_name = ""
+                payload = {
+                    "scope": "proposal_export_docx",
+                    "rfp_id": int(rfp_id) if rfp_id is not None else None,
+                    "section_keys": [k for k in selected],
+                    "out_name": out_name,
+                }
+                job_id = jobs_enqueue(
+                    conn,
+                    job_type="proposal_export_docx",
+                    payload=payload,
+                    created_by=_user_name or None,
+                )
+            except Exception:
+                job_id = None
+
+            # Existing synchronous export logic (still runs inline for now).
             sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
+            try:
+                if job_id:
+                    jobs_update_status(
+                        conn,
+                        job_id,
+                        status="running",
+                        progress=0.1,
+                        mark_started=True,
+                    )
+            except Exception:
+                pass
+
             exported = _export_docx(
                 out_path,
                 doc_title=_first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
@@ -10992,8 +11144,8 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                 clins=_ctxd(ctx, "clins"),
                 checklist=_ctxd(ctx, "items"),
                 metadata={
-                    "Solicitation": _first_row_value(_ctxd(ctx, "rfp"), "solnum", ""),
-                    "Notice ID": _first_row_value(_ctxd(ctx, "rfp"), "notice_id", ""),
+                    "rfp_id": int(rfp_id) if rfp_id is not None else None,
+                    "notice_id": _ctxd(ctx, "rfp", {}).get("notice_id"),
                 },
                 font_name=font_name,
                 font_size_pt=int(font_size),
@@ -11001,7 +11153,19 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             )
             if exported:
                 st.success(f"Exported to {exported}")
-                
+                try:
+                    if job_id:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="done",
+                            progress=1.0,
+                            mark_finished=True,
+                            result={"path": str(exported)},
+                        )
+                except Exception:
+                    pass
+
                 try:
                     with open(exported, "rb") as _f:
                         _data = _f.read()
@@ -11014,7 +11178,17 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     )
                 except Exception as _e:
                     st.error(f"Download unavailable: {_e}")
-
+                    try:
+                        if job_id:
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="failed",
+                                error_message=str(_e),
+                                mark_finished=True,
+                            )
+                    except Exception:
+                        pass
         # [removed] Legacy Snippets/Citations panel hidden
 # ---------- Subcontractor Finder (Phase D) ----------
     try:
@@ -12803,9 +12977,58 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     ).reset_index().sort_values("expected", ascending=False)
                     _styled_dataframe(summary, use_container_width=True, hide_index=True)
                     if st.button("Export Pipeline CSV", key="pipe_export"):
+                        # Track pipeline metrics export / rebuild as a job.
+                        try:
+                            ensure_jobs_schema(conn)
+                        except Exception:
+                            pass
+
+                        try:
+                            try:
+                                _user_name = get_current_user_name()
+                            except Exception:
+                                _user_name = ""
+                            payload = {
+                                "scope": "pipeline_metrics_rebuild",
+                                "owner_scope": owner_scope,
+                            }
+                            job_id = jobs_enqueue(
+                                conn,
+                                job_type="pipeline_metrics_rebuild",
+                                payload=payload,
+                                created_by=_user_name or None,
+                            )
+                        except Exception:
+                            job_id = None
+
                         path = str(Path(DATA_DIR) / "pipeline.csv")
+                        try:
+                            if job_id:
+                                jobs_update_status(
+                                    conn,
+                                    job_id,
+                                    status="running",
+                                    progress=0.5,
+                                    mark_started=True,
+                                )
+                        except Exception:
+                            pass
+
                         df.to_csv(path, index=False)
                         st.markdown(f"[Download CSV]({path})")
+
+                        try:
+                            if job_id:
+                                jobs_update_status(
+                                    conn,
+                                    job_id,
+                                    status="done",
+                                    progress=1.0,
+                                    mark_finished=True,
+                                    result={"path": path, "rows": int(len(df) if df is not None else 0)},
+                                )
+                        except Exception:
+                            pass
             
                 # Editable pipeline table with stage logging
                 st.subheader("Edit Pipeline")
@@ -13430,10 +13653,60 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.markdown("### Build & Export")
     czip, cmcsv, cclin = st.columns([2,2,2])
     with czip:
+
         if st.button("Build RFQ ZIP", type="primary", key="rfq_build_zip"):
+            # Track RFQ pack ZIP build as a job.
+            try:
+                ensure_jobs_schema(conn)
+            except Exception:
+                pass
+
+            try:
+                try:
+                    _user_name = get_current_user_name()
+                except Exception:
+                    _user_name = ""
+                payload = {
+                    "scope": "rfq_pack_build",
+                    "pack_id": int(pk_sel) if pk_sel is not None else None,
+                }
+                job_id = jobs_enqueue(
+                    conn,
+                    job_type="rfq_pack_build",
+                    payload=payload,
+                    created_by=_user_name or None,
+                )
+            except Exception:
+                job_id = None
+
+            try:
+                if job_id:
+                    jobs_update_status(
+                        conn,
+                        job_id,
+                        status="running",
+                        progress=0.1,
+                        mark_started=True,
+                    )
+            except Exception:
+                pass
+
             z = _rfq_build_zip(conn, int(pk_sel))
             if z:
                 st.success("ZIP ready"); st.markdown(f"[Download ZIP]({z})")
+                try:
+                    if job_id:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="done",
+                            progress=1.0,
+                            mark_finished=True,
+                            result={"zip_path": str(z)},
+                        )
+                except Exception:
+                    pass
+
 
     with cmcsv:
         if st.button("Export Vendors Mail-Merge CSV", key="rfq_mail_csv"):
@@ -13783,25 +14056,71 @@ def run_backup_and_data(conn: "sqlite3.Connection") -> None:
                 st.error(f"ANALYZE failed: {e}")
 
     st.divider()
-    st.subheader("Backup & Restore")
-    b1, b2 = st.columns([2,2])
-    with b1:
-        if st.button("Create Backup (.db)"):
-            p = _backup_db(conn)
-            if p:
-                st.success(f"Backup created: /mnt/data/appmajorupdates.scrolltop.v4.py")
-                try:
-                    data = Path(p).read_bytes()
-                    st.download_button("Download backup", data=data, file_name=Path(p).name, mime="application/octet-stream", key=f"dl_backup_{Path(p).name}")
-                except Exception as e:
-                    st.error(f"Could not open backup for download: {e}")
-    with b2:
-        up = st.file_uploader("Restore from .db file", type=["db","sqlite","sqlite3"])
-        if up and st.button("Restore Now"):
-            ok = _restore_db_from_upload(conn, up)
-            if ok:
-                st.success("Restore completed. Please rerun the app.")
 
+    st.subheader("Backup & Restore")
+    b1, b2 = st.columns([2, 2])
+
+    # Backup is now queued as a background job (backup_full), not run inline.
+    with b1:
+        if st.button("Queue Backup (.db)", key="backup_queue_btn"):
+            try:
+                ensure_jobs_schema(conn)
+                try:
+                    user_name = get_current_user_name()
+                except Exception:
+                    user_name = ""
+                payload = {
+                    "scope": "backup_full",
+                    "db_path": _db_path_from_conn(conn),
+                    "tenant_id": _current_tenant(conn),
+                }
+                job_id = jobs_enqueue(
+                    conn,
+                    job_type="backup_full",
+                    payload=payload,
+                    created_by=user_name or None,
+                )
+                st.success(f"Backup job queued as #{job_id}. Track progress in the My Jobs tab.")
+            except Exception as e:
+                st.error(f"Could not queue backup job: {e}")
+
+    # Restore is also handled via a background job (restore_from_backup).
+    with b2:
+        up = st.file_uploader(
+            "Upload backup .db file to restore from",
+            type=["db", "sqlite", "sqlite3"],
+            key="backup_restore_upload",
+        )
+        if up and st.button("Queue Restore", key="backup_restore_btn"):
+            try:
+                ensure_jobs_schema(conn)
+                try:
+                    user_name = get_current_user_name()
+                except Exception:
+                    user_name = ""
+                tmp = Path(DATA_DIR) / ("restore_job_" + _safe_name(up.name))
+                try:
+                    tmp.write_bytes(up.getbuffer())
+                except Exception as e:
+                    st.error(f"Could not store uploaded backup file: {e}")
+                else:
+                    payload = {
+                        "scope": "restore_from_backup",
+                        "upload_name": up.name,
+                        "upload_path": str(tmp),
+                        "db_path": _db_path_from_conn(conn),
+                        "tenant_id": _current_tenant(conn),
+                    }
+                    job_id = jobs_enqueue(
+                        conn,
+                        job_type="restore_from_backup",
+                        payload=payload,
+                        created_by=user_name or None,
+                    )
+                    st.warning("Restoring a backup will overwrite the current SQLite DB file once the job runs.")
+                    st.success(f"Restore job queued as #{job_id}. Track progress in the My Jobs tab.")
+            except Exception as e:
+                st.error(f"Could not queue restore job: {e}")
     st.divider()
     st.subheader("Export / Import CSV")
     tables = ["rfps","lm_items","lm_meta","deals","activities","tasks","deal_stage_log",
@@ -15298,16 +15617,74 @@ def render_outreach_mailmerge(conn):
         do = st.button("Send batch", type="primary", key="o3_send")
     with c3:
         maxn = st.number_input("Max to send", min_value=1, max_value=5000, value=500, step=50, key="o3_max")
+
     if (test or do) and rows is not None and hasattr(rows, "empty") and not rows.empty:
         try:
             if "_o3_send_batch" in globals():
+                total_rows = len(rows)
+                large_batch = total_rows >= 50
                 if test:
                     st.info("Test run: rendering only, no SMTP.")
                     # call with test_only=True
                     out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn), attachments=attach_paths)
+                    st.success("Test run executed")
                 else:
-                    out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn), attachments=attach_paths)
-                st.success("Send function executed")
+                    job_id = None
+                    if large_batch:
+                        # For large sends, create a job record so it appears in My Jobs.
+                        try:
+                            ensure_jobs_schema(conn)
+                            payload = {
+                                "sender": sender,
+                                "subject_tpl": subj,
+                                "html_tpl": body,
+                                "max_send": int(maxn),
+                                "attachments": attach_paths,
+                                "row_count": int(total_rows),
+                            }
+                            job_id = jobs_enqueue(
+                                conn,
+                                job_type="outreach_batch_send",
+                                payload=payload,
+                                created_by=get_current_user_name(),
+                            )
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="running",
+                                progress=0.0,
+                                mark_started=True,
+                            )
+                        except Exception:
+                            job_id = None
+                    try:
+                        out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn), attachments=attach_paths)
+                        if large_batch and job_id:
+                            sent_count = 0
+                            try:
+                                if isinstance(out, tuple) and out:
+                                    sent_count = int(out[0] or 0)
+                            except Exception:
+                                sent_count = 0
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="done",
+                                progress=1.0,
+                                mark_finished=True,
+                                result={"sent": sent_count, "row_count": int(total_rows)},
+                            )
+                        st.success("Send function executed")
+                    except Exception as e:
+                        if large_batch and job_id:
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="failed",
+                                error_message=str(e),
+                                mark_finished=True,
+                            )
+                        raise
             else:
                 st.warning("Send function not available in this build.")
         except Exception as e:
