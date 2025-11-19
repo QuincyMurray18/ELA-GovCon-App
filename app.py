@@ -8885,41 +8885,122 @@ def _run_rfp_analyzer_phase3(conn):
                 if not uploads:
                     st.warning("Choose at least one file.")
                 else:
-                    with st.spinner("Saving files, indexing, and extracting…"):
-                        for up in uploads:
-                            data = up.read() or b""
-                            name = up.name
-                            guess = mimetypes.guess_type(name)[0]
-                            mime = up.type or guess or "application/octet-stream"
+                    # Enqueue and run ingest/analyze as a tracked job
+                    conn_jobs = get_db()
+                    ensure_jobs_schema(conn_jobs)
+                    payload = {
+                        "scope": "rfp_ingest_analyze_onepage",
+                        "rfp_id": int(_ensure_selected_rfp_id(conn_jobs)),
+                        "filenames": [up.name for up in uploads] if uploads else [],
+                    }
+                    try:
+                        current_user = get_current_user_name()
+                    except Exception:
+                        current_user = ""
+                    job_id = jobs_enqueue(
+                        conn_jobs,
+                        job_type="rfp_ingest_analyze",
+                        payload=payload,
+                        created_by=current_user or None,
+                    )
+                    st.session_state["rfp_ingest_analyze_last_job_id"] = job_id
 
-                            if name.lower().endswith(".zip"):
-                                try:
-                                    zf = zipfile.ZipFile(io.BytesIO(data))
-                                    for member in zf.namelist():
-                                        if member.endswith("/"):
-                                            continue
-                                        try:
-                                            blob = zf.read(member)
-                                            _p3_insert_or_skip_file(conn, int(_ensure_selected_rfp_id(conn)), member, blob, mimetypes.guess_type(member)[0] or "application/octet-stream")
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    _p3_insert_or_skip_file(conn, int(_ensure_selected_rfp_id(conn)), name, data, mime)
-                            else:
-                                _p3_insert_or_skip_file(conn, int(_ensure_selected_rfp_id(conn)), name, data, mime)
+                    try:
+                        total_files = len(uploads) if uploads else 0
+                        if total_files <= 0:
+                            total_files = 1
 
-                        try:
-                            y1_index_rfp(conn, int(_ensure_selected_rfp_id(conn)), rebuild=False)
-                        except Exception:
-                            pass
-                        try:
-                            find_section_M(conn, int(_ensure_selected_rfp_id(conn)))
-                        except Exception:
-                            pass
+                        jobs_update_status(
+                            conn_jobs,
+                            job_id,
+                            status="running",
+                            mark_started=True,
+                            progress=0.0,
+                        )
 
-                    st.success("Files added and Analyzer updated.")
-                    st.rerun()
+                        processed = 0
+                        with st.spinner("Saving files, indexing, and extracting…"):
+                            for up in uploads:
+                                data_bytes = up.read() or b""
+                                name = up.name
+                                guess = mimetypes.guess_type(name)[0]
+                                mime = up.type or guess or "application/octet-stream"
 
+                                if name.lower().endswith(".zip"):
+                                    try:
+                                        zf = zipfile.ZipFile(io.BytesIO(data_bytes))
+                                        for member in zf.namelist():
+                                            if member.endswith("/"):
+                                                continue
+                                            try:
+                                                blob = zf.read(member)
+                                                _p3_insert_or_skip_file(
+                                                    conn,
+                                                    int(_ensure_selected_rfp_id(conn)),
+                                                    member,
+                                                    blob,
+                                                    mimetypes.guess_type(member)[0] or "application/octet-stream",
+                                                )
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        _p3_insert_or_skip_file(
+                                            conn,
+                                            int(_ensure_selected_rfp_id(conn)),
+                                            name,
+                                            data_bytes,
+                                            mime,
+                                        )
+                                else:
+                                    _p3_insert_or_skip_file(
+                                        conn,
+                                        int(_ensure_selected_rfp_id(conn)),
+                                        name,
+                                        data_bytes,
+                                        mime,
+                                    )
+
+                                processed += 1
+                                jobs_update_status(
+                                    conn_jobs,
+                                    job_id,
+                                    progress=processed / float(total_files),
+                                )
+
+                            try:
+                                y1_index_rfp(
+                                    conn,
+                                    int(_ensure_selected_rfp_id(conn)),
+                                    rebuild=False,
+                                )
+                            except Exception:
+                                pass
+                            try:
+                                find_section_M(
+                                    conn,
+                                    int(_ensure_selected_rfp_id(conn)),
+                                )
+                            except Exception:
+                                pass
+
+                        jobs_update_status(
+                            conn_jobs,
+                            job_id,
+                            status="done",
+                            mark_finished=True,
+                            result={"files_processed": processed},
+                        )
+                        st.success("Files added and Analyzer updated.")
+                        st.rerun()
+                    except Exception as exc:
+                        jobs_update_status(
+                            conn_jobs,
+                            job_id,
+                            status="failed",
+                            error_message=str(exc),
+                            mark_finished=True,
+                        )
+                        st.error(f"RFP ingest/analyze job failed: {exc!s}")
         with col2:
             if st.button("Fetch from SAM.gov ▶", key="onepage_fetch_sam"):
                 with st.spinner("Fetching attachments from SAM.gov…"):
@@ -8936,6 +9017,49 @@ def _run_rfp_analyzer_phase3(conn):
                         st.error(f"SAM fetch error: {e}")
                 st.rerun()
 
+
+        with st.expander("RFP ingest job status", expanded=False):
+            import pandas as _pd
+
+            conn_jobs = get_db()
+            ensure_jobs_schema(conn_jobs)
+
+            try:
+                _user_name = get_current_user_name()
+            except Exception:
+                _user_name = ""
+
+            if not _user_name:
+                st.caption("Select a user in the sidebar to see your jobs.")
+            else:
+                _df_jobs = jobs_list_for_user(conn_jobs, user_name=_user_name, limit=25)
+                if not _df_jobs.empty:
+                    try:
+                        _df_jobs = _df_jobs[_df_jobs["type"] == "rfp_ingest_analyze"]
+                    except Exception:
+                        pass
+                if _df_jobs.empty:
+                    st.caption("No 'RFP ingest & analyze' jobs for this user yet.")
+                else:
+                    cols = [
+                        c
+                        for c in [
+                            "id",
+                            "type",
+                            "status",
+                            "progress",
+                            "created_at",
+                            "started_at",
+                            "finished_at",
+                            "error_message",
+                        ]
+                        if c in _df_jobs.columns
+                    ]
+                    st.dataframe(
+                        _df_jobs[cols].head(10),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
     # Build pages for One-Page Analyzer
     try:
         df_files = pd.read_sql_query(
