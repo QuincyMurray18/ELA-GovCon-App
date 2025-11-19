@@ -14386,17 +14386,17 @@ def run_rfp_analyzer(conn) -> None:
     # New RFP inline form (always available)
     with st.expander("➕ Start a new RFP", expanded=False):
         ctx0 = st.session_state.get("rfp_selected_notice") or {}
-        t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title")
-        s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol")
-        u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam", placeholder="https://sam.gov/")
+        t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title_main")
+        s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol_main")
+        u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam_main", placeholder="https://sam.gov/")
         ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
-                               accept_multiple_files=True, key="op_inline_files")
+                               accept_multiple_files=True, key="op_inline_files_main")
         # Keep on RFP Analyzer after selecting files
         if 'op_inline_files' in st.session_state and st.session_state.get('op_inline_files'):
             st.session_state['_force_rfp_analyzer'] = True
             st.session_state['nav_target'] = 'RFP Analyzer'
         st.markdown("### Primary action: Create RFP record and ingest")
-        if st.button("Create RFP record and ingest", key="op_inline_create"):
+        if st.button("Create RFP record and ingest", key="op_inline_create_main"):
             try:
                 new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
                 ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
