@@ -7898,11 +7898,11 @@ def run_sam_watch(conn) -> None:
 
             c1, c2, c3 = st.columns([2, 2, 2])
             with c1:
-                use_dates = st.checkbox("Filter by posted date", value=False, key="sam_use_dates")
+                use_dates = st.checkbox("Filter by posted date", value=False, key="sam_use_dates", help="Limit results to notices posted within this date range.")
             with c2:
-                active_only = st.checkbox("Active only", value=True, key="sam_active_only")
+                active_only = st.checkbox("Active only", value=True, key="sam_active_only", help="When checked, hide notices that are already closed or cancelled.")
             with c3:
-                org_name = st.text_input("Organization/Agency contains", key="sam_org")
+                org_name = st.text_input("Organization/Agency contains", key="sam_org", help="Optional: filter by agency name, office, or organization text.")
 
             if use_dates:
                 d1, d2 = st.columns([2, 2])
@@ -7913,17 +7913,17 @@ def run_sam_watch(conn) -> None:
 
             e1, e2, e3 = st.columns([2, 2, 2])
             with e1:
-                keywords = st.text_input("Keywords (Title contains)", key="sam_keywords")
+                keywords = st.text_input("Keywords (Title contains)", key="sam_keywords", help="Words that should appear in the notice title, such as janitorial, HVAC, or security.")
             with e2:
-                naics = st.text_input("NAICS (6-digit)", key="sam_naics")
+                naics = st.text_input("NAICS (6-digit)", key="sam_naics", help="Optional NAICS filter, for example 561720 for janitorial, 541512 for IT services.")
             with e3:
-                psc = st.text_input("PSC", key="sam_psc")
+                psc = st.text_input("PSC", key="sam_psc", help="Optional PSC filter if you want to narrow by Product Service Code.")
 
             e4, e5, e6 = st.columns([2, 2, 2])
             with e4:
-                state = st.text_input("Place of Performance State (e.g., TX)", key="sam_state")
+                state = st.text_input("Place of Performance State (e.g., TX)", key="sam_state", help="Two-letter state where the work will be performed, such as TX or CA.")
             with e5:
-                set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key="sam_set_aside")
+                set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key="sam_set_aside", help="Optional set-aside filter, such as SB, 8A, WOSB, HUBZone, or SDVOSB.")
             with e6:
                 pass
 
@@ -7951,7 +7951,7 @@ def run_sam_watch(conn) -> None:
             with g2:
                 max_pages = st.slider("Pages to fetch", min_value=1, max_value=10, value=3, key="sam_max_pages")
 
-            st.text_input("Smart search (natural language)", placeholder="ex: sdvosb cyber NAICS 541512 due < 30 days no NASA", key="sam_nl_text")
+            st.text_input("Smart search (natural language)", placeholder="ex: janitorial 561720 TX due < 30 days", key="sam_nl_text", help="Natural language search that is parsed into filters. Use plain English plus NAICS, state, and simple date expressions like \"due < 30 days\".")
 
             cbtn1, cbtn2 = st.columns([1,1])
             with cbtn1:
@@ -13415,6 +13415,10 @@ def nav() -> str:
 
     # Journeys and grouped pages
     journeys = [
+        ("Start here", [
+            "Start here",
+            "Help & Docs",
+        ]),
         ("SAM Watch", [
             "SAM Watch",
         ]),
@@ -13513,7 +13517,7 @@ def run_rfp_analyzer(conn) -> None:
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
         st.markdown("**Steps:** 1) Select or create RFP  ›  2) Upload RFP files  ›  3) Run analysis  ›  4) Jump into Proposal Builder.")
-        st.caption("Use this page to create RFP records, ingest files, and turn complex requirements into clear, organized analysis.")
+        st.caption("Use this page to create RFP records, ingest files, and build the RFP context the rest of the app uses (checklists, CLINs, key dates, POCs, meta, and proposal builder).")
         ui_info("No RFPs yet. Create one below to use the One‑Page Analyzer.")
         render_empty_state("No RFPs yet", "Start by creating an RFP record and ingesting the files you want to analyze.")
         ctx0 = st.session_state.get("rfp_selected_notice") or {}
@@ -13735,6 +13739,192 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
     # Hooks
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+
+def run_start_here(conn: "sqlite3.Connection") -> None:
+    """Guided onboarding for new users."""
+    import streamlit as st
+
+    render_page_title(
+        "Start here",
+        "Guided setup so a new user can get value from the app without training.",
+    )
+
+    # High level explanation of the workspace
+    render_card(
+        "What this workspace does",
+        (
+            "ELA GovCon Workspace helps you 1) watch SAM for new opportunities, "
+            "2) build a capture and deals pipeline, 3) analyze RFPs and compliance, "
+            "and 4) generate proposals and outreach without leaving the app."
+        ),
+        "Most work follows one of four journeys: Discover, Capture, Proposals, and Outreach.",
+    )
+
+    st.markdown("### The main journeys")
+    st.markdown(
+        "- **Discover work (SAM Watch):** Find matching notices and save the best.\n"
+        "- **Capture & CRM (Deals and CRM):** Track pipeline, contacts, and pricing.\n"
+        "- **RFP & Proposals:** Ingest RFPs, run checklists, and build proposals.\n"
+        "- **Vendors & Outreach:** Find subcontractors and send campaigns."
+    )
+
+    st.markdown("### First-run checklist")
+    st.caption(
+        "Work through these in order. You can mark items done and jump directly to the right page."
+    )
+
+    steps = [
+        {
+            "title": "Add your company profile",
+            "desc": "Fill in your organization profile so proposals, capability statements, and outreach auto-fill with the right details.",
+            "target": "Capability Statement",
+        },
+        {
+            "title": "Connect an email sender",
+            "desc": "Go to Outreach and create at least one sender (for example a Gmail account) so Mail Merge & Send can deliver campaigns.",
+            "target": "Outreach",
+        },
+        {
+            "title": "Run a sample SAM Watch search",
+            "desc": "Use SAM Watch with a NAICS code and state you care about, then run a smart search to pull in a few real notices.",
+            "target": "SAM Watch",
+        },
+        {
+            "title": "Push one notice into Deals",
+            "desc": "From SAM Watch, pick a strong notice and use Add to Deals so it shows up in your deals pipeline.",
+            "target": "Deals",
+        },
+        {
+            "title": "Ingest one RFP into RFP Analyzer",
+            "desc": "Create an RFP record, upload the main RFP PDF and key attachments, and let the analyzer build your RFP context.",
+            "target": "RFP Analyzer",
+        },
+        {
+            "title": "Generate a sample proposal draft",
+            "desc": "Open Proposal Builder, select your RFP, and generate a first draft for at least one major section.",
+            "target": "Proposal Builder",
+        },
+    ]
+
+    completed = 0
+    for idx, step in enumerate(steps):
+        key = f"onboarding_step_{idx}"
+        done = bool(st.session_state.get(key, False))
+        cols = st.columns([0.08, 0.72, 0.2])
+        with cols[0]:
+            done = st.checkbox("", value=done, key=key)
+        if done:
+            completed += 1
+        with cols[1]:
+            st.markdown(f"**{step['title']}**")
+            st.caption(step["desc"])
+        with cols[2]:
+            if st.button("Go", key=f"onboarding_go_{idx}"):
+                st.session_state["nav_target"] = step["target"]
+                st.rerun()
+
+    st.caption(f"Checklist progress: {completed} of {len(steps)} steps completed this session.")
+
+    st.markdown("### Where should I start?")
+    st.write(
+        "If you are brand new, complete the first three steps. After that, focus on one live opportunity "
+        "and take it all the way from SAM Watch → Deals → RFP Analyzer → Proposal Builder."
+    )
+
+
+def run_help_docs(conn: "sqlite3.Connection") -> None:
+    """In-app documentation that can also be shared with prospects."""
+    import streamlit as st
+
+    render_page_title(
+        "Help & Docs",
+        "Reference material for new team members and prospects.",
+    )
+
+    # Quick start guide
+    sec_qs = render_section(
+        "Quick start guide",
+        "Use this as a one-page overview you can paste into emails or onboarding docs.",
+        expanded=True,
+    )
+    sec_qs.markdown(
+        """
+1. **Set up your workspace**
+   - Add your company profile under **Proposal Builder → Capability Statement**.
+   - Confirm your current user name in the sidebar so activity is tracked correctly.
+
+2. **Connect email for outreach**
+   - Go to **Outreach** and add at least one sender account.
+   - Save a default signature so every campaign looks consistent.
+
+3. **Discover opportunities**
+   - Use **SAM Watch** with a NAICS code, state, and smart search text.
+   - Save strong notices and use **Add to Deals** to bring them into your pipeline.
+
+4. **Capture and pricing**
+   - In **Deals**, track stage, value, close date, and win probability.
+   - Link contacts and basic pricing so your pipeline is always current.
+
+5. **Analyze RFPs**
+   - In **RFP Analyzer**, create an RFP record, ingest files, and review the L&M checklist.
+   - Use the context tools to track CLINs, key dates, and POCs in one place.
+
+6. **Build proposals and outreach**
+   - Use **Proposal Builder** to generate cover letters, technical sections, and past performance.
+   - Use **Outreach** to send tailored campaigns to agencies and subcontractors.
+        """
+    )
+
+    # Data and security overview
+    sec_ds = render_section(
+        "Data and security overview",
+        "High-level view of where your data lives in this self-hosted app.",
+        expanded=False,
+    )
+    sec_ds.markdown(
+        """
+- **Data storage**
+  - App data (deals, RFPs, contacts, templates, logs) is stored in a local SQLite database file.
+  - File uploads such as RFP PDFs are stored on disk and referenced from the database.
+- **Secrets and credentials**
+  - API keys and email credentials are stored in the same database and used only to call the relevant services.
+  - Rotate credentials periodically and remove access you no longer need.
+- **Backups**
+  - Use the **Backup & Data** page to export database snapshots regularly.
+  - Keep at least one backup offline or in a separate storage location.
+- **Access control**
+  - Each user and tenant has separate records so activity is scoped per user and workspace.
+  - Make sure each teammate has their own login rather than sharing accounts.
+        """
+    )
+
+    # Capabilities and limitations
+    sec_cl = render_section(
+        "Current capabilities and limitations",
+        "Share this with prospects so expectations are clear.",
+        expanded=False,
+    )
+    sec_cl.markdown(
+        """
+**What the app does today**
+
+- Watches SAM.gov using smart searches and saved filters.
+- Tracks a deals pipeline with contacts, quotes, pricing, and win probability.
+- Ingests RFPs and organizes context (files, CLINs, key dates, POCs).
+- Generates proposal drafts and capability statements using your stored data.
+- Sends batch outreach emails with merge tags and signatures.
+- Stores all of this in a single workspace so you do not have to jump between tools.
+
+**What the app does not do yet**
+
+- It does not submit bids directly to SAM.gov or agency portals.
+- It does not replace a human compliance review; you still own final sign-off.
+- It does not provide legal, tax, or accounting advice.
+- It is not a multi-tenant SaaS by default; deployments are currently per workspace instance.
+        """
+    )
+
+
 def main() -> None:
     # Phase 1 re-init inside main
     # Bootstrap UI and sidebar
@@ -14300,6 +14490,7 @@ def template_missing_tags(text:str, required:set[str]=MERGE_TAGS)->set[str]:
 def render_outreach_templates(conn):
 
     st.subheader("Email templates")
+    st.caption("Use merge tags like {{first_name}}, {{last_name}}, {{company}}, {{title}}, {{city}}, {{state}}, {{email}}, {{due}}, {{solicitation}}, and {{notice_id}}. They must match the column names in your recipient table to be filled automatically.")
     ensure_email_templates(conn)
     rows = email_template_list(conn)
     names = ["<new>"] + [r[1] for r in rows]
@@ -14556,6 +14747,7 @@ def render_outreach_mailmerge(conn):
         st.session_state["o3_body"] = st.session_state.get("outreach_html", "")
     subj = st.text_input("Subject", key="o3_subject")
     body = st.text_area("HTML Body", height=260, key="o3_body")
+    st.caption("You can use the same merge tags here as in templates: {{first_name}}, {{last_name}}, {{company}}, {{title}}, {{city}}, {{state}}, {{email}}, {{due}}, {{solicitation}}, and {{notice_id}}. They are filled from the columns in your recipient table.")
 
     # Attachments for this blast
     ups = st.file_uploader("Attachments (optional)", type=["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv","png","jpg","jpeg","zip"], accept_multiple_files=True, key="o3_attachments")
