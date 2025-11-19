@@ -1275,10 +1275,9 @@ def _phase3_analyzer_inline(conn):
 
 # === Phase 3: RFP ingest schema & helpers ===
 def _ensure_phase3_schema(conn):
-    """Schema for RFP records & files (idempotent, tolerant of older versions)."""
+    """Minimal schema for RFP records & files (idempotent)."""
     try:
         with conn:
-            # Legacy table kept for backwards compatibility; main RFP table is `rfps`.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS rfp_records (
                     id INTEGER PRIMARY KEY,
@@ -1288,7 +1287,6 @@ def _ensure_phase3_schema(conn):
                     created_at TEXT DEFAULT (datetime('now'))
                 );
             """)
-            # Base definition for rfp_files; if the table already exists this is a no-op.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS rfp_files (
                     id INTEGER PRIMARY KEY,
@@ -1297,46 +1295,14 @@ def _ensure_phase3_schema(conn):
                     path TEXT,
                     kind TEXT,
                     extracted_path TEXT,
-                    mime TEXT,
-                    sha256 TEXT,
-                    pages INTEGER,
-                    bytes BLOB,
-                    status TEXT,
-                    last_error TEXT,
-                    src_url TEXT,
+                    bytes INTEGER,
                     created_at TEXT DEFAULT (datetime('now')),
-                    FOREIGN KEY(rfp_id) REFERENCES rfps(id)
+                    FOREIGN KEY(rfp_id) REFERENCES rfp_records(id)
                 );
             """)
-            # If rfp_files already existed with an older schema, make sure all expected columns exist.
-            try:
-                cur = conn.execute("PRAGMA table_info(rfp_files);")
-                cols = {row[1] for row in cur.fetchall()}
-                def _add(col_def: str):
-                    name = col_def.split()[0]
-                    if name not in cols:
-                        conn.execute(f"ALTER TABLE rfp_files ADD COLUMN {col_def};")
-                # Legacy columns used by some older utilities
-                _add("path TEXT")
-                _add("kind TEXT")
-                _add("extracted_path TEXT")
-                # Modern columns used by save_rfp_file_db and analyzers
-                _add("mime TEXT")
-                _add("sha256 TEXT")
-                _add("pages INTEGER")
-                _add("bytes BLOB")
-                _add("status TEXT")
-                _add("last_error TEXT")
-                _add("src_url TEXT")
-            except Exception:
-                # Best-effort; do not block the app if PRAGMA/ALTER fails.
-                pass
     except Exception as e:
-        try:
-            st.warning(f"Phase 3 schema init failed: {e}")
-        except Exception:
-            pass
-
+        try: st.warning(f"Phase 3 schema init failed: {e}")
+        except Exception: pass
 
 def _ensure_phase3_dirs():
     base = "./rfp_store"
@@ -14498,33 +14464,53 @@ def run_rfp_analyzer(conn) -> None:
             except Exception as e:
                 logger.exception("CRM wiring failed")
                 ui_error("Could not wire this RFP into the CRM.", str(e))
+
     with c3:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
-            # Track RFP ingest/analyze as a job, even though work runs in-process for now.
+            # Run ingest/analyze inline and also record a job entry for history.
+            job_id = None
+            rfp_id = None
             try:
-                ensure_jobs_schema(conn)
-            except Exception:
-                pass
+                try:
+                    ensure_jobs_schema(conn)
+                except Exception:
+                    # jobs table is best-effort; analyzer should still work without it
+                    pass
 
-            try:
                 try:
                     _user_name = get_current_user_name()
                 except Exception:
                     _user_name = ""
-                payload = {
-                    "scope": "rfp_ingest_analyze",
-                    "rfp_id": int(_ensure_selected_rfp_id(conn)),
-                }
-                job_id = jobs_enqueue(
-                    conn,
-                    job_type="rfp_ingest_analyze",
-                    payload=payload,
-                    created_by=_user_name or None,
-                )
+
+                try:
+                    rfp_id = int(_ensure_selected_rfp_id(conn))
+                except Exception:
+                    rfp_id = None
+
+                if rfp_id:
+                    payload = {
+                        "scope": "rfp_ingest_analyze",
+                        "rfp_id": rfp_id,
+                    }
+                    try:
+                        job_id = jobs_enqueue(
+                            conn,
+                            job_type="rfp_ingest_analyze",
+                            payload=payload,
+                            created_by=_user_name or None,
+                        )
+                    except Exception:
+                        job_id = None
             except Exception:
+                # If anything above fails we still try to run analysis inline
                 job_id = None
 
             try:
+                if not rfp_id:
+                    ui_warning("Select an RFP first.")
+                    return
+
+                # Mark job as running if we have one
                 if job_id:
                     try:
                         jobs_update_status(
@@ -14537,8 +14523,23 @@ def run_rfp_analyzer(conn) -> None:
                     except Exception:
                         pass
 
-                _one_click_analyze(conn, int(_ensure_selected_rfp_id(conn)))
+                # Rebuild semantic index and key sections / CLINs
+                try:
+                    idx_result = y1_index_rfp(conn, int(rfp_id), rebuild=True)
+                except Exception as _e_idx:
+                    idx_result = {"ok": False, "error": str(_e_idx)}
 
+                try:
+                    m_count = find_section_M(conn, int(rfp_id))
+                except Exception:
+                    m_count = 0
+
+                try:
+                    clin_count = find_clins_all(conn, int(rfp_id))
+                except Exception:
+                    clin_count = 0
+
+                # Mark job as done
                 if job_id:
                     try:
                         jobs_update_status(
@@ -14547,11 +14548,25 @@ def run_rfp_analyzer(conn) -> None:
                             status="done",
                             mark_finished=True,
                             progress=1.0,
-                            result={"rfp_id": int(_ensure_selected_rfp_id(conn))},
+                            result={
+                                "rfp_id": int(rfp_id),
+                                "index_ok": bool(idx_result.get("ok", True)) if isinstance(idx_result, dict) else True,
+                                "sections_LM": int(m_count),
+                                "clins": int(clin_count),
+                            },
                         )
                     except Exception:
                         pass
-                st.rerun()
+
+                ui_success(
+                    "RFP ingest & analyze complete.",
+                    f"Indexed files, updated L/M sections, and found approximately {clin_count} CLIN rows.",
+                )
+                try:
+                    import streamlit as st
+                    st.rerun()
+                except Exception:
+                    pass
             except Exception as e:
                 if job_id:
                     try:
@@ -14564,7 +14579,10 @@ def run_rfp_analyzer(conn) -> None:
                         )
                     except Exception:
                         pass
-                logger.exception("RFP ingest/analyze failed")
+                try:
+                    logger.exception("RFP ingest/analyze failed")
+                except Exception:
+                    pass
                 ui_error("Could not ingest and analyze the RFP.", str(e))
 
     # Add files
@@ -14589,31 +14607,78 @@ def run_rfp_analyzer(conn) -> None:
                     pass
                 st.rerun()
 
+
     # Build pages and render One-Page
     try:
-        df_files = _pd.__p_read_sql_query("SELECT filename, mime, bytes, pages FROM rfp_files WHERE rfp_id=? ORDER BY id;", conn, params=(int(_ensure_selected_rfp_id(conn)),))
+        # Prefer modern schema with in-DB bytes; fall back to older path-based schema.
+        try:
+            df_files = _pd.__p_read_sql_query(
+                "SELECT filename, mime, bytes, path FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                conn,
+                params=(int(_ensure_selected_rfp_id(conn)),),
+            )
+        except Exception:
+            df_files = _pd.__p_read_sql_query(
+                "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                conn,
+                params=(int(_ensure_selected_rfp_id(conn)),),
+            )
     except Exception:
         df_files = None
+
     pages = []
     if df_files is not None and not df_files.empty:
         for _, r in df_files.iterrows():
-            b = r.get("bytes"); mime = r.get("mime") or ""
+            b = None
+            try:
+                b = r.get("bytes")
+            except Exception:
+                b = None
+            if not b:
+                # older builds may store only a file path
+                p = None
+                try:
+                    # r is a pandas Series
+                    if "path" in list(r.index):
+                        p = r.get("path")
+                except Exception:
+                    p = None
+                if p:
+                    try:
+                        with open(p, "rb") as fh:
+                            b = fh.read()
+                    except Exception:
+                        b = None
+            if not b:
+                continue
+
+            mime = r.get("mime") or ""
             try:
                 texts = extract_text_pages(b, mime) or []
             except Exception:
                 texts = []
             for i, t in enumerate(texts[:100], start=1):
-                pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
+                pages.append(
+                    {
+                        "file": r.get("filename") or "",
+                        "page": i,
+                        "text": t or "",
+                    }
+                )
+
     if not pages:
-        st.warning("No readable pages found in linked files for this RFP.")
+        # Be explicit about why there are no pages.
+        if df_files is None or df_files.empty:
+            st.warning("No files are linked to this RFP yet. Upload files and try again.")
+        else:
+            st.warning("No readable pages found in linked files for this RFP.")
         return
 
-    # Delegate to One‑Page renderer
+    # Delegate to One-Page renderer
     if 'run_rfp_analyzer_onepage' in globals() and callable(run_rfp_analyzer_onepage):
         run_rfp_analyzer_onepage(pages)
     else:
         st.info("One-Page Analyzer module is unavailable.")
-
 def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
     with st.sidebar.expander("Workspace", expanded=True):
         try:
