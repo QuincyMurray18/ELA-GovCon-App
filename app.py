@@ -14450,10 +14450,70 @@ def run_rfp_analyzer(conn) -> None:
                 ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
+            # Track RFP ingest/analyze as a job, even though work runs in-process for now.
             try:
+                ensure_jobs_schema(conn)
+            except Exception:
+                pass
+
+            try:
+                try:
+                    _user_name = get_current_user_name()
+                except Exception:
+                    _user_name = ""
+                payload = {
+                    "scope": "rfp_ingest_analyze",
+                    "rfp_id": int(_ensure_selected_rfp_id(conn)),
+                }
+                job_id = jobs_enqueue(
+                    conn,
+                    job_type="rfp_ingest_analyze",
+                    payload=payload,
+                    created_by=_user_name or None,
+                )
+            except Exception:
+                job_id = None
+
+            try:
+                if job_id:
+                    try:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="running",
+                            mark_started=True,
+                            progress=0.0,
+                        )
+                    except Exception:
+                        pass
+
                 _one_click_analyze(conn, int(_ensure_selected_rfp_id(conn)))
+
+                if job_id:
+                    try:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="done",
+                            mark_finished=True,
+                            progress=1.0,
+                            result={"rfp_id": int(_ensure_selected_rfp_id(conn))},
+                        )
+                    except Exception:
+                        pass
                 st.rerun()
             except Exception as e:
+                if job_id:
+                    try:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="failed",
+                            error_message=str(e),
+                            mark_finished=True,
+                        )
+                    except Exception:
+                        pass
                 logger.exception("RFP ingest/analyze failed")
                 ui_error("Could not ingest and analyze the RFP.", str(e))
 
