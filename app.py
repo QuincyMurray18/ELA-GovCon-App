@@ -11148,20 +11148,27 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             except Exception:
                 pass
 
-            exported = _export_docx(
-                out_path,
-                doc_title=_first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
-                sections=sections,
-                clins=_ctxd(ctx, "clins"),
-                checklist=_ctxd(ctx, "items"),
-                metadata={
-                    "rfp_id": int(rfp_id) if rfp_id is not None else None,
-                    "notice_id": _ctxd(ctx, "rfp", {}).get("notice_id"),
-                },
-                font_name=font_name,
-                font_size_pt=int(font_size),
-                spacing=spacing,
-            )
+            try:
+                exported = _export_docx(
+                    out_path,
+                    doc_title=_first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
+                    sections=sections,
+                    clins=_ctxd(ctx, "clins"),
+                    checklist=_ctxd(ctx, "items"),
+                    metadata={
+                        "rfp_id": int(rfp_id) if rfp_id is not None else None,
+                        "notice_id": _ctxd(ctx, "rfp", {}).get("notice_id"),
+                    },
+                    font_name=font_name,
+                    font_size_pt=int(font_size),
+                    spacing=spacing,
+                )
+            except Exception as e:
+                try:
+                    st.error(f"Export DOCX failed: {e}")
+                except Exception:
+                    pass
+                exported = None
             if exported:
                 st.success(f"Exported to {exported}")
                 try:
@@ -14392,7 +14399,7 @@ def run_rfp_analyzer(conn) -> None:
         ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
                                accept_multiple_files=True, key="op_inline_files_main")
         # Keep on RFP Analyzer after selecting files
-        if 'op_inline_files' in st.session_state and st.session_state.get('op_inline_files'):
+        if 'op_inline_files_main' in st.session_state and st.session_state.get('op_inline_files_main'):
             st.session_state['_force_rfp_analyzer'] = True
             st.session_state['nav_target'] = 'RFP Analyzer'
         st.markdown("### Primary action: Create RFP record and ingest")
