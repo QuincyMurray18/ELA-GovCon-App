@@ -13820,8 +13820,13 @@ def run_start_here(conn: "sqlite3.Connection") -> None:
             st.caption(step["desc"])
         with cols[2]:
             if st.button("Go", key=f"onboarding_go_{idx}"):
+                # Set nav_target for the next run and immediately route, just like SAM Watch
                 st.session_state["nav_target"] = step["target"]
-                st.rerun()
+                try:
+                    router(step["target"], conn)
+                    st.stop()
+                except Exception:
+                    st.rerun()
 
     st.caption(f"Checklist progress: {completed} of {len(steps)} steps completed this session.")
 
