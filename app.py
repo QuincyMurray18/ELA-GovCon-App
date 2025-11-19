@@ -3164,7 +3164,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
                 continue
             cur.execute("""
                 INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?,?,?,?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now))
             inserted += 1
     # 2) From SOW chunks, simple heuristic
@@ -3193,7 +3193,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
                         continue
                     cur.execute("""
                         INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?,?,?,?, ?, ?);
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """, (int(rfp_id), key, "SOW", row.get('file_name'), int(row.get('page') or 0), s.strip(), "Open", now, now))
                     inserted += 1
         if inserted >= max_rows:
