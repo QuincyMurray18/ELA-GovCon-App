@@ -8068,6 +8068,68 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 
 # ---------- SAM Watch (Phase A) ----------
 
+
+def _sam_run_live_search_job(conn_jobs, job_id: int, params: dict):
+    """Execute a SAM.gov live search as a tracked job.
+
+    For now this still runs in-process, but the job row in `jobs`
+    keeps a record of progress and the outcome so a future worker
+    can take over.
+    """
+    import pandas as _pd
+
+    try:
+        ensure_jobs_schema(conn_jobs)
+    except Exception:
+        # Best-effort only; do not hard fail if schema init has issues
+        pass
+
+    # Mark job as running
+    try:
+        jobs_update_status(
+            conn_jobs,
+            job_id,
+            status="running",
+            mark_started=True,
+            progress=0.0,
+        )
+    except Exception:
+        pass
+
+    # Execute the actual SAM search
+    out = sam_search_cached(dict(params) if isinstance(params, dict) else {})
+    if out.get("error"):
+        # Mark failed and propagate a clean exception
+        try:
+            jobs_update_status(
+                conn_jobs,
+                job_id,
+                status="failed",
+                error_message=str(out.get("error")),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        raise RuntimeError(str(out.get("error")))
+
+    recs = out.get("records") or []
+    df = flatten_records(recs) if recs else _pd.DataFrame()
+
+    # Mark as done with a small summary in result_json
+    try:
+        jobs_update_status(
+            conn_jobs,
+            job_id,
+            status="done",
+            mark_finished=True,
+            progress=1.0,
+            result={"records_fetched": int(len(df))},
+        )
+    except Exception:
+        pass
+
+    return df
+
 def run_sam_watch(conn) -> None:
     """
     Phase 2 cleanup:
@@ -8226,13 +8288,15 @@ def run_sam_watch(conn) -> None:
             except Exception as e:
                 st.error(f"Save failed: {e}")
 
-        # Run search
+
+        # Run search (tracked as a job so heavy queries do not block the UI)
         results_df = st.session_state.get("sam_results_df")
         if _get_flag("clicked_run_search"):
             if not api_key:
                 st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
                 return
 
+            # Build parameter payload from the current filters
             params = {
                 "api_key": api_key,
                 "limit": int(st.session_state.get("sam_limit", 100)),
@@ -8264,19 +8328,35 @@ def run_sam_watch(conn) -> None:
             if st.session_state.get("sam_types"):
                 params["ptype"] = ",".join(ptype_map[t] for t in st.session_state["sam_types"] if t in ptype_map)
 
-            with st.spinner("Searching SAM.gov"):
-                out = sam_search_cached(params)
+            # Enqueue a sam_live_search job that captures this payload
+            try:
+                conn_jobs = get_db()
+            except Exception:
+                conn_jobs = conn
+            try:
+                current_user = get_current_user_name()
+            except Exception:
+                current_user = ""
+            ensure_jobs_schema(conn_jobs)
+            job_id = jobs_enqueue(
+                conn_jobs,
+                job_type="sam_live_search",
+                payload={"scope": "sam_live_search", "params": params},
+                created_by=current_user or None,
+            )
+            st.session_state["sam_last_job_id"] = job_id
 
-            if out.get("error"):
-                st.error(out["error"])
-                return
-
-            recs = out.get("records", [])
-            results_df = flatten_records(recs)
-            st.session_state["sam_results_df"] = results_df
-            st.session_state["sam_page"] = 1
-            st.session_state.pop("sam_selected_idx", None)
-            st.success(f"Fetched {len(results_df)} notices")
+            # Synchronous execution for now, but status is tracked in the jobs table
+            with st.spinner("Searching SAM.gov…"):
+                try:
+                    results_df = _sam_run_live_search_job(conn_jobs, job_id, params)
+                except Exception as exc:
+                    st.error(f"SAM search failed: {exc!s}")
+                else:
+                    st.session_state["sam_results_df"] = results_df
+                    st.session_state["sam_page"] = 1
+                    st.session_state.pop("sam_selected_idx", None)
+                    st.success(f"Fetched {len(results_df)} notices")
 
         # --- Always show the search body, even with no results yet ---
         if results_df is None or (hasattr(results_df, "empty") and results_df.empty):
