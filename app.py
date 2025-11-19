@@ -7,6 +7,70 @@ try:
 except Exception:
     deal_owner_ctx = "All"
 # ------------------------------------
+# --- Global user / tenant model ---------------------------------
+# Logical app users. Update this list as your team grows.
+KNOWN_USERS = ["Quincy", "Collin", "Charles"]
+
+# Default tenant name for this workspace. Existing data for tenant id 1
+# will be labeled with this name when possible.
+DEFAULT_TENANT_NAME = "ELA"
+
+
+def get_current_user_name() -> str:
+    """Single source of truth for the current logical user name."""
+    try:
+        import streamlit as st  # type: ignore[import-not-found]
+        name = st.session_state.get("current_user_name")
+        if not name:
+            # Fallback to the first configured user
+            name = KNOWN_USERS[0]
+        return str(name).strip()
+    except Exception:
+        # Safe fallback if Streamlit or session state is not available
+        return KNOWN_USERS[0]
+
+
+def get_current_tenant_name(conn: "sqlite3.Connection | None" = None) -> str:
+    """Resolve the current tenant's display name, defaulting to DEFAULT_TENANT_NAME.
+
+    If a live DB connection is provided and the tenants/current_tenant tables
+    exist, this will try to read the friendly tenant name from there.
+    """
+    # Try to read from DB if available
+    if conn is not None:
+        try:
+            from contextlib import closing  # type: ignore[import-not-found]
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "SELECT t.name "
+                    "FROM current_tenant ct "
+                    "JOIN tenants t ON t.id = ct.ctid "
+                    "WHERE ct.id=1;"
+                )
+                row = cur.fetchone()
+            if row and row[0]:
+                return str(row[0]).strip()
+        except Exception:
+            # Fall back to static default if anything goes wrong
+            pass
+    return DEFAULT_TENANT_NAME
+
+
+def get_current_tenant_id(conn: "sqlite3.Connection | None" = None) -> int:
+    """Numeric tenant id for scoping queries. Defaults to 1 (ELA)."""
+    if conn is not None:
+        try:
+            from contextlib import closing  # type: ignore[import-not-found]
+            with closing(conn.cursor()) as cur:
+                cur.execute("SELECT ctid FROM current_tenant WHERE id=1;")
+                row = cur.fetchone()
+            if row and row[0]:
+                return int(row[0])
+        except Exception:
+            pass
+    return 1
+# ----------------------------------------------------------------
+
 try:
     _pb_psychology_framework  # type: ignore[name-defined]
 except NameError:
@@ -6579,7 +6643,8 @@ def get_db() -> sqlite3.Connection:
 
         """)
 
-        cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'Default');")
+        cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'ELA');")
+        cur.execute("UPDATE tenants SET name='ELA' WHERE id=1 AND (name IS NULL OR name='Default');")
 
         cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
 
@@ -11996,11 +12061,11 @@ def data_get_all_deals_for_detail(conn):
         )
         # Scope to current user when available
         try:
-            import streamlit as st
-            _owner = st.session_state.get("current_user_name")
+            _owner = get_current_user_name()
             if _owner and "owner" in df.columns:
                 df = df[df["owner"].fillna("") == _owner]
         except Exception:
+            # If anything fails, fall back to unfiltered data
             pass
         return df
     except Exception as e:
@@ -13467,7 +13532,7 @@ def nav() -> str:
 
     with st.sidebar:
         st.markdown("#### User")
-        _known_users = ["Quincy", "Collin", "Charles"]
+        _known_users = KNOWN_USERS
         _current_default = st.session_state.get("current_user_name") or _known_users[0]
         if _current_default not in _known_users:
             _current_default = _known_users[0]
@@ -17944,11 +18009,10 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
 def _x7_current_user() -> str:
     """Return the current logical user name for scoping proposals."""
     try:
-        import streamlit as st
-        val = st.session_state.get("current_user_name") or ""
-        return str(val).strip()
+        # Reuse the global helper so all parts of the app agree
+        return get_current_user_name()
     except Exception:
-        return ""
+        return KNOWN_USERS[0]
 
 def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
     import pandas as pd
