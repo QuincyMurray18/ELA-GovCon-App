@@ -1850,7 +1850,7 @@ def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | Non
                 """
                 INSERT OR IGNORE INTO rfp_files 
                     (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
+                VALUES (?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
                 """,
                 (int(rfp_id), str(filename or ""), str(mime or "application/octet-stream"),
                  sha, sqlite3.Binary(blob or b""), status, src_url or "")
@@ -3164,7 +3164,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
                 continue
             cur.execute("""
                 INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?,?,?,?, ?, ?);
             """, (int(rfp_id), key, "L/M", None, None, txt, "Open", now, now))
             inserted += 1
     # 2) From SOW chunks, simple heuristic
@@ -3193,7 +3193,7 @@ def rtm_build_requirements(conn: "sqlite3.Connection", rfp_id: int, max_rows: in
                         continue
                     cur.execute("""
                         INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        VALUES (?, ?, ?, ?, ?,?,?,?, ?, ?);
                     """, (int(rfp_id), key, "SOW", row.get('file_name'), int(row.get('page') or 0), s.strip(), "Open", now, now))
                     inserted += 1
         if inserted >= max_rows:
@@ -8467,13 +8467,14 @@ def run_sam_watch(conn) -> None:
                                 with _closing(_db.cursor()) as cur:
                                     cur.execute(
                                         """
-                                        INSERT INTO deals(title, agency, status, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                                         """,
                                         (
                                             row.get('Title') or "",
                                             row.get('Agency Path') or "",
                                             "Bidding",
+                                            None,
                                             row.get('Notice ID') or "",
                                             row.get('Solicitation') or "",
                                             row.get('Posted') or "",
@@ -12968,7 +12969,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         if st.button("Save", key=f"k_save_{did}"):
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, rfp_deadline=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
+                                                cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
                                                 if ns != stage:
                                                     cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
                                                 conn.commit()
