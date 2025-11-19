@@ -2,10 +2,11 @@
 try:
     import streamlit as _st
     if "deal_owner_ctx" not in _st.session_state:
-        _st.session_state["deal_owner_ctx"] = "All"
-    deal_owner_ctx = _st.session_state.get("deal_owner_ctx", "All")
+        # Default to the first known user so views are user-isolated by default.
+        _st.session_state["deal_owner_ctx"] = "Quincy"
+    deal_owner_ctx = _st.session_state.get("deal_owner_ctx", "Quincy")
 except Exception:
-    deal_owner_ctx = "All"
+    deal_owner_ctx = "Quincy"
 # ------------------------------------
 # --- Global user / tenant model ---------------------------------
 # Logical app users. Update this list as your team grows.
@@ -6560,6 +6561,26 @@ def get_db() -> sqlite3.Connection:
 
         
 
+        def __p_add_owner_user(cur, table: str):
+            """Ensure an owner_user TEXT column exists on the given table."""
+            try:
+                cols = __p_get_cols(cur, table)
+                if "owner_user" not in cols:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN owner_user TEXT;")
+            except Exception:
+                # If ALTER fails, continue without breaking startup
+                pass
+
+        def __p_add_visibility(cur, table: str):
+            """Ensure a visibility TEXT column exists on the given table."""
+            try:
+                cols = __p_get_cols(cur, table)
+                if "visibility" not in cols:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN visibility TEXT DEFAULT 'private';")
+            except Exception:
+                # If ALTER fails, continue without breaking startup
+                pass
+
         def __p_create_scoped_view(cur, table: str):
 
             try:
@@ -6688,26 +6709,81 @@ def get_db() -> sqlite3.Connection:
 
         # Add tenant_id where missing and backfill NULLs to current tenant
 
-        for t in core_tables:
+        # Core tenant-scoped tables
+        tenant_tables = list(core_tables)
 
+        # Extra tables that should also be tenant-scoped even if they were
+        # not part of the original recommendation set.
+        extra_tenant_tables = [
+            "outreach_blasts",
+            "outreach_log",
+            "outreach_sequences",
+            "outreach_steps",
+            "outreach_templates",
+            "proposals",
+        ]
+        for t in extra_tenant_tables:
+            if t in existing_tables and t not in tenant_tables:
+                tenant_tables.append(t)
+
+        # Apply tenant_id column and backfill for all tenant-scoped tables
+        for t in tenant_tables:
             __p_add_tenant(cur, t)
-
             try:
-
-                cur.execute(f"UPDATE {t} SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) WHERE tenant_id IS NULL;")
-
+                cur.execute(
+                    f"UPDATE {t} "
+                    "SET tenant_id=(SELECT ctid FROM current_tenant WHERE id=1) "
+                    "WHERE tenant_id IS NULL;"
+                )
             except Exception:
-
                 pass
 
-        
+        # User-owned tables get an owner_user column for per-user isolation
+        user_owned_tables = [
+            "deals",
+            "contacts",
+            "tasks",
+            "activities",
+            "outreach_log",
+            "outreach_blasts",
+            "saved_searches",
+            "outreach_sequences",
+            "outreach_steps",
+        ]
+        for t in user_owned_tables:
+            if t in existing_tables:
+                __p_add_owner_user(cur, t)
+                try:
+                    cur.execute(
+                        f"UPDATE {t} "
+                        "SET owner_user='Quincy' "
+                        "WHERE owner_user IS NULL OR owner_user='';"
+                    )
+                except Exception:
+                    pass
+
+        # Content-oriented tables that may later be shared get a visibility flag
+        content_tables = [
+            "rfps",
+            "proposals",
+            "outreach_templates",
+            "vendors",
+        ]
+        for t in content_tables:
+            if t in existing_tables:
+                __p_add_visibility(cur, t)
+                try:
+                    cur.execute(
+                        f"UPDATE {t} "
+                        "SET visibility='private' "
+                        "WHERE visibility IS NULL OR visibility='';"
+                    )
+                except Exception:
+                    pass
 
         # Create scoped views and insert triggers
-
-        for t in core_tables:
-
+        for t in tenant_tables:
             __p_create_scoped_view(cur, t)
-
             __p_create_insert_trigger(cur, t)
 
         # Phase N (Persist): Pragmas
@@ -7756,8 +7832,8 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
         try:
             with closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO contacts(name, email, org) VALUES (?, ?, ?);",
-                    (name.strip(), email.strip(), org.strip()),
+                    "INSERT INTO contacts(name, email, org, owner_user) VALUES (?, ?, ?, ?);",
+                    (name.strip(), email.strip(), org.strip(), get_current_user_name()),
                 )
                 conn.commit()
             st.success(f"Added contact {name}")
@@ -8470,6 +8546,13 @@ def _p3_ensure_deal_and_contacts(conn, rfp_id: int):
                 "INSERT OR IGNORE INTO deals(rfp_id, title, stage, created_at) "
                 "VALUES(?, ?, COALESCE((SELECT stage, rfp_deadline FROM deals WHERE rfp_id=?), 'No contact made'), datetime('now'))",
                 (int(rfp_id), str(title), int(rfp_id))
+            )
+            # Ensure new or existing deal record for this RFP is owned by the current logical user
+            owner_name = get_current_user_name()
+            cur.execute(
+                "UPDATE deals SET owner = COALESCE(owner, ?), owner_user = COALESCE(owner_user, ?) "
+                "WHERE rfp_id=?;",
+                (owner_name, owner_name, int(rfp_id)),
             )
             conn.commit()
     except Exception:
@@ -12051,22 +12134,25 @@ def data_get_all_deals_for_detail(conn):
     """Return a DataFrame of deals for detail view."""
     import pandas as pd
     try:
-        df = pd.read_sql_query(
-            "SELECT id, title, agency, COALESCE(status, '') AS status, "
-            "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
-            "COALESCE(owner, '') AS owner "
-            "FROM deals ORDER BY id DESC;",
-            conn,
-            params=(),
-        )
-        # Scope to current user when available
-        try:
-            _owner = get_current_user_name()
-            if _owner and "owner" in df.columns:
-                df = df[df["owner"].fillna("") == _owner]
-        except Exception:
-            # If anything fails, fall back to unfiltered data
-            pass
+        owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+        if owner_scope and owner_scope != "All":
+            df = pd.read_sql_query(
+                "SELECT id, title, agency, COALESCE(status, '') AS status, "
+                "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                "COALESCE(owner, '') AS owner "
+                "FROM deals_t WHERE owner_user=? ORDER BY id DESC;",
+                conn,
+                params=(owner_scope,),
+            )
+        else:
+            df = pd.read_sql_query(
+                "SELECT id, title, agency, COALESCE(status, '') AS status, "
+                "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                "COALESCE(owner, '') AS owner "
+                "FROM deals_t ORDER BY id DESC;",
+                conn,
+                params=(),
+            )
         return df
     except Exception as e:
         logger.exception("data_get_all_deals_for_detail failed")
@@ -12083,6 +12169,21 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     _ensure_deal_owner_schema(conn)
     st.header("CRM")
     st.caption("Use this page to manage activities, tasks, and your deals pipeline so you always know what is moving and when revenue will land.")
+
+    current_user = get_current_user_name()
+    scope = st.radio(
+        "Scope",
+        ["My items", "All users"],
+        index=0,
+        horizontal=True,
+        help="My items shows only your deals, activities, and tasks. All users shows everything in this workspace.",
+    )
+    global deal_owner_ctx
+    if scope == "My items":
+        deal_owner_ctx = current_user
+    else:
+        deal_owner_ctx = "All"
+    st.session_state["deal_owner_ctx"] = deal_owner_ctx
     tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
 
     # Ensure Deals schema and CRM wiring are in sync
@@ -12117,9 +12218,19 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             a_notes = st.text_area("Notes", height=100, key="act_notes")
             if st.button("Save Activity", key="act_save"):
                 with closing(conn.cursor()) as cur:
-                    cur.execute("""
-                        INSERT INTO activities(ts, type, subject, notes, deal_id, contact_id) VALUES(datetime('now'),?,?,?,?,?);
-                    """, (a_type, a_subject.strip(), a_notes.strip(), a_deal if a_deal else None, a_contact if a_contact else None))
+                    # Store activity under the current logical user; tenant_id is handled by triggers.
+                    cur.execute(
+                        "INSERT INTO activities(ts, type, subject, notes, deal_id, contact_id, owner_user) "
+                        "VALUES (datetime('now'), ?, ?, ?, ?, ?, ?);",
+                        (
+                            a_type,
+                            a_subject.strip(),
+                            a_notes.strip(),
+                            a_deal if a_deal else None,
+                            a_contact if a_contact else None,
+                            get_current_user_name(),
+                        ),
+                    )
                     conn.commit()
                 st.success("Saved")
 
@@ -12137,6 +12248,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                      key="act_f_contact")
         q = "SELECT ts, type, subject, notes, deal_id, contact_id FROM activities_t WHERE 1=1"
         params = []
+        # Scope to current owner when in "My items" mode
+        owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+        if owner_scope and owner_scope != "All":
+            q += " AND owner_user=?"
+            params.append(owner_scope)
         if f_type:
             q += " AND type IN (%s)" % ",".join(["?"]*len(f_type))
             params.extend(f_type)
@@ -12173,6 +12289,10 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             tf_priority = st.multiselect("Priority", ["Low","Normal","High"], default=[])
         q = "SELECT id, title, due_date, status, priority, deal_id, contact_id FROM tasks_t WHERE 1=1"
         params = []
+        owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+        if owner_scope and owner_scope != "All":
+            q += " AND owner_user=?"
+            params.append(owner_scope)
         if tf_status:
             q += " AND status IN (%s)" % ",".join(["?"]*len(tf_status)); params.extend(tf_status)
         if tf_priority:
@@ -12238,8 +12358,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         with _closing(conn.cursor()) as cur:
         
                                 cur.execute(
-                                    "INSERT INTO deals(title, agency, status, stage, value, owner, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
-                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val)
+                                    "INSERT INTO deals(title, agency, status, stage, value, owner, owner_user, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val)
                                 )
                                 cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
                                 conn.commit()
@@ -12248,7 +12369,23 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             
                 # Weighted Pipeline view
                 st.subheader("Weighted Pipeline")
-                df = pd.read_sql_query("SELECT id, title, agency, COALESCE(status, stage, '') AS status, COALESCE(value, 0) AS value, rfp_deadline FROM deals ORDER BY id DESC;", conn, params=())
+                owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+                if owner_scope and owner_scope != "All":
+                    df = pd.read_sql_query(
+                        "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
+                        "COALESCE(value, 0) AS value, rfp_deadline "
+                        "FROM deals_t WHERE owner_user = ? ORDER BY id DESC;",
+                        conn,
+                        params=(owner_scope,),
+                    )
+                else:
+                    df = pd.read_sql_query(
+                        "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
+                        "COALESCE(value, 0) AS value, rfp_deadline "
+                        "FROM deals_t ORDER BY id DESC;",
+                        conn,
+                        params=(),
+                    )
                 if df.empty:
                     st.info("No deals")
                 else:
@@ -12274,22 +12411,25 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 try:
                     # Prefer base table. Include owner-null when filtering so old deals still show and can be assigned.
                     if deal_owner_ctx != "All":
+                        # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
                             "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
-                            "FROM deals WHERE (owner = ? OR owner IS NULL OR owner = '') "
+                            "FROM deals_t WHERE owner_user = ? "
                             "ORDER BY id DESC;",
-                            conn, params=(deal_owner_ctx,)
+                            conn,
+                            params=(deal_owner_ctx,),
                         )
                     else:
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
                             "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
-                            "FROM deals ORDER BY id DESC;",
-                            conn, params=()
+                            "FROM deals_t ORDER BY id DESC;",
+                            conn,
+                            params=(),
                         )
                 except Exception:
-                    # Fallback to view without owner column
+                    # Fallback to view without owner_user column
                     try:
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
@@ -15174,8 +15314,8 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
 
     with _o3c(conn.cursor()) as cur:
         cur.execute(
-            "INSERT INTO outreach_blasts(title, template_name, sender_email) VALUES(?,?,?);",
-            (blast_title, template_name, (sender.get("email") or sender.get("username") or "").strip()),
+            "INSERT INTO outreach_blasts(title, template_name, sender_email, owner_user) VALUES(?,?,?,?);",
+            (blast_title, template_name, (sender.get("email") or sender.get("username") or "").strip(), get_current_user_name()),
         )
         conn.commit()
         blast_id = cur.lastrowid
@@ -15251,8 +15391,8 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             err = "Missing or malformed address"
             with _closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) VALUES (?,?,?,?,?,?);",
-                    (blast_id, to_email, to_name, subj, status, err),
+                    "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error,owner_user) VALUES (?,?,?,?,?,?,?);",
+                    (blast_id, to_email, to_name, subj, status, err, get_current_user_name()),
                 )
                 conn.commit()
             logs.append({"email": to_email, "status": status, "error": err})
@@ -15264,8 +15404,8 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
             err = ""
             with _closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) VALUES (?,?,?,?,?,?);",
-                    (blast_id, to_email, to_name, subj, status, err),
+                    "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error,owner_user) VALUES (?,?,?,?,?,?,?);",
+                    (blast_id, to_email, to_name, subj, status, err, get_current_user_name()),
                 )
                 conn.commit()
             logs.append({"email": to_email, "status": status, "error": err})
@@ -15293,9 +15433,9 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                     )
                 except Exception:
                     cur.execute(
-                        "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) "
-                        "VALUES (?,?,?,?,?,?);",
-                        (blast_id, to_email, to_name, subj, "Queued", ""),
+                        "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error,owner_user) "
+                        "VALUES (?,?,?,?,?,?,?);",
+                        (blast_id, to_email, to_name, subj, "Queued", "", get_current_user_name()),
                     )
                 log_id = cur.lastrowid
                 conn.commit()
@@ -15793,8 +15933,11 @@ def _o5_upsert_sequence(conn, name: str):
 
 def _o5_add_step(conn, seq_id: int, step_no: int, delay_hours: int, subject: str, body_html: str):
     with conn:
-        conn.execute("INSERT INTO outreach_steps(seq_id, step_no, delay_hours, subject, body_html) VALUES (?, ?, ?, ?, ?,?)",
-                     (seq_id, step_no, int(delay_hours), subject or "", body_html or ""))
+        conn.execute(
+            "INSERT INTO outreach_steps(seq_id, step_no, delay_hours, subject, body_html, owner_user) "
+            "VALUES (?, ?, ?, ?, ?, ?)", 
+            (seq_id, step_no, int(delay_hours), subject or "", body_html or "", get_current_user_name()),
+        )
 
 def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str | None = None):
     if not start_at_iso:
@@ -16965,8 +17108,11 @@ def __p_o5_ui(conn):
             with s3: subj = _st.text_input("Subject", key="__p_o5_subj")
             body = _st.text_area("HTML body", height=120, key="__p_o5_body")
             if _st.button("Add step", key="__p_o5_add"):
-                __p_db(conn,"INSERT INTO outreach_steps(seq_id,step_no,delay_hours,subject,body_html) VALUES (?, ?, ?, ?, ?,?)",
-                       (seq_id,int(step),int(delay),subj or "",body or "")); _st.rerun()
+                __p_db(
+                    conn,
+                    "INSERT INTO outreach_steps(seq_id,step_no,delay_hours,subject,body_html,owner_user) VALUES (?, ?, ?, ?, ?, ?)",
+                    (seq_id, int(step), int(delay), subj or "", body or "", get_current_user_name()),
+                ); _st.rerun()
     _st.markdown("---")
     _st.markdown("**Queue follow-ups**")
     if sel!="— New —" and not seq_df.empty: seq_id = int(seq_df.loc[seq_df["name"]==sel,"id"].iloc[0])
