@@ -1292,12 +1292,15 @@ def _ensure_phase3_schema(conn):
                     id INTEGER PRIMARY KEY,
                     rfp_id INTEGER,
                     filename TEXT,
-                    path TEXT,
-                    kind TEXT,
-                    extracted_path TEXT,
-                    bytes INTEGER,
+                    mime TEXT,
+                    sha256 TEXT,
+                    pages INTEGER,
+                    bytes BLOB,
+                    status TEXT,
+                    last_error TEXT,
+                    src_url TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
-                    FOREIGN KEY(rfp_id) REFERENCES rfp_records(id)
+                    FOREIGN KEY(rfp_id) REFERENCES rfps(id)
                 );
             """)
     except Exception as e:
@@ -14608,25 +14611,26 @@ def run_rfp_analyzer(conn) -> None:
                 st.rerun()
 
 
+    
     # Build pages and render One-Page
     try:
-        # Prefer modern schema with in-DB bytes; fall back to older path-based schema.
-        try:
-            df_files = _pd.__p_read_sql_query(
-                "SELECT filename, mime, bytes, path FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-                conn,
-                params=(int(_ensure_selected_rfp_id(conn)),),
-            )
-        except Exception:
-            df_files = _pd.__p_read_sql_query(
-                "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-                conn,
-                params=(int(_ensure_selected_rfp_id(conn)),),
-            )
+        rfp_id = int(_ensure_selected_rfp_id(conn))
     except Exception:
-        df_files = None
+        st.warning("Select an RFP first.")
+        return
 
     pages = []
+
+    # Primary: use rfp_files with stored bytes
+    try:
+        df_files = _pd.__p_read_sql_query(
+            "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            conn,
+            params=(rfp_id,),
+        )
+    except Exception:
+        df_files = _pd.DataFrame()
+
     if df_files is not None and not df_files.empty:
         for _, r in df_files.iterrows():
             b = None
@@ -14635,23 +14639,7 @@ def run_rfp_analyzer(conn) -> None:
             except Exception:
                 b = None
             if not b:
-                # older builds may store only a file path
-                p = None
-                try:
-                    # r is a pandas Series
-                    if "path" in list(r.index):
-                        p = r.get("path")
-                except Exception:
-                    p = None
-                if p:
-                    try:
-                        with open(p, "rb") as fh:
-                            b = fh.read()
-                    except Exception:
-                        b = None
-            if not b:
                 continue
-
             mime = r.get("mime") or ""
             try:
                 texts = extract_text_pages(b, mime) or []
@@ -14666,6 +14654,15 @@ def run_rfp_analyzer(conn) -> None:
                     }
                 )
 
+    # Fallback: combined extractor
+    if not pages:
+        try:
+            combined = y5_extract_from_rfp(conn, rfp_id) or ""
+        except Exception:
+            combined = ""
+        if combined.strip():
+            pages = [{"file": "combined", "page": 1, "text": combined}]
+
     if not pages:
         # Be explicit about why there are no pages.
         if df_files is None or df_files.empty:
@@ -14679,6 +14676,7 @@ def run_rfp_analyzer(conn) -> None:
         run_rfp_analyzer_onepage(pages)
     else:
         st.info("One-Page Analyzer module is unavailable.")
+
 def render_workspace_switcher(conn: "sqlite3.Connection") -> None:
     with st.sidebar.expander("Workspace", expanded=True):
         try:
