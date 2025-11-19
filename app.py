@@ -8467,14 +8467,13 @@ def run_sam_watch(conn) -> None:
                                 with _closing(_db.cursor()) as cur:
                                     cur.execute(
                                         """
-                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                        INSERT INTO deals(title, agency, status, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                                         """,
                                         (
                                             row.get('Title') or "",
                                             row.get('Agency Path') or "",
                                             "Bidding",
-                                            None,
                                             row.get('Notice ID') or "",
                                             row.get('Solicitation') or "",
                                             row.get('Posted') or "",
