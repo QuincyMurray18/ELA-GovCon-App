@@ -13654,6 +13654,7 @@ def nav() -> str:
         ]),
         ("Settings and Admin", [
             "Backup & Data",
+            "My Jobs",
             "Chat Assistant",
         ]),
     ]
@@ -17976,6 +17977,210 @@ try:
 except NameError:
     pass
 # ===================== END PATCH =====================
+
+
+
+# =========================
+# Job System • lightweight async tracking
+# =========================
+
+def ensure_jobs_schema(conn: "sqlite3.Connection") -> None:
+    """Create the jobs table and basic indexes if they do not exist.
+
+    This is intentionally lightweight and idempotent so it can be called
+    anywhere before enqueueing or listing jobs.
+    """
+    from contextlib import closing as _closing
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs(
+                    id INTEGER PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    created_by_user TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    progress REAL DEFAULT 0.0,
+                    payload_json TEXT,
+                    result_json TEXT,
+                    error_message TEXT
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(created_by_user, created_at);")
+            conn.commit()
+    except Exception:
+        # Schema creation should never break the app
+        pass
+
+
+def jobs_enqueue(conn: "sqlite3.Connection", job_type: str, payload: dict | None = None, created_by: str | None = None) -> int:
+    """Insert a new queued job row and return its id.
+
+    Actual background processing is handled elsewhere; this is just
+    the shared persistence layer other features can call.
+    """
+    import json as _json
+    from contextlib import closing as _closing
+
+    ensure_jobs_schema(conn)
+    try:
+        user_name = created_by
+        if not user_name:
+            try:
+                user_name = get_current_user_name()
+            except Exception:
+                user_name = None
+        payload_json = _json.dumps(payload or {}, ensure_ascii=False)
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO jobs(type, status, created_by_user, created_at, progress, payload_json) "
+                "VALUES(?, 'queued', ?, datetime('now'), 0.0, ?);",
+                (str(job_type), user_name, payload_json),
+            )
+            conn.commit()
+            try:
+                return int(cur.lastrowid)
+            except Exception:
+                return 0
+    except Exception:
+        return 0
+
+
+def jobs_update_status(
+    conn: "sqlite3.Connection",
+    job_id: int,
+    status: str | None = None,
+    progress: float | None = None,
+    error_message: str | None = None,
+    result: dict | None = None,
+    mark_started: bool | None = None,
+    mark_finished: bool | None = None,
+) -> None:
+    """Best effort update for a job row.
+
+    This keeps the API flexible without forcing every caller to pass
+    all fields all the time.
+    """
+    import json as _json
+    from contextlib import closing as _closing
+
+    ensure_jobs_schema(conn)
+    fields: list[str] = []
+    params: list[object] = []
+
+    if status is not None:
+        fields.append("status = ?")
+        params.append(str(status))
+    if progress is not None:
+        try:
+            p = float(progress)
+        except Exception:
+            p = 0.0
+        fields.append("progress = ?")
+        params.append(p)
+    if error_message is not None:
+        fields.append("error_message = ?")
+        params.append(str(error_message)[:2000])
+    if result is not None:
+        fields.append("result_json = ?")
+        params.append(_json.dumps(result, ensure_ascii=False))
+    if mark_started:
+        fields.append("started_at = COALESCE(started_at, datetime('now'))")
+    if mark_finished:
+        fields.append("finished_at = datetime('now')")
+
+    if not fields:
+        return
+
+    sql = "UPDATE jobs SET " + ", ".join(fields) + " WHERE id = ?;"
+    params.append(int(job_id))
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(sql, tuple(params))
+            conn.commit()
+    except Exception:
+        # Do not hard fail callers on job status issues
+        pass
+
+
+def jobs_list_for_user(conn: "sqlite3.Connection", user_name: str, limit: int = 50):
+    """Return a DataFrame of recent jobs for the given user name."""
+    import pandas as _pd
+
+    ensure_jobs_schema(conn)
+    try:
+        df = _pd.read_sql_query(
+            "SELECT id, type, status, progress, created_at, started_at, finished_at, error_message "
+            "FROM jobs WHERE created_by_user = ? ORDER BY created_at DESC LIMIT ?;",
+            conn,
+            params=(str(user_name), int(limit)),
+        )
+        return df
+    except Exception:
+        return _pd.DataFrame(columns=["id", "type", "status", "progress", "created_at", "started_at", "finished_at", "error_message"])
+
+
+def run_my_jobs(conn: "sqlite3.Connection") -> None:
+    """Small dashboard showing background jobs created by the current user."""
+    import streamlit as st
+    import pandas as pd
+
+    page_header("My Jobs", "Background work created from this login in the current workspace.")
+    ensure_jobs_schema(conn)
+
+    try:
+        user_name = get_current_user_name()
+    except Exception:
+        user_name = ""
+    if not user_name:
+        st.info("Select a user in the sidebar to see your jobs.")
+        return
+
+    st.caption(f"Showing jobs where created_by_user = '{user_name}'.")
+    col_status, col_limit = st.columns([2, 1])
+    with col_status:
+        status_filter = st.multiselect(
+            "Status filter",
+            options=["queued", "running", "done", "failed"],
+            default=["queued", "running", "done", "failed"],
+            key="jobs_status_filter",
+        )
+    with col_limit:
+        limit = st.number_input("Max rows", min_value=10, max_value=500, value=50, step=10, key="jobs_limit")
+
+    df = jobs_list_for_user(conn, user_name=user_name, limit=int(limit))
+    if df is None or df.empty:
+        st.info("No jobs recorded yet for this user.")
+        return
+
+    if status_filter:
+        df = df[df["status"].isin(status_filter)]
+
+    if "progress" in df.columns:
+        try:
+            df["progress_pct"] = (df["progress"].fillna(0.0).astype(float) * 100.0).round(1)
+        except Exception:
+            df["progress_pct"] = df.get("progress", 0.0)
+
+    cols = [c for c in ["id", "type", "status", "progress_pct", "created_at", "started_at", "finished_at", "error_message"] if c in df.columns]
+    if cols:
+        df = df[cols]
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Details", expanded=False):
+        st.caption("Raw jobs table for debugging or export.")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
 
 if __name__ == '__main__':
     try:
