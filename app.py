@@ -8625,15 +8625,20 @@ def run_research_tab(conn: "sqlite3.Connection") -> None:
 import datetime as _dt, hashlib, re as _re
 
 def _p3_insert_or_skip_file(conn, rfp_id: int, filename: str, blob: bytes, mime: str | None = None):
-    from contextlib import closing as _closing
-    sha = hashlib.sha256(blob or b"").hexdigest()
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "INSERT OR IGNORE INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
-            "VALUES (?, ?, ?, ?, ?,NULL,?, datetime('now'))",
-            (int(rfp_id), filename, mime or "application/octet-stream", sha, blob)
-        )
-        conn.commit()
+    """Insert-or-skip helper used by Proposal Builder uploads.
+
+    This delegates to the Phase 1 helper so it always stays in sync with the
+    current rfp_files schema (bytes/pages/status/src_url, etc.).
+    """
+    return _insert_or_skip_rfp_file(
+        conn,
+        int(rfp_id),
+        filename,
+        blob or b"",
+        mime or "application/octet-stream",
+        src_url=None,
+        status="uploaded_from_proposal_builder",
+    )
 
 def _p3_rfp_meta_get(conn, rfp_id: int, key: str, default: str = "") -> str:
     try:
