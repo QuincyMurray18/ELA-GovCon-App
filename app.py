@@ -11157,7 +11157,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     checklist=_ctxd(ctx, "items"),
                     metadata={
                         "rfp_id": int(rfp_id) if rfp_id is not None else None,
-                        "notice_id": _ctxd(ctx, "rfp", {}).get("notice_id"),
+                        "notice_id": _first_row_value(_ctxd(ctx, "rfp"), "notice_id", None),
                     },
                     font_name=font_name,
                     font_size_pt=int(font_size),
