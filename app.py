@@ -1850,7 +1850,7 @@ def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | Non
                 """
                 INSERT OR IGNORE INTO rfp_files 
                     (rfp_id, filename, mime, sha256, bytes, pages, created_at, status, last_error, src_url)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
+                VALUES (?, ?, ?, ?, ?, NULL, datetime('now'), ?, '', ?);
                 """,
                 (int(rfp_id), str(filename or ""), str(mime or "application/octet-stream"),
                  sha, sqlite3.Binary(blob or b""), status, src_url or "")
@@ -12967,7 +12967,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         if st.button("Save", key=f"k_save_{did}"):
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, rfp_deadline=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
+                                                cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
                                                 if ns != stage:
                                                     cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
                                                 conn.commit()
