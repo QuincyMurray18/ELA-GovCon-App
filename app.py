@@ -6446,6 +6446,47 @@ def get_db() -> sqlite3.Connection:
         """)
 
         # Phase B (RFP analyzer artifacts)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS notices(
+                id INTEGER PRIMARY KEY,
+                notice_id TEXT UNIQUE,
+                solnum TEXT,
+                title TEXT,
+                agency TEXT,
+                office TEXT,
+                naics TEXT,
+                set_aside TEXT,
+                posted_date TEXT,
+                response_date TEXT,
+                award_date TEXT,
+                awardee TEXT,
+                award_amount REAL,
+                psc TEXT,
+                sam_url TEXT,
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+        """)
+        try:
+            __p_ensure_column(conn, "notices", "agency", "TEXT")
+            __p_ensure_column(conn, "notices", "office", "TEXT")
+            __p_ensure_column(conn, "notices", "naics", "TEXT")
+            __p_ensure_column(conn, "notices", "set_aside", "TEXT")
+            __p_ensure_column(conn, "notices", "posted_date", "TEXT")
+            __p_ensure_column(conn, "notices", "response_date", "TEXT")
+            __p_ensure_column(conn, "notices", "award_date", "TEXT")
+            __p_ensure_column(conn, "notices", "awardee", "TEXT")
+            __p_ensure_column(conn, "notices", "award_amount", "REAL")
+            __p_ensure_column(conn, "notices", "psc", "TEXT")
+            __p_ensure_column(conn, "notices", "sam_url", "TEXT")
+            __p_ensure_column(conn, "notices", "status", "TEXT")
+            __p_ensure_column(conn, "notices", "created_at", "TEXT")
+            __p_ensure_column(conn, "notices", "updated_at", "TEXT")
+        except Exception:
+            pass
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfps(
                 id INTEGER PRIMARY KEY,
@@ -6939,7 +6980,7 @@ def get_db() -> sqlite3.Connection:
 
             "rfq_packs","rfq_lines","rfq_vendors","rfq_attach",
 
-            "saved_searches","alerts","sam_versions","sam_extracts",
+            "saved_searches","alerts","sam_versions","sam_extracts","notices",
 
             "rtm_requirements","rtm_links",
 
@@ -7193,6 +7234,138 @@ def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
         offset += params["limit"]
 
     return {"totalRecords": len(all_records), "records": all_records, "error": None}
+
+
+def sam_persist_notices(conn: "sqlite3.Connection", records: List[Dict[str, Any]]) -> None:
+    """
+    Best-effort upsert of SAM notices into the local `notices` table.
+
+    Stores richer metadata so that SAM Watch, RFP Analyzer, and the Deals
+    pipeline can reuse prior search results without re-calling the API.
+    """
+    if not records:
+        return
+    try:
+        import sqlite3  # noqa: F401
+    except Exception:
+        pass
+    try:
+        with conn:
+            cur = conn.cursor()
+            for r in records:
+                # Core identifiers
+                notice_id = (r.get("noticeId") or r.get("noticeid") or r.get("id") or "").strip()
+                solnum = (r.get("solicitationNumber") or r.get("solnum") or "").strip()
+                title = (r.get("title") or "").strip()
+
+                # Dates
+                posted_date = (r.get("postedDate") or "").strip()
+                response_date = (
+                    r.get("reponseDeadLine")
+                    or r.get("responseDeadline")
+                    or ""
+                )
+                response_date = (response_date or "").strip()
+                award_date = (r.get("awardDate") or "").strip()
+
+                # Organization path → agency / office split
+                org_path = (r.get("fullParentPathName") or r.get("organizationName") or "").strip()
+                agency = ""
+                office = ""
+                if org_path:
+                    parts = [p.strip() for p in re.split(r"[>/]", org_path) if p.strip()]
+                    if parts:
+                        agency = parts[0]
+                        if len(parts) > 1:
+                            office = parts[-1]
+                    else:
+                        agency = org_path
+
+                # Codes and statuses
+                naics = (r.get("naicsCode") or r.get("ncode") or "").strip()
+                set_aside = (r.get("setAside") or "").strip()
+                psc = (r.get("classificationCode") or r.get("ccode") or "").strip()
+                status = (
+                    r.get("noticeType")
+                    or r.get("type")
+                    or r.get("baseType")
+                    or ""
+                ).strip()
+
+                # Award info (best effort; many open notices will not have these)
+                awardee = (r.get("awardee") or r.get("awardeeName") or "").strip()
+                raw_award = (
+                    r.get("awardAmount")
+                    or r.get("awardAmountDecimal")
+                    or r.get("awardAmountNumeric")
+                    or r.get("awardAmountString")
+                )
+                award_amount = None
+                if raw_award not in (None, ""):
+                    try:
+                        award_amount = float(str(raw_award).replace(",", "").replace("$", "").strip())
+                    except Exception:
+                        award_amount = None
+
+                sam_url = ""
+                if notice_id:
+                    sam_url = f"https://sam.gov/opp/{notice_id}/view"
+
+                cur.execute(
+                    """
+                    INSERT INTO notices(
+                        notice_id, solnum, title,
+                        agency, office,
+                        naics, set_aside,
+                        posted_date, response_date,
+                        award_date, awardee, award_amount,
+                        psc, sam_url, status,
+                        created_at, updated_at
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))
+                    ON CONFLICT(notice_id) DO UPDATE SET
+                        solnum=excluded.solnum,
+                        title=excluded.title,
+                        agency=excluded.agency,
+                        office=excluded.office,
+                        naics=excluded.naics,
+                        set_aside=excluded.set_aside,
+                        posted_date=excluded.posted_date,
+                        response_date=excluded.response_date,
+                        award_date=excluded.award_date,
+                        awardee=excluded.awardee,
+                        award_amount=excluded.award_amount,
+                        psc=excluded.psc,
+                        sam_url=excluded.sam_url,
+                        status=excluded.status,
+                        updated_at=excluded.updated_at;
+                    """,
+                    (
+                        notice_id or None,
+                        solnum,
+                        title,
+                        agency,
+                        office,
+                        naics,
+                        set_aside,
+                        posted_date,
+                        response_date,
+                        award_date,
+                        awardee,
+                        award_amount,
+                        psc,
+                        sam_url,
+                        status,
+                    ),
+                )
+            try:
+                cur.close()
+            except Exception:
+                pass
+    except Exception:
+        # Best-effort only: do not block UI or search if persistence fails.
+        return
+
 
 def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
     rows = []
@@ -8329,6 +8502,10 @@ def _sam_run_live_search_job(conn_jobs, job_id: int, params: dict):
         raise RuntimeError(str(out.get("error")))
 
     recs = out.get("records") or []
+    try:
+        sam_persist_notices(conn_jobs, recs)
+    except Exception:
+        pass
     df = flatten_records(recs) if recs else _pd.DataFrame()
 
     # Mark as done with a small summary in result_json
