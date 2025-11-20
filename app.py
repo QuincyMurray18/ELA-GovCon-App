@@ -8333,13 +8333,27 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             email = st.text_input("Email")
         with c3:
             org = st.text_input("Organization")
+        c4, c5 = st.columns([2, 2])
+        with c4:
+            phone = st.text_input("Phone", value="")
+        with c5:
+            title = st.text_input("Title", value="")
         submitted = st.form_submit_button("Add Contact")
     if submitted:
         try:
             with closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO contacts(name, email, org, owner_user) VALUES (?, ?, ?, ?);",
-                    (name.strip(), email.strip(), org.strip(), get_current_user_name()),
+                    "INSERT INTO contacts(name, email, org, phone, title, public_source, owner_user, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                    (
+                        name.strip(),
+                        email.strip(),
+                        org.strip(),
+                        phone.strip(),
+                        title.strip(),
+                        "manual_entry",
+                        get_current_user_name(),
+                    ),
                 )
                 conn.commit()
             st.success(f"Added contact {name}")
@@ -8347,12 +8361,31 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             st.error(f"Error saving contact {e}")
 
     try:
-        df = pd.read_sql_query(
-            "SELECT name, email, org, "
+        source_filter = st.selectbox(
+            "Source filter",
+            ["All", "SAM notice", "Manual entry", "Other"],
+            index=0,
+        )
+        base_sql = (
+            "SELECT name, email, org, phone, title, public_source, "
             "COALESCE(engagement_score, 0) AS engagement_score, "
-            "COALESCE(last_engagement_at, '') AS last_engagement_at "
-            "FROM contacts_t ORDER BY name;",
+            "COALESCE(last_engagement_at, '') AS last_engagement_at, "
+            "COALESCE(created_at, '') AS created_at "
+            "FROM contacts_t"
+        )
+        params = []
+        if source_filter == "SAM notice":
+            base_sql += " WHERE public_source = ?"
+            params.append("sam_notice")
+        elif source_filter == "Manual entry":
+            base_sql += " WHERE COALESCE(public_source, '') IN ('', 'manual_entry')"
+        elif source_filter == "Other":
+            base_sql += " WHERE COALESCE(public_source, '') NOT IN ('', 'manual_entry', 'sam_notice')"
+        base_sql += " ORDER BY name;"
+        df = pd.read_sql_query(
+            base_sql,
             conn,
+            params=params or None,
         )
         st.subheader("Contact List")
         if df.empty:
