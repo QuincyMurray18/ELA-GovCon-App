@@ -3244,6 +3244,8 @@ def _render_ask_rfp_button(opportunity=None):
     _add("rfp_deadline", "rfp_deadline TEXT")
     _add("naics", "naics TEXT")
     _add("psc", "psc TEXT")
+    _add("score", "score REAL DEFAULT 0")
+    _add("score_reason", "score_reason TEXT")
     _add("engagement_score", "engagement_score REAL DEFAULT 0")
     _add("last_engagement_at", "last_engagement_at TEXT")
 
@@ -6408,6 +6410,8 @@ def get_db() -> sqlite3.Connection:
                 owner TEXT,
                 created_at TEXT,
                 updated_at TEXT,
+                score REAL DEFAULT 0,
+                score_reason TEXT,
                 engagement_score REAL DEFAULT 0,
                 last_engagement_at TEXT
             );
