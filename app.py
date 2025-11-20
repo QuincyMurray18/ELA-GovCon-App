@@ -17022,7 +17022,7 @@ def render_outreach_o5_followups(conn):
 # === End O5 ================================================================
 
 # === O6: Compliance — Unsubscribe & Suppression =============================
-import uuid, urllib.parse
+import uuid, urllib.parse, json
 
 def ensure_o6_schema(conn):
     with conn:
@@ -17043,6 +17043,37 @@ def ensure_o6_schema(conn):
             opened_at TEXT,
             FOREIGN KEY(log_id) REFERENCES outreach_log(id)
         );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_event(
+            id INTEGER PRIMARY KEY,
+            outreach_log_id INTEGER NOT NULL,
+            type TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            meta_json TEXT,
+            FOREIGN KEY(outreach_log_id) REFERENCES outreach_log(id)
+        );""")
+
+def o6_log_event(conn, outreach_log_id, event_type, meta=None):
+    """Insert a row into outreach_event for analytical tracking.
+
+    event_type is expected to be 'open' or 'click'.
+    meta can be a dict (will be JSON-encoded) or a JSON string.
+    """
+    try:
+        if meta is None:
+            meta_json = "{}"
+        elif isinstance(meta, str):
+            meta_json = meta
+        else:
+            meta_json = json.dumps(meta)
+        with conn:
+            conn.execute(
+                "INSERT INTO outreach_event(outreach_log_id, type, meta_json) VALUES(?,?,?)",
+                (outreach_log_id, event_type, meta_json),
+            )
+    except Exception:
+        # Tracking failures should never break the app
+        pass
+
 
 def o6_set_base_url(conn, url):
     with conn:
@@ -17137,6 +17168,10 @@ def o6_handle_query_unsubscribe(conn):
                                     "WHERE id=?;",
                                     (log_id,),
                                 )
+                            except Exception:
+                                pass
+                            try:
+                                o6_log_event(conn, log_id, "open", {"code": code_val})
                             except Exception:
                                 pass
                     except Exception:
