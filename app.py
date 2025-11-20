@@ -13910,6 +13910,27 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             return f"🟡 {d}d"
                         else:
                             return f"🔴 {d}d"
+                    # Deadline-based SLA (days until deadline; negative means overdue)
+                    def _deadline_sla(days):
+                        try:
+                            if days is None or _pd.isna(days):
+                                return "⚪ n/a"
+                            d = int(days)
+                        except Exception:
+                            return "⚪ n/a"
+                        # >14 days out = green, 7-14 = yellow, <7 (including overdue) = red
+                        if d > 14:
+                            return f"🟢 {d}d"
+                        elif d >= 7:
+                            return f"🟡 {d}d"
+                        else:
+                            return f"🔴 {d}d"
+                    # Compute days until deadline from rfp_deadline if present
+                    try:
+                        dl_raw = pd.to_datetime(df["rfp_deadline"], errors="coerce")
+                        df["days_until_deadline"] = (dl_raw.dt.date - today).dt.days
+                    except Exception:
+                        df["days_until_deadline"] = None
                     try:
                         df["stage_sla"] = df["days_in_stage"].apply(lambda d: _sla_label(d, 3, 7))
                     except Exception:
@@ -13918,10 +13939,14 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         df["activity_sla"] = df["days_since_last_activity"].apply(lambda d: _sla_label(d, 3, 7))
                     except Exception:
                         df["activity_sla"] = "⚪ n/a"
+                    try:
+                        df["deadline_sla"] = df["days_until_deadline"].apply(_deadline_sla)
+                    except Exception:
+                        df["deadline_sla"] = "⚪ n/a"
                     df["prob_%"] = df["status"].apply(_stage_probability)
                     df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
                     _styled_dataframe(
-                        df[["title","agency","status","value","prob_%","weighted_value","days_in_stage","days_since_last_activity","stage_sla","activity_sla"]],
+                        df[["title","agency","status","value","prob_%","weighted_value","days_in_stage","days_since_last_activity","days_until_deadline","stage_sla","activity_sla","deadline_sla"]],
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -14274,9 +14299,36 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 except Exception:
                     stage_sla_label = "⚪ n/a"
                     activity_sla_label = "⚪ n/a"
+                # Compute deadline SLA label for this deal
+                try:
+                    import datetime as _dt2
+                    import pandas as _pd2
+                    today2 = _dt2.date.today()
+                    dl = _pd2.to_datetime(row.get("rfp_deadline"), errors="coerce")
+                    if dl is not None and not _pd2.isna(dl):
+                        days_until_deadline = (dl.date() - today2).days
+                    else:
+                        days_until_deadline = None
+                    def _deadline_sla_single(days):
+                        try:
+                            if days is None or _pd2.isna(days):
+                                return "⚪ n/a"
+                            d = int(days)
+                        except Exception:
+                            return "⚪ n/a"
+                        if d > 14:
+                            return f"🟢 {d}d"
+                        elif d >= 7:
+                            return f"🟡 {d}d"
+                        else:
+                            return f"🔴 {d}d"
+                    deadline_sla_label = _deadline_sla_single(days_until_deadline)
+                except Exception:
+                    deadline_sla_label = "⚪ n/a"
                 body = (
                     f"Agency: {row['agency']}\n\n"
                     f"Status: {row['status']}\n"
+                    f"Deadline: {deadline_sla_label}\n"
                     f"Stage age: {stage_sla_label}\n"
                     f"Last activity: {activity_sla_label}\n\n"
                     f"Estimated value: ${float(row['value'] or 0):,.2f}\n\n"
