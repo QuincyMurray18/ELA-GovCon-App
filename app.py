@@ -7172,6 +7172,24 @@ def get_db() -> sqlite3.Connection:
         migrate(conn)
     except Exception:
         pass
+
+
+        # CRM activity log
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS activity(
+                id INTEGER PRIMARY KEY,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+                type TEXT,
+                status TEXT,
+                created_at TEXT,
+                meta_json TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_contact ON activity(contact_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_deal ON activity(deal_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at);")
     return conn
 
 # Compatibility shim for vendors_t
