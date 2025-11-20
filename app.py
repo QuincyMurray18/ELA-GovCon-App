@@ -16481,6 +16481,13 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                 except Exception:
                     pass
 
+                # Wrap links in tracking redirect URLs (click tracking)
+                try:
+                    if open_code and base_url and "o6_wrap_click_links" in globals():
+                        html_to_send = o6_wrap_click_links(html_to_send, base_url, open_code)
+                except Exception:
+                    pass
+
                 wrapped_html = _o3_wrap_email_html(html_to_send)
                 msg.attach(_O3MIMEText(wrapped_html, "html", "utf-8"))
 
@@ -17075,6 +17082,61 @@ def o6_log_event(conn, outreach_log_id, event_type, meta=None):
         pass
 
 
+
+
+def o6_wrap_click_links(html, base_url, tracking_code):
+    """Wrap http(s) links in the given HTML with click-tracking redirect URLs.
+
+    Links that are mailto:, tel:, javascript:, existing tracking links, or
+    unsubscribe links are left untouched.
+    """
+    if not html or not base_url or not tracking_code:
+        return html
+    try:
+        import re as _re
+        from urllib.parse import quote_plus as _quote_plus
+    except Exception:
+        return html
+
+    base = str(base_url or "").rstrip("/")
+
+    def _wrap_href(match):
+        quote = match.group(1)
+        url = match.group(2) or ""
+        if not url:
+            return match.group(0)
+        lower = url.lower()
+
+        # Skip non-http(s) schemes and internal anchors
+        if not (lower.startswith("http://") or lower.startswith("https://")):
+            return match.group(0)
+        if lower.startswith("#"):
+            return match.group(0)
+
+        # Skip obvious unsubscribe or already-tracked links
+        if "unsubscribe=" in lower:
+            return match.group(0)
+        if "/track/click" in lower and "token=" in lower:
+            return match.group(0)
+
+        # Skip mailto/tel/javascript just in case
+        if lower.startswith("mailto:") or lower.startswith("tel:") or lower.startswith("javascript:"):
+            return match.group(0)
+
+        try:
+            encoded = _quote_plus(url)
+            track_url = f"{base}/track/click?token={tracking_code}&u={encoded}"
+            return f"href={quote}{track_url}{quote}"
+        except Exception:
+            return match.group(0)
+
+    pattern = _re.compile(r'href=(["\'])(.+?)\1', _re.IGNORECASE)
+    try:
+        return pattern.sub(_wrap_href, html)
+    except Exception:
+        return html
+
+
 def o6_set_base_url(conn, url):
     with conn:
         conn.execute("INSERT INTO kv_store(k,v) VALUES('o6_base_url', ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v;", (url,))
@@ -17180,7 +17242,51 @@ def o6_handle_query_unsubscribe(conn):
                     _st.write("Thanks for reading.")
                     return True
 
-        # 2) Standard unsubscribe flow: ?unsubscribe=<code>
+        # 2) Click tracking: /track/click?token=...&u=...
+        if "click" in qp or "token" in qp:
+            code_val = (qp.get("click") or qp.get("token") or [None])[0]
+            url_val = (qp.get("u") or [None])[0]
+            log_id = None
+            target_url = None
+
+            if url_val:
+                try:
+                    from urllib.parse import unquote_plus as _unquote_plus
+                    target_url = _unquote_plus(url_val)
+                except Exception:
+                    target_url = url_val
+
+            if code_val:
+                try:
+                    row = conn.execute(
+                        "SELECT log_id FROM outreach_open_codes WHERE code=? LIMIT 1;",
+                        (code_val,),
+                    ).fetchone()
+                except Exception:
+                    row = None
+                if row and row[0]:
+                    log_id = int(row[0])
+                    try:
+                        o6_log_event(conn, log_id, "click", {"code": code_val, "url": target_url})
+                    except Exception:
+                        pass
+
+            # Render a redirect page so users reach the real link
+            if target_url:
+                if target_url.startswith("http://") or target_url.startswith("https://"):
+                    _st.markdown(
+                        f'<meta http-equiv="refresh" content="0; url={target_url}"/>'
+                        f'<p>Redirecting&hellip; <a href="{target_url}">Continue</a></p>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    _st.write("Click recorded.")
+                return True
+            elif code_val:
+                _st.write("Click recorded.")
+                return True
+
+        # 3) Standard unsubscribe flow: ?unsubscribe=<code>
         if "unsubscribe" in qp:
             code = (qp.get("unsubscribe", [None]) or [None])[0]
             if code:
