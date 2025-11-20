@@ -3246,7 +3246,7 @@ def _render_ask_rfp_button(opportunity=None):
     _add("psc", "psc TEXT")
     _add("score", "score REAL DEFAULT 0")
     _add("score_reason", "score_reason TEXT")
-        _add("co_contact_id", "co_contact_id INTEGER")
+    _add("co_contact_id", "co_contact_id INTEGER")
     _add("engagement_score", "engagement_score REAL DEFAULT 0")
     _add("last_engagement_at", "last_engagement_at TEXT")
 
