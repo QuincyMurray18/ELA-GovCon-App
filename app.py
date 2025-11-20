@@ -2224,57 +2224,153 @@ import sqlite3, hashlib, time
 
 # Cached DB connector with WAL + PRAGMAs
 def _ensure_indices(conn):
+    """Create useful indices on hot columns if their tables exist.
 
+    This is idempotent and safe to call multiple times. It keeps the core
+    tables fast for common filters in Deals, Notices, Contacts, Outreach,
+    and RFP Analyzer views.
+    """
     try:
         cur = conn.cursor()
-        def table_exists(name):
+
+        def table_exists(name: str) -> bool:
             try:
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
+                cur.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (name,),
+                )
                 return cur.fetchone() is not None
             except Exception:
                 return False
-        stmts = []
+
+        stmts: list[str] = []
+
+        # Notices: search filters in SAM Watch / RFP Analyzer
         if table_exists("notices"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)")
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_notices_notice_id ON notices(notice_id)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_notices_naics_agency ON notices(naics, agency)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_notices_setaside_respdate ON notices(set_aside, response_date)"
+            )
+
+        # Vendors / Subfinder
         if table_exists("vendors"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)")
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id)"
+            )
+
+        # Deals / pipeline views
         if table_exists("deals"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)")
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_deals_stage ON deals(stage)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_deals_owner_stage_deadline "
+                "ON deals(owner_user, stage, rfp_deadline)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_deals_notice_id ON deals(notice_id)"
+            )
+
+        # Files attached to notices / rfps (lightweight metadata)
         if table_exists("files"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)")
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_files_notice_id ON files(notice_id)"
+            )
+
+        # Contacts / CRM
+        if table_exists("contacts"):
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_contacts_org_owner "
+                "ON contacts(organization, owner_user)"
+            )
+
+        # Outreach log
+        if table_exists("outreach_log"):
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_outreach_log_contact_deal "
+                "ON outreach_log(contact_id, deal_id)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_outreach_log_sent_at "
+                "ON outreach_log(sent_at)"
+            )
+
+        # RFPs (lightweight header table)
+        if table_exists("rfps"):
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_rfps_notice_id ON rfps(notice_id)"
+            )
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_rfps_created_at ON rfps(created_at)"
+            )
+
+        # Messages / activity log
         if table_exists("messages"):
-            stmts.append("CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)")
+            stmts.append(
+                "CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at)"
+            )
+
         for s in stmts:
             try:
                 cur.execute(s)
             except Exception:
+                # best-effort only; don't block app on index creation
                 pass
-        cur.close()
+
+        try:
+            cur.close()
+        except Exception:
+            pass
     except Exception:
+        # index creation is non-critical
         pass
 
+
 def _db_connect(db_path: str, **kwargs):
+    """Central SQLite connector.
+
+    Puts the database into WAL mode and applies performance-friendly PRAGMAs.
+    Also ensures indices are created once per Streamlit session.
+    """
     import sqlite3
     _sq = sqlite3  # alias for compatibility
 
     import streamlit as st
 
     # Build connect kwargs with safe defaults
-    base_kwargs = {"check_same_thread": False, "detect_types": sqlite3.PARSE_DECLTYPES, "timeout": 15}
+    base_kwargs = {
+        "check_same_thread": False,
+        "detect_types": sqlite3.PARSE_DECLTYPES,
+        "timeout": 15,
+    }
     try:
         base_kwargs.update(kwargs or {})
     except Exception:
         pass
+
     conn = sqlite3.connect(db_path, **base_kwargs)
     try:
+        # WAL + write performance
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        # Keep more work in memory and avoid disk churn
         conn.execute("PRAGMA temp_store=MEMORY;")
         conn.execute("PRAGMA mmap_size=300000000;")
         conn.execute("PRAGMA cache_size=-200000;")
         conn.execute("PRAGMA busy_timeout=5000;")
+        # Enforce referential integrity at the connection level
+        conn.execute("PRAGMA foreign_keys=ON;")
     except Exception:
         pass
+
     # One-time per-session index creation
     try:
         if not st.session_state.get("_phase2_indices_done"):
@@ -2282,7 +2378,9 @@ def _db_connect(db_path: str, **kwargs):
             st.session_state["_phase2_indices_done"] = True
     except Exception:
         pass
+
     return conn
+
 # Cached SELECT helper (returns rows + cols); pass db_path explicitly
 @st.cache_data(ttl=600, show_spinner=False)
 def _cached_select(db_path: str, sql: str, params: tuple = ()):
@@ -20273,10 +20371,28 @@ def _finalize_draft(text: str) -> str:
         pass
     return _one_idea_per_paragraph(t)
 
-def _get_conn(db_path="samwatch.db"):
+def _get_conn(db_path: str = "samwatch.db"):
+    """Legacy SamWatch-style connector.
+
+    In the unified app we prefer the central `_db_connect` helpers so we still
+    get WAL mode, PRAGMAs, and indices even if older code paths call this.
+    """
     import os
+    import sqlite3  # local import as a safe fallback
+
+    # Make sure the directory exists
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+
+    try:
+        # Prefer the main app database and connector if available
+        if "DB_PATH" in globals():
+            return _db_connect(DB_PATH)
+    except Exception:
+        # Fall back to the passed-in path if anything goes wrong
+        pass
+
     return sqlite3.connect(db_path, check_same_thread=False)
+
 # (Phase 3 router entry removed to avoid duplicate UI in host app)
 
     st.set_page_config(page_title="GovCon — SAM Watch & Analyzer", layout="wide")
@@ -20286,6 +20402,7 @@ def _get_conn(db_path="samwatch.db"):
     except Exception:
         pass
     run_router(conn)
+
 
 # SIG+LOGO patch removed
 
