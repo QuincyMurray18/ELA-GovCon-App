@@ -11886,7 +11886,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         tpl_df = pd.DataFrame(columns=["id", "name", "template_type", "default_section", "is_active", "created_at"])
 
     with st.expander("Template library (proposal templates)", expanded=False):
-        x7_template_library_ui(conn)
+        try:
+            x7_template_library_ui(conn)  # type: ignore[name-defined]
+        except NameError:
+            st.info("Template library UI is not available in this build yet.")
 
     left, right = st.columns([3, 2])
     with left:
