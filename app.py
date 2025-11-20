@@ -11854,272 +11854,6 @@ def _export_docx(
         except Exception:
             pass
         return None
-
-def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
-    """
-    UI for managing proposal templates and their tokens.
-    Lives under Proposal Builder.
-    """
-    import pandas as _pd
-    from contextlib import closing as _closing
-    import streamlit as st
-
-    st.subheader("Template library")
-    try:
-        df_tpl = _pd.read_sql_query(
-            """
-            SELECT id, name, template_type, default_section, is_active, created_at, updated_at
-            FROM proposal_templates
-            ORDER BY is_active DESC, id DESC
-            ;
-            """,
-            conn,
-            params=(),
-        )
-    except Exception:
-        df_tpl = _pd.DataFrame()
-
-    selected_id = None
-    if df_tpl is not None and not df_tpl.empty:
-        display_df = df_tpl.copy()
-        try:
-            display_df["Status"] = display_df["is_active"].apply(lambda v: "Active" if int(v or 0) else "Archived")
-        except Exception:
-            display_df["Status"] = display_df.get("is_active")
-        display_df = display_df[["id", "name", "template_type", "default_section", "Status", "created_at"]]
-        _styled_dataframe(display_df, use_container_width=True, hide_index=True, height=220)
-        selected_id = st.selectbox(
-            "Select a template to edit",
-            options=display_df["id"].tolist(),
-            format_func=lambda tid: f"#{tid} — {display_df.loc[display_df['id']==tid,'name'].values[0]}",
-            key="x7_tpl_select",
-        )
-    else:
-        st.info("No templates defined yet. Create your first template below.")
-        display_df = df_tpl
-
-    col_new, col_edit, col_clone, col_archive = st.columns(4)
-    if col_new.button("New template", key="x7_tpl_new"):
-        st.session_state["x7_tpl_mode"] = "new"
-        st.session_state["x7_tpl_id"] = None
-    if col_edit.button("Edit", key="x7_tpl_edit") and selected_id is not None:
-        st.session_state["x7_tpl_mode"] = "edit"
-        st.session_state["x7_tpl_id"] = int(selected_id)
-    if col_clone.button("Clone", key="x7_tpl_clone") and selected_id is not None:
-        with _closing(conn.cursor()) as cur:
-            cur.execute(
-                """
-                SELECT name, description, template_type, default_section, body, owner, is_active
-                FROM proposal_templates
-                WHERE id = ?
-                ;
-                """,
-                (int(selected_id),),
-            )
-            row = cur.fetchone()
-            if row:
-                base_name = row[0] or "Template"
-                new_name = f"{base_name} (Copy)"
-                cur.execute(
-                    """
-                    INSERT INTO proposal_templates(name, description, template_type, default_section, body, owner, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ;
-                    """,
-                    (new_name, row[1], row[2], row[3], row[4], row[5], row[6]),
-                )
-                new_id = cur.lastrowid
-                cur.execute(
-                    """
-                    INSERT INTO proposal_template_tokens(template_id, token_name, source_type, source_expr, default_value, description)
-                    SELECT ?, token_name, source_type, source_expr, default_value, description
-                    FROM proposal_template_tokens
-                    WHERE template_id = ?
-                    ;
-                    """,
-                    (new_id, int(selected_id)),
-                )
-                conn.commit()
-                st.session_state["x7_tpl_mode"] = "edit"
-                st.session_state["x7_tpl_id"] = int(new_id)
-                st.success(f"Cloned template #{selected_id} to #{new_id}.")
-    if col_archive.button("Archive", key="x7_tpl_archive") and selected_id is not None:
-        with _closing(conn.cursor()) as cur:
-            cur.execute(
-                "UPDATE proposal_templates SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
-                (int(selected_id),),
-            )
-            conn.commit()
-        st.session_state["x7_tpl_mode"] = None
-        st.success(f"Archived template #{selected_id}.")
-        try:
-            st.experimental_rerun()
-        except Exception:
-            pass
-
-    mode = st.session_state.get("x7_tpl_mode")
-    current_id = st.session_state.get("x7_tpl_id")
-
-    if mode not in ("new", "edit"):
-        return
-
-    st.markdown("---")
-    st.subheader("Template details")
-
-    import pandas as _pd2
-    if mode == "edit" and current_id:
-        try:
-            df_one = _pd2.read_sql_query(
-                """
-                SELECT id, name, description, template_type, default_section, body, is_active
-                FROM proposal_templates
-                WHERE id = ?
-                ;
-                """,
-                conn,
-                params=(int(current_id),),
-            )
-        except Exception:
-            df_one = _pd2.DataFrame()
-    else:
-        df_one = _pd2.DataFrame()
-
-    if not df_one.empty:
-        rec = df_one.iloc[0]
-        name_default = rec.get("name") or ""
-        desc_default = rec.get("description") or ""
-        type_default = rec.get("template_type") or "proposal"
-        section_default = rec.get("default_section") or ""
-        body_default = rec.get("body") or ""
-        active_default = bool(int(rec.get("is_active") or 0))
-    else:
-        name_default = ""
-        desc_default = ""
-        type_default = "proposal"
-        section_default = ""
-        body_default = ""
-        active_default = True
-
-    name_val = st.text_input("Template name", value=name_default, key="x7_tpl_name")
-    type_options = ["proposal", "rfq_pack", "compliance", "section"]
-    try:
-        type_index = type_options.index(type_default) if type_default in type_options else 0
-    except Exception:
-        type_index = 0
-    type_val = st.selectbox(
-        "Template type",
-        options=type_options,
-        index=type_index,
-        key="x7_tpl_type",
-    )
-    section_val = st.text_input("Default section label", value=section_default, help="For example: Technical Approach, Cover Letter.", key="x7_tpl_section")
-    desc_val = st.text_area("Description (internal use)", value=desc_default, key="x7_tpl_desc")
-    active_val = st.checkbox("Active", value=active_default, key="x7_tpl_active")
-    body_val = st.text_area(
-        "Template body",
-        value=body_default,
-        height=260,
-        help="Use {{TOKEN_NAME}} for placeholders that will be auto-filled from deals, RFPs, and org profile.",
-        key="x7_tpl_body",
-    )
-
-    st.markdown("#### Tokens")
-    try:
-        if mode == "edit" and current_id:
-            df_tokens = _pd2.read_sql_query(
-                """
-                SELECT id, token_name, source_type, source_expr, default_value, description
-                FROM proposal_template_tokens
-                WHERE template_id = ?
-                ORDER BY token_name
-                ;
-                """,
-                conn,
-                params=(int(current_id),),
-            )
-        else:
-            df_tokens = _pd2.DataFrame(columns=["token_name", "source_type", "source_expr", "default_value", "description"])
-    except Exception:
-        df_tokens = _pd2.DataFrame(columns=["token_name", "source_type", "source_expr", "default_value", "description"])
-
-    if "id" in df_tokens.columns:
-        df_tokens = df_tokens.drop(columns=["id"])
-
-    if df_tokens.empty:
-        df_tokens = _pd2.DataFrame(
-            [
-                {"token_name": "ORG_NAME", "source_type": "org", "source_expr": "legal_name", "default_value": "", "description": "Your company name"},
-            ]
-        )
-
-    token_editor = st.data_editor(
-        df_tokens,
-        num_rows="dynamic",
-        hide_index=True,
-        use_container_width=True,
-        key=f"x7_tpl_tokens_editor_{mode}_{current_id or 'new'}",
-        column_config={
-            "token_name": st.column_config.TextColumn("Token name", help="Without curly braces, e.g. ORG_NAME."),
-            "source_type": st.column_config.SelectboxColumn("Source type", options=["deal", "rfp", "org", "manual", "static"]),
-            "source_expr": st.column_config.TextColumn("Source expression", help="Column or field name, e.g. title, solnum."),
-            "default_value": st.column_config.TextColumn("Default value"),
-            "description": st.column_config.TextColumn("Description"),
-        },
-    )
-
-    if st.button("Save template", type="primary", key="x7_tpl_save"):
-        if not name_val.strip():
-            st.error("Template name is required.")
-            return
-        with _closing(conn.cursor()) as cur:
-            if mode == "new" or not current_id:
-                cur.execute(
-                    """
-                    INSERT INTO proposal_templates(name, description, template_type, default_section, body, owner, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ;
-                    """,
-                    (name_val.strip(), desc_val.strip(), type_val.strip(), section_val.strip(), body_val, None, 1 if active_val else 0),
-                )
-                tpl_id = cur.lastrowid
-            else:
-                cur.execute(
-                    """
-                    UPDATE proposal_templates
-                    SET name = ?, description = ?, template_type = ?, default_section = ?, body = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    ;
-                    """,
-                    (name_val.strip(), desc_val.strip(), type_val.strip(), section_val.strip(), body_val, 1 if active_val else 0, int(current_id)),
-                )
-                tpl_id = int(current_id)
-
-            cur.execute("DELETE FROM proposal_template_tokens WHERE template_id = ?;", (tpl_id,))
-            for _, row in token_editor.iterrows():
-                token_name = str(row.get("token_name") or "").strip()
-                if not token_name:
-                    continue
-                source_type = str(row.get("source_type") or "manual").strip() or "manual"
-                source_expr = str(row.get("source_expr") or "").strip() or None
-                default_value = str(row.get("default_value") or "").strip() or None
-                desc = str(row.get("description") or "").strip() or None
-                cur.execute(
-                    """
-                    INSERT INTO proposal_template_tokens(template_id, token_name, source_type, source_expr, default_value, description)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ;
-                    """,
-                    (tpl_id, token_name, source_type, source_expr, default_value, desc),
-                )
-            conn.commit()
-        st.success("Template saved.")
-        st.session_state["x7_tpl_mode"] = "edit"
-        st.session_state["x7_tpl_id"] = int(tpl_id)
-        try:
-            st.experimental_rerun()
-        except Exception:
-            pass
-
 def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     _ensure_x7_schema(conn)
     st.header("Proposal Builder")
@@ -12136,27 +11870,18 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     )
     st.session_state["current_rfp_id"] = rfp_id
     ctx = _load_rfp_context_struct(conn, rfp_id)
-
-    # Load active proposal templates for use in this page
+    # Load active proposal templates and show library controls
     try:
         tpl_df = pd.read_sql_query(
-            """
-            SELECT id, name, template_type, default_section
-            FROM proposal_templates
-            WHERE is_active = 1
-            ORDER BY template_type, name
-            ;
-            """,
+            "SELECT id, name, template_type, default_section, is_active, created_at FROM proposal_templates ORDER BY name;",
             conn,
             params=(),
         )
     except Exception:
-        import pandas as _pd
-        tpl_df = _pd.DataFrame()
+        tpl_df = pd.DataFrame(columns=["id", "name", "template_type", "default_section", "is_active", "created_at"])
 
     with st.expander("Template library (proposal templates)", expanded=False):
         x7_template_library_ui(conn)
-
 
     left, right = st.columns([3, 2])
     with left:
@@ -12205,59 +11930,6 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
             st.markdown(f"**{sec}**")
             notes = st.text_input(f"Notes for {sec}", key=f"y3_notes_{sec}")
-
-            # Optional: load a saved template into this section
-            tpl_options = []
-            tpl_labels = {}
-            try:
-                if "tpl_df" in locals() and tpl_df is not None:
-                    _df_tpl_for_sec = tpl_df.copy()
-                else:
-                    _df_tpl_for_sec = None
-            except Exception:
-                _df_tpl_for_sec = None
-            if _df_tpl_for_sec is not None and not _df_tpl_for_sec.empty:
-                try:
-                    _mask = _df_tpl_for_sec["default_section"].fillna("").str.lower() == str(sec).lower()
-                    _preferred = _df_tpl_for_sec[_mask]
-                    if _preferred is None or _preferred.empty:
-                        _preferred = _df_tpl_for_sec
-                except Exception:
-                    _preferred = _df_tpl_for_sec
-                try:
-                    tpl_options = [int(x) for x in _preferred["id"].tolist()]
-                    tpl_labels = {
-                        int(row["id"]): f"{row['name']} [{row.get('template_type', '') or ''}]"
-                        for _, row in _preferred.iterrows()
-                    }
-                except Exception:
-                    tpl_options = []
-                    tpl_labels = {}
-            if tpl_options:
-                tcol1, tcol2 = st.columns([3,1])
-                with tcol1:
-                    chosen_tpl = st.selectbox(
-                        f"Load from template for {sec}",
-                        options=[0] + tpl_options,
-                        format_func=lambda tid: "Select template…" if tid == 0 else tpl_labels.get(int(tid), f"Template #{tid}"),
-                        key=f"x7_tpl_pick_{sec}",
-                    )
-                with tcol2:
-                    if st.button("Apply", key=f"x7_tpl_apply_{sec}") and chosen_tpl:
-                        try:
-                            rendered = x7_render_template_text(
-                                conn,
-                                int(chosen_tpl),
-                                rfp_id=int(rfp_id),
-                                deal_id=None,
-                                manual_values=None,
-                            )
-                            st.session_state[f"pb_section_{sec}"] = rendered
-                            st.session_state[f"pb_ta_{sec}"] = rendered
-                            st.rerun()
-                        except Exception as _e_tpl:
-                            st.error(f"Template apply failed: {_e_tpl}")
-
             cA, cB, cC = st.columns([1,1,1])
             with cA:
                 k = y_auto_k(f"{sec} {notes}")
@@ -12281,8 +11953,53 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             ta_key = f"pb_ta_{sec}"
 
             if ta_key not in st.session_state:
-
                 st.session_state[ta_key] = st.session_state.get(f"pb_section_{sec}", "")
+
+            # Optionally load this section from a saved template
+            _tpl_df_local = None
+            try:
+                _tpl_df_local = tpl_df
+            except Exception:
+                _tpl_df_local = None
+
+            if _tpl_df_local is not None and not _tpl_df_local.empty:
+                _match = _tpl_df_local["default_section"].fillna("").str.strip().str.lower() == str(sec).strip().lower()
+                _candidates = _tpl_df_local[_match]
+                if _candidates.empty:
+                    _candidates = _tpl_df_local
+                _template_ids = _candidates["id"].tolist()
+
+                _labels: dict[int, str] = {}
+                for _idx, _row in _candidates.iterrows():
+                    _tid = int(_row["id"])
+                    _tt = (_row.get("template_type") or "section")
+                    _sec_label = (_row.get("default_section") or "").strip()
+                    _nm = _row["name"] or f"Template {_tid}"
+                    if _sec_label:
+                        _labels[_tid] = f"{_nm} — {_tt}, {_sec_label}"
+                    else:
+                        _labels[_tid] = f"{_nm} — {_tt}"
+
+                def _x7_fmt_tpl_id(_tid: int | None) -> str:
+                    if _tid is None:
+                        return "Choose..."
+                    return _labels.get(int(_tid), f"Template {_tid}")
+
+                _selected_tpl_id = st.selectbox(
+                    f"Load from template for {sec}",
+                    options=[None] + _template_ids,
+                    format_func=_x7_fmt_tpl_id,
+                    key=f"x7_tpl_sel_{sec}",
+                )
+                if _selected_tpl_id is not None:
+                    if st.button("Apply template", key=f"x7_tpl_apply_{sec}"):
+                        _rendered = x7_render_template_text(conn, int(_selected_tpl_id), rfp_id=int(rfp_id))
+                        if _rendered:
+                            _norm = _pb_normalize_text(_rendered)
+                            st.session_state[f"pb_section_{sec}"] = _norm
+                            st.session_state[ta_key] = _norm
+                            st.success("Template applied.")
+                            st.rerun()
 
             content_map[sec] = st.text_area(sec, height=200, key=ta_key)
             with st.expander(f"Preview — {sec}", expanded=False):
@@ -21404,67 +21121,75 @@ def x6_save_links(conn: "sqlite3.Connection", rfp_id: int, mapping: list[tuple[i
 def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
     from contextlib import closing as _closing
     with _closing(conn.cursor()) as cur:
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS proposals(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rfp_id INTEGER NOT NULL,
-            title TEXT,
-            status TEXT DEFAULT 'draft',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proposals(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rfp_id INTEGER NOT NULL,
+                title TEXT,
+                status TEXT DEFAULT 'draft',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
         try:
             cur.execute("PRAGMA table_info(proposals);")
             _cols = [r[1] for r in cur.fetchall()]
             if "owner" not in _cols:
                 cur.execute("ALTER TABLE proposals ADD COLUMN owner TEXT;")
         except Exception:
+            # Best-effort migration; ignore if PRAGMA or ALTER are not supported.
             pass
 
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS proposal_sections(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            proposal_id INTEGER NOT NULL,
-            ord INTEGER NOT NULL,
-            title TEXT,
-            content TEXT,
-            settings_json TEXT,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proposal_sections(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proposal_id INTEGER NOT NULL,
+                ord INTEGER NOT NULL,
+                title TEXT,
+                content TEXT,
+                settings_json TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
 
-        # Template library for proposal, RFQ, and compliance automation
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS proposal_templates(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            description TEXT,
-            template_type TEXT DEFAULT 'section',
-            default_section TEXT,
-            body TEXT NOT NULL,
-            owner TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proposal_templates(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                template_type TEXT DEFAULT 'section',
+                default_section TEXT,
+                body TEXT NOT NULL,
+                owner TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
 
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS proposal_template_tokens(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            template_id INTEGER NOT NULL,
-            token_name TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            source_expr TEXT,
-            default_value TEXT,
-            description TEXT,
-            UNIQUE(template_id, token_name),
-            FOREIGN KEY(template_id) REFERENCES proposal_templates(id) ON DELETE CASCADE
-        );
-        """)
-
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proposal_template_tokens(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL,
+                token_name TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_expr TEXT,
+                default_value TEXT,
+                description TEXT,
+                UNIQUE(template_id, token_name),
+                FOREIGN KEY(template_id) REFERENCES proposal_templates(id) ON DELETE CASCADE
+            );
+            """
+        )
     conn.commit()
+
 
 def x7_render_template_text(
     conn: "sqlite3.Connection",
@@ -21477,111 +21202,419 @@ def x7_render_template_text(
     Render a proposal template by id, expanding any {{TOKENS}} using
     deal data, RFP Analyzer data, org profile, and manual overrides.
     """
-    import re as _re
-    import pandas as _pd
     from contextlib import closing as _closing
+    import re as _re
 
     manual_values = manual_values or {}
 
     with _closing(conn.cursor()) as cur:
         cur.execute(
-            "SELECT id, body FROM proposal_templates WHERE id=? AND is_active=1",
+            "SELECT body FROM proposal_templates WHERE id = ?;",
             (int(template_id),),
         )
         row = cur.fetchone()
-    if not row:
-        return ""
-    body = row[1] or ""
-    # Find token names like {{TOKEN_NAME}}
-    names = _re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", body)
-    if not names:
-        return body
+        if not row:
+            return ""
+        body = row[0] or ""
 
-    placeholders = ",".join(["?"] * len(names))
+        # Collect token names like {{TOKEN_NAME}}
+        token_names = set(_re.findall(r"{{\s*([A-Z0-9_]+)\s*}}", body))
+        if not token_names:
+            return body
+
+        # Load token metadata
+        cur.execute(
+            """
+            SELECT token_name, source_type, source_expr, default_value
+            FROM proposal_template_tokens
+            WHERE template_id = ?;
+            """,
+            (int(template_id),),
+        )
+        meta_rows = cur.fetchall()
+        meta_by_name: dict[str, tuple[str, str | None, str | None]] = {}
+        for tname, source_type, source_expr, default_value in meta_rows:
+            if not tname:
+                continue
+            meta_by_name[str(tname).upper()] = (
+                str(source_type or "manual"),
+                source_expr,
+                default_value,
+            )
+
+        deal_row = None
+        deal_cols: list[str] = []
+        rfp_row = None
+        rfp_cols: list[str] = []
+        org_row = None
+        org_cols: list[str] = []
+
+        if deal_id is not None:
+            try:
+                cur.execute("SELECT * FROM deals WHERE id = ?;", (int(deal_id),))
+                deal_row = cur.fetchone()
+                if deal_row is not None:
+                    deal_cols = [d[0] for d in cur.description]
+            except Exception:
+                deal_row = None
+                deal_cols = []
+
+        if rfp_id is not None and rfp_id != 0:
+            # Try rfps first, then rfps_t as a fallback.
+            try:
+                cur.execute("SELECT * FROM rfps WHERE id = ?;", (int(rfp_id),))
+                rfp_row = cur.fetchone()
+                if rfp_row is not None:
+                    rfp_cols = [d[0] for d in cur.description]
+            except Exception:
+                rfp_row = None
+                rfp_cols = []
+            if rfp_row is None:
+                try:
+                    cur.execute("SELECT * FROM rfps_t WHERE id = ?;", (int(rfp_id),))
+                    rfp_row = cur.fetchone()
+                    if rfp_row is not None:
+                        rfp_cols = [d[0] for d in cur.description]
+                except Exception:
+                    rfp_row = None
+                    rfp_cols = []
+
+        try:
+            cur.execute("SELECT * FROM org_profile WHERE id = 1;")
+            org_row = cur.fetchone()
+            if org_row is not None:
+                org_cols = [d[0] for d in cur.description]
+        except Exception:
+            org_row = None
+            org_cols = []
+
+    def _resolve_token(name: str) -> str:
+        # Manual values override everything.
+        if name in manual_values:
+            v = manual_values.get(name)
+            return "" if v is None else str(v)
+
+        meta = meta_by_name.get(name)
+        if not meta:
+            # Unknown token: try manual again (case-insensitive) then blank.
+            for k, v in manual_values.items():
+                if k.upper() == name:
+                    return "" if v is None else str(v)
+            return ""
+
+        source_type, source_expr, default_value = meta
+        source_type = (source_type or "manual").lower()
+        source_expr = (source_expr or "").strip()
+        default_value = default_value or ""
+
+        try:
+            if source_type == "deal" and deal_row is not None and deal_cols:
+                if source_expr and source_expr in deal_cols:
+                    idx = deal_cols.index(source_expr)
+                    val = deal_row[idx]
+                    return "" if val is None else str(val)
+            elif source_type == "rfp" and rfp_row is not None and rfp_cols:
+                if source_expr and source_expr in rfp_cols:
+                    idx = rfp_cols.index(source_expr)
+                    val = rfp_row[idx]
+                    return "" if val is None else str(val)
+            elif source_type == "org" and org_row is not None and org_cols:
+                if source_expr and source_expr in org_cols:
+                    idx = org_cols.index(source_expr)
+                    val = org_row[idx]
+                    return "" if val is None else str(val)
+            elif source_type in ("manual", "static"):
+                # For manual/static tokens, fall back to default.
+                return default_value
+        except Exception:
+            # On any lookup failure, fall back to default_value.
+            return default_value
+
+        return default_value
+
+    def _repl(match: "_re.Match") -> str:
+        tname = match.group(1) or ""
+        tname = tname.strip().upper()
+        if not tname:
+            return ""
+        return _resolve_token(tname)
+
+    return _re.sub(r"{{\s*([A-Z0-9_]+)\s*}}", _repl, body)
+
+
+def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
+    """Basic Proposal Template Library management UI.
+
+    - Shows existing templates.
+    - Lets you clone or archive an existing template.
+    - Provides forms to create a new template and edit the selected template,
+      including a token grid.
+    """
+    from contextlib import closing as _closing
+
+    st.markdown("**Template library**")
+
     try:
-        df_tok = _pd.read_sql_query(
-            f"SELECT id, token_name, source_type, source_expr, default_value "
-            f"FROM proposal_template_tokens "
-            f"WHERE template_id=? AND token_name IN ({placeholders})",
+        df = pd.read_sql_query(
+            "SELECT id, name, template_type, default_section, is_active, created_at FROM proposal_templates ORDER BY created_at DESC;",
             conn,
-            params=(int(template_id), *names),
+            params=(),
         )
     except Exception:
-        df_tok = _pd.DataFrame(columns=["token_name","source_type","source_expr","default_value"])
+        df = pd.DataFrame(columns=["id", "name", "template_type", "default_section", "is_active", "created_at"])
 
-    def _val_from_row(r):
-        stype = str(r.get("source_type") or "").lower().strip()
-        expr = str(r.get("source_expr") or "").strip()
-        default = "" if r.get("default_value") is None else str(r.get("default_value"))
+    if df.empty:
+        st.info("No templates yet. Use the forms below to create your first template.")
+    else:
+        st.dataframe(df)
 
-        # Manual tokens: allow caller overrides, otherwise default.
-        if stype in ("manual", "static"):
-            return str(manual_values.get(r["token_name"], default))
+    selected_id: int | None = None
+    if not df.empty:
+        selected_id = st.selectbox(
+            "Template to edit",
+            options=[None] + df["id"].tolist(),
+            format_func=lambda tid: "None" if tid is None else (
+                f"#{tid} — {df.loc[df['id']==tid,'name'].values[0]} ({df.loc[df['id']==tid,'template_type'].values[0] or 'section'})"
+            ),
+            key="x7_tpl_edit_select",
+        )
 
-        # Deal-backed tokens.
-        if stype == "deal":
-            try:
-                if deal_id:
-                    q = f"SELECT {expr} AS v FROM deals WHERE id=? LIMIT 1"
-                    df = _pd.read_sql_query(q, conn, params=(int(deal_id),))
-                elif rfp_id:
-                    q = f"SELECT {expr} AS v FROM deals WHERE rfp_id=? ORDER BY id DESC LIMIT 1"
-                    df = _pd.read_sql_query(q, conn, params=(int(rfp_id),))
-                else:
-                    df = _pd.DataFrame()
-            except Exception:
-                df = _pd.DataFrame()
-            if not df.empty and "v" in df.columns and _pd.notna(df["v"].iloc[0]):
-                return str(df["v"].iloc[0])
-            return default
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Clone selected", key="x7_tpl_clone", disabled=selected_id is None):
+                if selected_id is not None:
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO proposal_templates(name, description, template_type, default_section, body, owner, is_active)
+                            SELECT name || ' (Copy)', description, template_type, default_section, body, owner, is_active
+                            FROM proposal_templates WHERE id = ?;
+                            """,
+                            (int(selected_id),),
+                        )
+                        new_id = cur.lastrowid
+                        cur.execute(
+                            """
+                            INSERT INTO proposal_template_tokens(template_id, token_name, source_type, source_expr, default_value, description)
+                            SELECT ?, token_name, source_type, source_expr, default_value, description
+                            FROM proposal_template_tokens
+                            WHERE template_id = ?;
+                            """,
+                            (int(new_id), int(selected_id)),
+                        )
+                        conn.commit()
+                    st.success("Template cloned.")
+                    st.rerun()
+        with c2:
+            if st.button("Archive selected", key="x7_tpl_archive", disabled=selected_id is None):
+                if selected_id is not None:
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            "UPDATE proposal_templates SET is_active = 0 WHERE id = ?;",
+                            (int(selected_id),),
+                        )
+                        conn.commit()
+                    st.success("Template archived.")
+                    st.rerun()
 
-        # RFP-backed tokens (parsed via RFP Analyzer).
-        if stype == "rfp":
-            try:
-                if rfp_id:
+    st.markdown("---")
+    st.markdown("**New template**")
+
+    empty_tokens_df = pd.DataFrame(
+        columns=["token_name", "source_type", "source_expr", "default_value", "description"]
+    )
+
+    with st.form("x7_tpl_new_form"):
+        new_name = st.text_input("Template name", "")
+        new_type = st.selectbox(
+            "Template type",
+            options=["section", "proposal", "rfq_pack", "compliance"],
+            index=0,
+            key="x7_tpl_new_type",
+        )
+        new_default_section = st.text_input("Default section label (optional)", "")
+        new_description = st.text_area("Description (optional)", "")
+        new_body = st.text_area(
+            "Template body (use {{TOKEN_NAME}} placeholders)",
+            height=200,
+            key="x7_tpl_new_body",
+        )
+        st.caption("Examples: {{ORG_NAME}}, {{RFP_TITLE}}, {{DEAL_AMOUNT}}.")
+        new_tokens_df = st.data_editor(
+            empty_tokens_df,
+            num_rows="dynamic",
+            hide_index=True,
+            key="x7_tpl_new_tokens",
+        )
+        submitted_new = st.form_submit_button("Create template")
+
+        if submitted_new:
+            if not new_name.strip():
+                st.warning("Template name is required.")
+            elif not new_body.strip():
+                st.warning("Template body is required.")
+            else:
+                with _closing(conn.cursor()) as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO proposal_templates(name, description, template_type, default_section, body, owner, is_active)
+                        VALUES(?,?,?,?,?,?,1);
+                        """,
+                        (
+                            new_name.strip(),
+                            new_description.strip() or None,
+                            new_type,
+                            new_default_section.strip() or None,
+                            new_body,
+                            None,
+                        ),
+                    )
+                    new_id = cur.lastrowid
                     try:
-                        q = f"SELECT {expr} AS v FROM rfps WHERE id=? LIMIT 1"
-                        df = _pd.read_sql_query(q, conn, params=(int(rfp_id),))
+                        records = new_tokens_df.to_dict("records")
                     except Exception:
-                        q = f"SELECT {expr} AS v FROM rfps_t WHERE id=? LIMIT 1"
-                        df = _pd.read_sql_query(q, conn, params=(int(rfp_id),))
-                else:
-                    df = _pd.DataFrame()
-            except Exception:
-                df = _pd.DataFrame()
-            if not df.empty and "v" in df.columns and _pd.notna(df["v"].iloc[0]):
-                return str(df["v"].iloc[0])
-            return default
+                        records = []
+                    for row in records:
+                        tname = str(row.get("token_name") or "").strip().upper()
+                        if not tname:
+                            continue
+                        source_type = str(row.get("source_type") or "manual").strip()
+                        source_expr = str(row.get("source_expr") or "").strip() or None
+                        default_value = row.get("default_value")
+                        description = row.get("description")
+                        cur.execute(
+                            """
+                            INSERT INTO proposal_template_tokens(template_id, token_name, source_type, source_expr, default_value, description)
+                            VALUES(?,?,?,?,?,?);
+                            """,
+                            (new_id, tname, source_type, source_expr, default_value, description),
+                        )
+                    conn.commit()
+                st.success("Template created.")
+                st.rerun()
 
-        # Org profile tokens (capability statement style).
-        if stype == "org":
-            try:
-                q = f"SELECT {expr} AS v FROM org_profile WHERE id=1 LIMIT 1"
-                df = _pd.read_sql_query(q, conn, params=())
-            except Exception:
-                df = _pd.DataFrame()
-            if not df.empty and "v" in df.columns and _pd.notna(df["v"].iloc[0]):
-                return str(df["v"].iloc[0])
-            return default
+    st.markdown("---")
+    st.markdown("**Edit selected template**")
 
-        return default
+    if selected_id is None:
+        st.info("Select a template above to edit it.")
+        return
 
-    # Build replacement map.
-    values = {}
-    if df_tok is not None and not df_tok.empty:
-        for _, r in df_tok.iterrows():
-            name = str(r["token_name"])
-            values[name] = _val_from_row(r)
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            """
+            SELECT id, name, description, template_type, default_section, body, is_active
+            FROM proposal_templates
+            WHERE id = ?;
+            """,
+            (int(selected_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            st.warning("Selected template not found.")
+            return
+        tpl_id, tpl_name, tpl_desc, tpl_type, tpl_default_section, tpl_body, tpl_is_active = row
+        cur.execute(
+            """
+            SELECT token_name, source_type, source_expr, default_value, description
+            FROM proposal_template_tokens
+            WHERE template_id = ?;
+            """,
+            (int(selected_id),),
+        )
+        token_rows = cur.fetchall()
 
-    # Fill in any remaining tokens with manual_values (or blank).
-    for nm in names:
-        if nm not in values:
-            values[nm] = str(manual_values.get(nm, ""))
+    edit_tokens_df = pd.DataFrame(
+        token_rows,
+        columns=["token_name", "source_type", "source_expr", "default_value", "description"],
+    )
 
-    for nm, val in values.items():
-        body = body.replace(f"{{{{{nm}}}}}", val or "")
+    with st.form("x7_tpl_edit_form"):
+        edit_name = st.text_input("Template name", tpl_name or "", key="x7_tpl_edit_name")
+        edit_type = st.selectbox(
+            "Template type",
+            options=["section", "proposal", "rfq_pack", "compliance"],
+            index=["section", "proposal", "rfq_pack", "compliance"].index(tpl_type or "section")
+            if (tpl_type or "section") in ["section", "proposal", "rfq_pack", "compliance"]
+            else 0,
+            key="x7_tpl_edit_type",
+        )
+        edit_default_section = st.text_input(
+            "Default section label (optional)",
+            tpl_default_section or "",
+            key="x7_tpl_edit_default_section",
+        )
+        edit_description = st.text_area(
+            "Description (optional)",
+            tpl_desc or "",
+            key="x7_tpl_edit_description",
+        )
+        edit_body = st.text_area(
+            "Template body (use {{TOKEN_NAME}} placeholders)",
+            tpl_body or "",
+            height=200,
+            key="x7_tpl_edit_body",
+        )
+        edit_tokens_df = st.data_editor(
+            edit_tokens_df,
+            num_rows="dynamic",
+            hide_index=True,
+            key=f"x7_tpl_edit_tokens_{selected_id}",
+        )
+        submitted_edit = st.form_submit_button("Save changes")
 
-    return body
+        if submitted_edit:
+            if not edit_name.strip():
+                st.warning("Template name is required.")
+            elif not edit_body.strip():
+                st.warning("Template body is required.")
+            else:
+                with _closing(conn.cursor()) as cur:
+                    cur.execute(
+                        """
+                        UPDATE proposal_templates
+                        SET name = ?, description = ?, template_type = ?, default_section = ?, body = ?, is_active = ?
+                        WHERE id = ?;
+                        """,
+                        (
+                            edit_name.strip(),
+                            edit_description.strip() or None,
+                            edit_type,
+                            edit_default_section.strip() or None,
+                            edit_body,
+                            int(bool(tpl_is_active)),
+                            int(selected_id),
+                        ),
+                    )
+                    # Replace token definitions.
+                    cur.execute(
+                        "DELETE FROM proposal_template_tokens WHERE template_id = ?;",
+                        (int(selected_id),),
+                    )
+                    try:
+                        records = edit_tokens_df.to_dict("records")
+                    except Exception:
+                        records = []
+                    for row in records:
+                        tname = str(row.get("token_name") or "").strip().upper()
+                        if not tname:
+                            continue
+                        source_type = str(row.get("source_type") or "manual").strip()
+                        source_expr = str(row.get("source_expr") or "").strip() or None
+                        default_value = row.get("default_value")
+                        description = row.get("description")
+                        cur.execute(
+                            """
+                            INSERT INTO proposal_template_tokens(template_id, token_name, source_type, source_expr, default_value, description)
+                            VALUES(?,?,?,?,?,?);
+                            """,
+                            (int(selected_id), tname, source_type, source_expr, default_value, description),
+                        )
+                    conn.commit()
+                st.success("Template updated.")
+                st.rerun()
+
+
 
 
 def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, title: str | None = None) -> int:
