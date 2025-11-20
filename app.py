@@ -6763,6 +6763,7 @@ def get_db() -> sqlite3.Connection:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tasks(
                 id INTEGER PRIMARY KEY,
+                owner_user TEXT,
                 title TEXT NOT NULL,
                 due_date TEXT,
                 status TEXT DEFAULT 'Open',
@@ -6773,7 +6774,28 @@ def get_db() -> sqlite3.Connection:
                 completed_at TEXT
             );
         """)
+        try:
+            cur.execute("ALTER TABLE tasks ADD COLUMN owner_user TEXT")
+        except Exception:
+            pass
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date, status);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_user);")
+        cur.execute("DROP VIEW IF EXISTS tasks_t;")
+        cur.execute("""
+            CREATE VIEW IF NOT EXISTS tasks_t AS
+            SELECT
+                id,
+                title,
+                due_date,
+                status,
+                priority,
+                deal_id,
+                contact_id,
+                created_at,
+                completed_at,
+                COALESCE(owner_user, '') AS owner_user
+            FROM tasks;
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deal_stage_log(
                 id INTEGER PRIMARY KEY,
@@ -9657,11 +9679,35 @@ def _p3_auto_stage_for_rfp(conn, rfp_id: int):
             deal_id = _p3_get_deal_id_for_rfp(conn, rfp_id)
             if deal_id:
                 df_task = _pd.read_sql_query("SELECT 1 FROM tasks WHERE deal_id=? AND title LIKE 'Proposal due%';", conn, params=(int(deal_id),))
+                
                 if df_task.empty:
+                    from contextlib import closing as _closing
+                    # Assign proposal due task to the deal owner when possible
+                    owner_for_task = "System"
+                    try:
+                        with _closing(conn.cursor()) as cur2:
+                            cur2.execute("SELECT COALESCE(owner_user, owner) FROM deals WHERE id=?;", (int(deal_id),))
+                            row_owner = cur2.fetchone()
+                        if row_owner and (row_owner[0] or "").strip():
+                            owner_for_task = str(row_owner[0]).strip()
+                    except Exception:
+                        pass
                     with _closing(conn.cursor()) as cur:
-                        cur.execute("INSERT INTO tasks(title, due_date, status, deal_id) VALUES(?,?,?,?);", ("Proposal due", str(df_due.iloc[0]['d'] or ''), "Open", int(deal_id)))
+                        cur.execute(
+                            "INSERT INTO tasks(owner_user, title, due_date, status, priority, deal_id, contact_id, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                            (
+                                owner_for_task,
+                                "Proposal due",
+                                str(df_due.iloc[0]['d'] or ''),
+                                "Open",
+                                "High",
+                                int(deal_id),
+                                None,
+                            ),
+                        )
                         conn.commit()
-    except Exception:
+except Exception:
         pass
 
 def _p3_auto_wire_crm_from_rfp(conn, rfp_id: int):
@@ -13602,6 +13648,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
 
     # --- Tasks
     with tabs[1]:
+        
         st.subheader("New Task")
         df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
         df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
@@ -13611,8 +13658,45 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             t_due = st.date_input("Due date", key="task_due")
         with t2:
             t_priority = st.selectbox("Priority", ["Low","Normal","High"], index=1, key="task_priority")
-            t_status = st.selectbox("Status", STAGES_ORDERED)
-        with f1:
+        with t3:
+            t_deal = st.selectbox(
+                "Related deal (optional)",
+                options=[None] + df_deals["id"].tolist(),
+                format_func=lambda i: "None" if i is None else f"#{i} — " + str(df_deals.loc[df_deals['id'] == i, 'title'].values[0]),
+                key="task_deal",
+            )
+            t_contact = st.selectbox(
+                "Related contact (optional)",
+                options=[None] + df_contacts["id"].tolist(),
+                format_func=lambda i: "None" if i is None else str(df_contacts.loc[df_contacts['id'] == i, 'name'].values[0]),
+                key="task_contact",
+            )
+            if st.button("Create task", key="task_create"):
+                from contextlib import closing as _closing
+                title_clean = (t_title or "").strip()
+                if not title_clean:
+                    st.error("Task title is required.")
+                else:
+                    owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            "INSERT INTO tasks(owner_user, title, due_date, status, priority, deal_id, contact_id, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                            (
+                                owner_scope,
+                                title_clean,
+                                str(t_due) if t_due else None,
+                                "Open",
+                                t_priority,
+                                int(t_deal) if t_deal else None,
+                                int(t_contact) if t_contact else None,
+                            ),
+                        )
+                        conn.commit()
+                    st.success("Task created.")
+                    st.experimental_rerun()
+
+with f1:
             tf_status = st.multiselect("Status", ["Open","In Progress","Done"], default=["Open","In Progress"])
         with f2:
             tf_priority = st.multiselect("Priority", ["Low","Normal","High"], default=[])
@@ -14114,6 +14198,47 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             st.experimental_rerun()
                         except Exception as e:
                             st.error(f"Failed to update primary contact: {e}")
+                # Quick follow-up tasks for this deal
+                from datetime import date, timedelta
+                from contextlib import closing as _closing
+
+                def _add_followup_task(days: int) -> None:
+                    due = date.today() + timedelta(days=days)
+                    owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+                    title = f"Follow up: {row['title']}"
+                    primary_contact_id = int(row.get("co_contact_id") or 0) or None
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            "INSERT INTO tasks(owner_user, title, due_date, status, priority, deal_id, contact_id, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                            (
+                                owner_scope,
+                                title[:200],
+                                due.isoformat(),
+                                "Open",
+                                "Normal",
+                                int(row["id"]),
+                                primary_contact_id,
+                            ),
+                        )
+                        conn.commit()
+                    st.success(f"Added follow-up task due {due.isoformat()}")
+
+                st.subheader("Follow-up tasks")
+                fc1, fc2, fc3, fc4 = st.columns(4)
+                with fc1:
+                    if st.button("Follow-up in 3 days", key=f"deal_follow_3_{int(row['id'])}"):
+                        _add_followup_task(3)
+                with fc2:
+                    if st.button("Follow-up in 7 days", key=f"deal_follow_7_{int(row['id'])}"):
+                        _add_followup_task(7)
+                with fc3:
+                    if st.button("Follow-up in 14 days", key=f"deal_follow_14_{int(row['id'])}"):
+                        _add_followup_task(14)
+                with fc4:
+                    if st.button("Follow-up in 30 days", key=f"deal_follow_30_{int(row['id'])}"):
+                        _add_followup_task(30)
+
                 # Activity timeline for this deal
                 try:
                     owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
