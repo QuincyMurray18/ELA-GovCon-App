@@ -3249,6 +3249,8 @@ def _render_ask_rfp_button(opportunity=None):
     _add("co_contact_id", "co_contact_id INTEGER")
     _add("engagement_score", "engagement_score REAL DEFAULT 0")
     _add("last_engagement_at", "last_engagement_at TEXT")
+    _add("first_entered_stage_date", "first_entered_stage_date TEXT")
+    _add("last_stage_change_date", "last_stage_change_date TEXT")
 
 # Bridge names
 sqlite3 = _rtm_sqlite3
@@ -6419,7 +6421,9 @@ def get_db() -> sqlite3.Connection:
                 score REAL DEFAULT 0,
                 score_reason TEXT,
                 engagement_score REAL DEFAULT 0,
-                last_engagement_at TEXT
+                last_engagement_at TEXT,
+                first_entered_stage_date TEXT,
+                last_stage_change_date TEXT
             );
         """)
         # Ensure new columns exist for Deals/SAM Watch
@@ -9668,7 +9672,7 @@ def _p3_auto_stage_for_rfp(conn, rfp_id: int):
         cur_stage = ""
     if cur_stage != new_stage:
         with _closing(conn.cursor()) as cur:
-            cur.execute("UPDATE deals SET stage=?, status=?, updated_at=datetime('now') WHERE id=?;", (new_stage, new_stage, int(deal_id)))
+            cur.execute("UPDATE deals SET stage=?, status=?, updated_at=datetime('now'), last_stage_change_date=datetime('now'), first_entered_stage_date=COALESCE(first_entered_stage_date, datetime('now')) WHERE id=?;", (new_stage, new_stage, int(deal_id)))
             cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (int(deal_id), new_stage))
             conn.commit()
 
@@ -13841,9 +13845,86 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if df.empty:
                     st.info("No deals")
                 else:
+                    import datetime as _dt
+                    today = _dt.date.today()
+                    # Bring in stage date metadata from base deals table
+                    try:
+                        df_dates = pd.read_sql_query(
+                            "SELECT id, created_at, first_entered_stage_date, last_stage_change_date FROM deals;",
+                            conn,
+                            params=(),
+                        )
+                    except Exception:
+                        df_dates = None
+                    if df_dates is not None and not df_dates.empty:
+                        try:
+                            m_created = {int(r["id"]): r.get("created_at") for _, r in df_dates.iterrows()}
+                            m_stage_last = {int(r["id"]): r.get("last_stage_change_date") for _, r in df_dates.iterrows()}
+                        except Exception:
+                            m_created = {}
+                            m_stage_last = {}
+                        import pandas as _pd
+                        df["created_at_raw"] = _pd.to_datetime(df["id"].map(m_created), errors="coerce")
+                        df["stage_last_raw"] = _pd.to_datetime(df["id"].map(m_stage_last), errors="coerce")
+                        stage_start = df["stage_last_raw"].where(df["stage_last_raw"].notnull(), df["created_at_raw"])
+                        try:
+                            df["days_in_stage"] = (today - stage_start.dt.date).dt.days
+                        except Exception:
+                            df["days_in_stage"] = _pd.Series([None] * len(df))
+                    else:
+                        df["days_in_stage"] = None
+                    # Compute last activity per deal
+                    try:
+                        df_act = pd.read_sql_query(
+                            "SELECT deal_id, MAX(ts) AS last_ts FROM activities_t GROUP BY deal_id;",
+                            conn,
+                            params=(),
+                        )
+                    except Exception:
+                        df_act = None
+                    if df_act is not None and not df_act.empty:
+                        import pandas as _pd
+                        try:
+                            m_last_act = {int(r["deal_id"]): r.get("last_ts") for _, r in df_act.iterrows()}
+                        except Exception:
+                            m_last_act = {}
+                        df["last_activity_at_raw"] = _pd.to_datetime(df["id"].map(m_last_act), errors="coerce")
+                        try:
+                            df["days_since_last_activity"] = (today - df["last_activity_at_raw"].dt.date).dt.days
+                        except Exception:
+                            df["days_since_last_activity"] = _pd.Series([None] * len(df))
+                    else:
+                        df["days_since_last_activity"] = None
+                    # SLA-style color coding via emoji labels
+                    import pandas as _pd
+                    def _sla_label(days, green, yellow):
+                        try:
+                            if days is None or _pd.isna(days):
+                                return "⚪ n/a"
+                            d = int(days)
+                        except Exception:
+                            return "⚪ n/a"
+                        if d <= green:
+                            return f"🟢 {d}d"
+                        elif d <= yellow:
+                            return f"🟡 {d}d"
+                        else:
+                            return f"🔴 {d}d"
+                    try:
+                        df["stage_sla"] = df["days_in_stage"].apply(lambda d: _sla_label(d, 3, 7))
+                    except Exception:
+                        df["stage_sla"] = "⚪ n/a"
+                    try:
+                        df["activity_sla"] = df["days_since_last_activity"].apply(lambda d: _sla_label(d, 3, 7))
+                    except Exception:
+                        df["activity_sla"] = "⚪ n/a"
                     df["prob_%"] = df["status"].apply(_stage_probability)
                     df["weighted_value"] = (df["value"].fillna(0).astype(float) * df["prob_%"] / 100.0).round(2)
-                    _styled_dataframe(df[["title","agency","status","value","prob_%","weighted_value"]], use_container_width=True, hide_index=True)
+                    _styled_dataframe(
+                        df[["title","agency","status","value","prob_%","weighted_value","days_in_stage","days_since_last_activity","stage_sla","activity_sla"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
                 st.subheader("Kanban")
         
                 # Bulk delete controls for deals in current view
@@ -14098,6 +14179,14 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                                     """,
                                                     (rid, new_status),
                                                 )
+                                                # Track last stage change timestamp on the deal
+                                                try:
+                                                    cur.execute(
+                                                        "UPDATE deals SET last_stage_change_date=datetime('now') WHERE id=?;",
+                                                        (rid,),
+                                                    )
+                                                except Exception:
+                                                    pass
                                             except Exception:
                                                 # Ignore logging failures so edits still succeed
                                                 pass
@@ -14133,9 +14222,63 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 co_label = (row.get("co_name") or "") or (row.get("co_email") or "")
                 if not co_label:
                     co_label = "None set"
+                # Compute SLA-style age metrics for this deal
+                try:
+                    import datetime as _dt
+                    import pandas as _pd
+                    today = _dt.date.today()
+                    df_dates = pd.read_sql_query(
+                        "SELECT created_at, first_entered_stage_date, last_stage_change_date FROM deals WHERE id=?;",
+                        conn,
+                        params=(int(sel_id),),
+                    )
+                    if df_dates is not None and not df_dates.empty:
+                        r0 = df_dates.iloc[0]
+                        created_at = _pd.to_datetime(r0.get("created_at"), errors="coerce")
+                        last_stage_change = _pd.to_datetime(r0.get("last_stage_change_date"), errors="coerce")
+                        stage_start = last_stage_change if last_stage_change is not None and not _pd.isna(last_stage_change) else created_at
+                        if stage_start is not None and not _pd.isna(stage_start):
+                            days_in_stage = (today - stage_start.date()).days
+                        else:
+                            days_in_stage = None
+                    else:
+                        days_in_stage = None
+                    df_act = pd.read_sql_query(
+                        "SELECT MAX(ts) AS last_ts FROM activities_t WHERE deal_id=?;",
+                        conn,
+                        params=(int(sel_id),),
+                    )
+                    if df_act is not None and not df_act.empty and df_act.iloc[0].get("last_ts"):
+                        last_ts = _pd.to_datetime(df_act.iloc[0].get("last_ts"), errors="coerce")
+                        if last_ts is not None and not _pd.isna(last_ts):
+                            days_since_last = (today - last_ts.date()).days
+                        else:
+                            days_since_last = None
+                    else:
+                        days_since_last = None
+                    def _sla_label_single(days, green, yellow):
+                        try:
+                            if days is None or _pd.isna(days):
+                                return "⚪ n/a"
+                            d = int(days)
+                        except Exception:
+                            return "⚪ n/a"
+                        if d <= green:
+                            return f"🟢 {d}d"
+                        elif d <= yellow:
+                            return f"🟡 {d}d"
+                        else:
+                            return f"🔴 {d}d"
+                    stage_sla_label = _sla_label_single(days_in_stage, 3, 7)
+                    activity_sla_label = _sla_label_single(days_since_last, 3, 7)
+                except Exception:
+                    stage_sla_label = "⚪ n/a"
+                    activity_sla_label = "⚪ n/a"
                 body = (
                     f"Agency: {row['agency']}\n\n"
-                    f"Status: {row['status']}\n\n"
+                    f"Status: {row['status']}\n"
+                    f"Stage age: {stage_sla_label}\n"
+                    f"Last activity: {activity_sla_label}\n\n"
                     f"Estimated value: ${float(row['value'] or 0):,.2f}\n\n"
                     f"Engagement score: {float(row.get('engagement_score') or 0):.1f}\n"
                     f"Last engagement: {row.get('last_engagement_at') or '—'}\n\n"
