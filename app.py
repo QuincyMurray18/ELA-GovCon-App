@@ -3246,6 +3246,7 @@ def _render_ask_rfp_button(opportunity=None):
     _add("psc", "psc TEXT")
     _add("score", "score REAL DEFAULT 0")
     _add("score_reason", "score_reason TEXT")
+        _add("co_contact_id", "co_contact_id INTEGER")
     _add("engagement_score", "engagement_score REAL DEFAULT 0")
     _add("last_engagement_at", "last_engagement_at TEXT")
 
@@ -13340,27 +13341,37 @@ def data_get_all_deals_for_detail(conn):
         owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
         if owner_scope and owner_scope != "All":
             df = pd.read_sql_query(
-                "SELECT id, title, agency, "
-                "COALESCE(status, '') AS status, "
-                "COALESCE(value, 0) AS value, "
-                "COALESCE(rfp_deadline, '') AS rfp_deadline, "
-                "COALESCE(owner, '') AS owner, "
-                "COALESCE(engagement_score, 0) AS engagement_score, "
-                "COALESCE(last_engagement_at, '') AS last_engagement_at "
-                "FROM deals_t WHERE owner_user=? ORDER BY id DESC;",
+                "SELECT d.id, d.title, d.agency, "
+                "COALESCE(d.status, '') AS status, "
+                "COALESCE(d.value, 0) AS value, "
+                "COALESCE(d.rfp_deadline, '') AS rfp_deadline, "
+                "COALESCE(d.owner, '') AS owner, "
+                "COALESCE(d.engagement_score, 0) AS engagement_score, "
+                "COALESCE(d.last_engagement_at, '') AS last_engagement_at, "
+                "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
+                "COALESCE(c.name, '') AS co_name, "
+                "COALESCE(c.email, '') AS co_email "
+                "FROM deals_t d "
+                "LEFT JOIN contacts_t c ON d.co_contact_id = c.id "
+                "WHERE d.owner_user=? ORDER BY d.id DESC;",
                 conn,
                 params=(owner_scope,),
             )
         else:
             df = pd.read_sql_query(
-                "SELECT id, title, agency, "
-                "COALESCE(status, '') AS status, "
-                "COALESCE(value, 0) AS value, "
-                "COALESCE(rfp_deadline, '') AS rfp_deadline, "
-                "COALESCE(owner, '') AS owner, "
-                "COALESCE(engagement_score, 0) AS engagement_score, "
-                "COALESCE(last_engagement_at, '') AS last_engagement_at "
-                "FROM deals_t ORDER BY id DESC;",
+                "SELECT d.id, d.title, d.agency, "
+                "COALESCE(d.status, '') AS status, "
+                "COALESCE(d.value, 0) AS value, "
+                "COALESCE(d.rfp_deadline, '') AS rfp_deadline, "
+                "COALESCE(d.owner, '') AS owner, "
+                "COALESCE(d.engagement_score, 0) AS engagement_score, "
+                "COALESCE(d.last_engagement_at, '') AS last_engagement_at, "
+                "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
+                "COALESCE(c.name, '') AS co_name, "
+                "COALESCE(c.email, '') AS co_email "
+                "FROM deals_t d "
+                "LEFT JOIN contacts_t c ON d.co_contact_id = c.id "
+                "ORDER BY d.id DESC;",
                 conn,
                 params=(),
             )
@@ -13546,6 +13557,16 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         ptab_pipeline, ptab_detail = st.tabs(["Pipeline view", "Deal detail"])
         with ptab_pipeline:
                 # Add Deal (moved from Deals)
+                try:
+                    df_contacts_all = pd.read_sql_query(
+                        "SELECT id, name, email FROM contacts_t ORDER BY name;",
+                        conn,
+                        params=(),
+                    )
+                except Exception:
+                    import pandas as _pd
+                    df_contacts_all = _pd.DataFrame(columns=["id", "name", "email"])
+
                 with st.form("add_deal", clear_on_submit=True):
                     c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
                     with c1:
@@ -13562,6 +13583,35 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
                         owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
                     d_due = st.date_input("Due date (optional)", key="deal_due_date")
+
+                    co_contact_id = None
+                    if df_contacts_all is not None and not df_contacts_all.empty:
+                        co_opts = [None] + df_contacts_all["id"].astype(int).tolist()
+
+                        def _fmt_contact_option(cid):
+                            if cid is None:
+                                return "None"
+                            try:
+                                row = df_contacts_all[df_contacts_all["id"] == cid].iloc[0]
+                                nm = str(row.get("name") or "").strip()
+                                em = str(row.get("email") or "").strip()
+                                label = nm or em or f"ID {cid}"
+                                if nm and em:
+                                    label = f"{nm} — {em}"
+                                return label
+                            except Exception:
+                                return str(cid)
+
+                        co_contact_val = st.selectbox(
+                            "Primary CO / contact (optional)",
+                            options=co_opts,
+                            format_func=_fmt_contact_option,
+                            index=0,
+                            key="deal_add_co_contact",
+                        )
+                        if co_contact_val is not None:
+                            co_contact_id = int(co_contact_val)
+
                     submitted = st.form_submit_button("Add Deal")
                 if submitted and title:
                     try:
@@ -13569,9 +13619,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         with _closing(conn.cursor()) as cur:
         
                                 cur.execute(
-                                    "INSERT INTO deals(title, agency, status, stage, value, owner, owner_user, created_at) "
-                                    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val)
+                                    "INSERT INTO deals(title, agency, status, stage, value, owner, owner_user, co_contact_id, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val, co_contact_id)
                                 )
                                 cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
                                 conn.commit()
@@ -13889,15 +13939,74 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     key="deal_detail_select",
                 )
                 row = df_all[df_all["id"] == sel_id].iloc[0]
+                co_label = (row.get("co_name") or "") or (row.get("co_email") or "")
+                if not co_label:
+                    co_label = "None set"
                 body = (
                     f"Agency: {row['agency']}\n\n"
                     f"Status: {row['status']}\n\n"
                     f"Estimated value: ${float(row['value'] or 0):,.2f}\n\n"
                     f"Engagement score: {float(row.get('engagement_score') or 0):.1f}\n"
-                    f"Last engagement: {row.get('last_engagement_at') or '—'}"
+                    f"Last engagement: {row.get('last_engagement_at') or '—'}\n\n"
+                    f"Primary CO / contact: {co_label}"
                 )
                 footer = f"Owner: {row.get('owner') or 'Unassigned'} | Due: {row.get('rfp_deadline') or '—'}"
                 render_card(f"Deal #{int(row['id'])} — {row['title']}", body=body, footer=footer)
+
+                # Optional: allow changing primary CO / contact from detail view
+                try:
+                    df_contacts = pd.read_sql_query(
+                        "SELECT id, name, email FROM contacts_t ORDER BY name;",
+                        conn,
+                        params=(),
+                    )
+                except Exception:
+                    import pandas as _pd
+                    df_contacts = _pd.DataFrame(columns=["id", "name", "email"])
+                if df_contacts is not None and not df_contacts.empty:
+                    ids = df_contacts["id"].astype(int).tolist()
+                    current_co = int(row.get("co_contact_id") or 0)
+                    options = [None] + ids
+
+                    def _fmt_contact_option(cid):
+                        if cid is None:
+                            return "None"
+                        try:
+                            r2 = df_contacts[df_contacts["id"] == cid].iloc[0]
+                            nm = str(r2.get("name") or "").strip()
+                            em = str(r2.get("email") or "").strip()
+                            label = nm or em or f"ID {cid}"
+                            if nm and em:
+                                label = f"{nm} — {em}"
+                            return label
+                        except Exception:
+                            return str(cid)
+
+                    idx = 0
+                    if current_co and current_co in ids:
+                        idx = 1 + ids.index(current_co)
+
+                    sel_co = st.selectbox(
+                        "Update primary CO / contact",
+                        options=options,
+                        format_func=_fmt_contact_option,
+                        index=idx,
+                        key=f"deal_detail_co_{int(row['id'])}",
+                    )
+                    if st.button("Save primary contact", key=f"deal_detail_co_save_{int(row['id'])}"):
+                        new_id = None if sel_co is None else int(sel_co)
+                        from contextlib import closing as _closing
+                        try:
+                            with _closing(conn.cursor()) as cur:
+                                cur.execute(
+                                    "UPDATE deals SET co_contact_id=? WHERE id=?;",
+                                    (new_id, int(row["id"])),
+                                )
+                                conn.commit()
+                            st.success("Updated deal primary contact.")
+                            st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Failed to update primary contact: {e}")
 
 
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
