@@ -11887,9 +11887,11 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
     with st.expander("Template library (proposal templates)", expanded=False):
         try:
-            x7_template_library_ui(conn)  # type: ignore[name-defined]
+            func = x7_template_library_ui  # type: ignore[name-defined]
         except NameError:
             st.info("Template library UI is not available in this build yet.")
+        else:
+            func(conn)
 
     left, right = st.columns([3, 2])
     with left:
