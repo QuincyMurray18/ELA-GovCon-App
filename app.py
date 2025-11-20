@@ -9102,6 +9102,105 @@ def run_top_buyers(conn: "sqlite3.Connection") -> None:
 
 
 
+
+def run_top_vendors(conn: "sqlite3.Connection") -> None:
+    """Public data analytics: Top awardee vendors by NAICS based on awards."""
+    import pandas as pd
+
+    st.header("Top Vendors / Awardees")
+    st.caption("Use this page to see which vendors are winning awards in your NAICS so you can analyze competitors and identify teaming partners.")
+
+    # Ensure the analytics view exists even if migrations have not been run yet.
+    try:
+        with conn:
+            conn.execute("""
+                CREATE VIEW IF NOT EXISTS vendor_award_stats AS
+                SELECT
+                    n.tenant_id AS tenant_id,
+                    COALESCE(n.awardee, '') AS vendor_name,
+                    '' AS uei_duns,
+                    COALESCE(n.naics, '') AS naics,
+                    COUNT(*) AS total_awards,
+                    SUM(COALESCE(n.award_amount, 0.0)) AS total_value,
+                    MAX(CASE WHEN n.award_date IS NOT NULL AND n.award_date <> '' THEN n.award_date ELSE NULL END) AS last_award_date
+                FROM notices n
+                JOIN current_tenant ct ON n.tenant_id = ct.ctid
+                WHERE (n.award_date IS NOT NULL AND n.award_date <> '')
+                   OR (n.award_amount IS NOT NULL AND n.award_amount <> 0)
+                GROUP BY n.tenant_id, vendor_name, uei_duns, naics;
+            """)
+    except Exception:
+        pass
+
+    naics_filter = st.text_input("NAICS contains (optional)", key="top_vendor_naics")
+    name_filter = st.text_input("Vendor name contains (optional)", key="top_vendor_name")
+    sort_by = st.selectbox(
+        "Sort by",
+        ["Total value", "Total awards", "Last award date", "Vendor name"],
+        index=0,
+        key="top_vendor_sort",
+    )
+
+    base_sql = """
+        SELECT vendor_name,
+               uei_duns,
+               naics,
+               total_awards,
+               total_value,
+               last_award_date
+        FROM vendor_award_stats
+    """
+    where_clauses = []
+    params: list[str] = []
+
+    if naics_filter:
+        where_clauses.append("naics LIKE ?")
+        params.append(f"%{naics_filter.strip()}%")
+
+    if name_filter:
+        where_clauses.append("vendor_name LIKE ?")
+        params.append(f"%{name_filter.strip()}%")
+
+    if where_clauses:
+        base_sql += " WHERE " + " AND ".join(where_clauses)
+
+    if sort_by == "Total awards":
+        base_sql += " ORDER BY total_awards DESC, total_value DESC"
+    elif sort_by == "Last award date":
+        base_sql += " ORDER BY last_award_date DESC"
+    elif sort_by == "Vendor name":
+        base_sql += " ORDER BY vendor_name ASC"
+    else:
+        base_sql += " ORDER BY total_value DESC"
+
+    df = pd.read_sql_query(base_sql, conn, params=tuple(params))
+
+    if df is None or df.empty:
+        st.info("No awarded vendors found yet for this tenant. Try syncing SAM notices and ensuring award data is populated.")
+        return
+
+    total_awards = int(df["total_awards"].sum())
+    total_value = float(df["total_value"].sum())
+    distinct_vendors = int(df["vendor_name"].nunique())
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Total awards (rows)", f"{total_awards:,}")
+    with m2:
+        st.metric("Total award value", f"${total_value:,.0f}")
+    with m3:
+        st.metric("Distinct vendors", f"{distinct_vendors:,}")
+
+    st.dataframe(df, use_container_width=True)
+
+    with st.expander("How to use this for competitor and partner analysis", expanded=False):
+        st.markdown(
+            "- Focus on vendors with the highest total awarded value in your core NAICS.\n"
+            "- Treat them as competitors to study and potential primes to team under.\n"
+            "- Use Subcontractor Finder and Outreach to pull contact info and begin conversations."
+        )
+
+
 def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/")
@@ -14330,6 +14429,30 @@ def migrate(conn: "sqlite3.Connection") -> None:
             cur.execute("UPDATE schema_version SET ver=4 WHERE id=1;")
             conn.commit()
 
+        # v5: vendor_award_stats analytics view for competitor / partner analysis
+        if ver < 5:
+            try:
+                cur.execute("""
+                    CREATE VIEW IF NOT EXISTS vendor_award_stats AS
+                    SELECT
+                        n.tenant_id AS tenant_id,
+                        COALESCE(n.awardee, '') AS vendor_name,
+                        '' AS uei_duns,
+                        COALESCE(n.naics, '') AS naics,
+                        COUNT(*) AS total_awards,
+                        SUM(COALESCE(n.award_amount, 0.0)) AS total_value,
+                        MAX(CASE WHEN n.award_date IS NOT NULL AND n.award_date <> '' THEN n.award_date ELSE NULL END) AS last_award_date
+                    FROM notices n
+                    JOIN current_tenant ct ON n.tenant_id = ct.ctid
+                    WHERE (n.award_date IS NOT NULL AND n.award_date <> '')
+                       OR (n.award_amount IS NOT NULL AND n.award_amount <> 0)
+                    GROUP BY n.tenant_id, vendor_name, uei_duns, naics;
+                """)
+            except Exception:
+                pass
+            cur.execute("UPDATE schema_version SET ver=5 WHERE id=1;")
+            conn.commit()
+
 # ---------- Phase N: Backup & Data ----------
 def _current_tenant(conn: "sqlite3.Connection") -> int:
     try:
@@ -14798,6 +14921,7 @@ def nav() -> str:
         ("SAM Watch", [
             "SAM Watch",
             "Top Buyers",
+            "Top Vendors",
         ]),
         ("RFP Analyzer", [
             "RFP Analyzer",
