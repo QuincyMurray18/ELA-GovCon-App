@@ -6391,6 +6391,11 @@ def get_db() -> sqlite3.Connection:
             );
         """)
         try:
+            __p_ensure_column(conn, "contacts", "phone", "TEXT")
+            __p_ensure_column(conn, "contacts", "title", "TEXT")
+            __p_ensure_column(conn, "contacts", "organization", "TEXT")
+            __p_ensure_column(conn, "contacts", "created_at", "TEXT")
+            __p_ensure_column(conn, "contacts", "public_source", "TEXT")
             __p_ensure_column(conn, "contacts", "unsubscribe_all", "INTEGER DEFAULT 0")
             __p_ensure_column(conn, "contacts", "unsubscribe_reason", "TEXT")
             __p_ensure_column(conn, "contacts", "last_unsubscribed_at", "TEXT")
@@ -6490,6 +6495,20 @@ def get_db() -> sqlite3.Connection:
             __p_ensure_column(conn, "notices", "updated_at", "TEXT")
         except Exception:
             pass
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS notice_contacts(
+                id INTEGER PRIMARY KEY,
+                notice_id TEXT,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+                role TEXT,
+                owner_user TEXT,
+                created_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_notice_contacts_notice ON notice_contacts(notice_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_notice_contacts_contact ON notice_contacts(contact_id);")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notice_contacts_unique ON notice_contacts(notice_id, contact_id, role);")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfps(
@@ -7033,6 +7052,7 @@ def get_db() -> sqlite3.Connection:
         user_owned_tables = [
             "deals",
             "contacts",
+            "notice_contacts",
             "tasks",
             "activities",
             "outreach_log",
@@ -8995,6 +9015,60 @@ def run_sam_watch(conn) -> None:
                         st.write(f"**Notice ID:** {row.get('Notice ID') or '—'}")
                         if row.get('SAM Link'):
                             st.markdown(f"[Open in SAM]({row['SAM Link']})")
+
+                        st.markdown("---")
+                        st.subheader("CO / POC contact builder")
+                        with st.form(f"co_contact_builder_{sel_idx}"):
+                            co_col1, co_col2 = st.columns([2, 2])
+                            with co_col1:
+                                co_name = st.text_input("Name", value="", key=f"sam_co_name_{sel_idx}")
+                                co_email = st.text_input("Email", value="", key=f"sam_co_email_{sel_idx}")
+                            with co_col2:
+                                default_org = row.get("Agency Path") or ""
+                                co_phone = st.text_input("Phone", value="", key=f"sam_co_phone_{sel_idx}")
+                                co_title = st.text_input("Title", value="", key=f"sam_co_title_{sel_idx}")
+                            co_org = st.text_input("Organization", value=default_org, key=f"sam_co_org_{sel_idx}")
+                            co_role = st.selectbox(
+                                "Role",
+                                ["Contracting Officer", "Contract Specialist", "Technical POC", "Other"],
+                                key=f"sam_co_role_{sel_idx}",
+                            )
+                            submit_co = st.form_submit_button("Save CO/POC to contacts")
+                            if submit_co:
+                                from contextlib import closing as _closing
+                                try:
+                                    name_val = (co_name or "").strip()
+                                    email_val = (co_email or "").strip()
+                                    org_val = (co_org or default_org or "").strip()
+                                    if not (name_val or email_val):
+                                        st.error("Please provide at least a name or email.")
+                                    else:
+                                        owner = get_current_user_name()
+                                        with _closing(conn.cursor()) as cur:
+                                            contact_id = None
+                                            if email_val:
+                                                row_c = cur.execute(
+                                                    "SELECT id FROM contacts WHERE email = ? AND (owner_user = ? OR owner_user IS NULL OR owner_user = '') LIMIT 1;",
+                                                    (email_val, owner),
+                                                ).fetchone()
+                                                if row_c:
+                                                    contact_id = row_c[0]
+                                            if contact_id is None:
+                                                cur.execute(
+                                                    "INSERT INTO contacts(name, email, org, public_source, owner_user) VALUES (?, ?, ?, ?, ?);",
+                                                    (name_val or None, email_val or None, org_val or None, 'sam_notice', owner),
+                                                )
+                                                contact_id = cur.lastrowid
+                                            notice_id_val = (row.get('Notice ID') or '').strip()
+                                            if notice_id_val and contact_id:
+                                                cur.execute(
+                                                    "INSERT OR IGNORE INTO notice_contacts(notice_id, contact_id, role, owner_user, created_at) VALUES (?, ?, ?, ?, datetime('now'));",
+                                                    (notice_id_val, contact_id, co_role, owner),
+                                                )
+                                            conn.commit()
+                                        st.success("Saved CO/POC contact and linked to this notice.")
+                                except Exception as e:
+                                    st.error(f"Failed to save CO/POC contact: {e}")
 
     # ---------- ALERTS TAB ----------
 
