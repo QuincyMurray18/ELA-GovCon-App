@@ -21,29 +21,6 @@ def get_current_user_name() -> str:
     """Single source of truth for the current logical user name."""
     try:
         import streamlit as st  # type: ignore[import-not-found]
-
-
-# --- Safety shim for older builds without x7 template library helpers ---
-def _x7_template_library_ui_shim() -> None:
-    """Define a no-op x7_template_library_ui if it does not already exist.
-
-    This prevents NameError crashes on the Proposal Builder page in builds
-    that do not yet include the full template library UI implementation.
-    """
-    try:
-        # If the real function is already defined, do nothing.
-        x7_template_library_ui  # type: ignore[name-defined]
-        return
-    except NameError:
-        pass
-
-    def x7_template_library_ui(conn: "sqlite3.Connection") -> None:  # type: ignore[no-redef]
-        import streamlit as _st
-        _st.info("Template library UI is not available in this build yet.")
-
-# Run shim at import time so the symbol always exists.
-_x7_template_library_ui_shim()
-
         name = st.session_state.get("current_user_name")
         if not name:
             # Fallback to the first configured user
@@ -11909,7 +11886,10 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         tpl_df = pd.DataFrame(columns=["id", "name", "template_type", "default_section", "is_active", "created_at"])
 
     with st.expander("Template library (proposal templates)", expanded=False):
-        x7_template_library_ui(conn)
+        try:
+            x7_template_library_ui(conn)  # type: ignore[name-defined]
+        except NameError:
+            st.info("Template library UI is not available in this build yet.")
 
     left, right = st.columns([3, 2])
     with left:
