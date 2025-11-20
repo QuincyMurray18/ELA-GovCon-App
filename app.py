@@ -6378,9 +6378,18 @@ def get_db() -> sqlite3.Connection:
                 id INTEGER PRIMARY KEY,
                 name TEXT,
                 email TEXT,
-                org TEXT
+                org TEXT,
+                unsubscribe_all INTEGER DEFAULT 0,
+                unsubscribe_reason TEXT,
+                last_unsubscribed_at TEXT
             );
         """)
+        try:
+            __p_ensure_column(conn, "contacts", "unsubscribe_all", "INTEGER DEFAULT 0")
+            __p_ensure_column(conn, "contacts", "unsubscribe_reason", "TEXT")
+            __p_ensure_column(conn, "contacts", "last_unsubscribed_at", "TEXT")
+        except Exception:
+            pass
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deals(
                 id INTEGER PRIMARY KEY,
@@ -16320,7 +16329,22 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
     except Exception:
         blocked = set()
 
-    # Configure SMTP
+    # Also honor contact-level unsubscribe_all flag if present
+    try:
+        contact_df = _pd.__p_read_sql_query(
+            "SELECT email FROM contacts WHERE unsubscribe_all = 1;",
+            conn,
+        )
+        blocked |= {
+            str(e).strip().lower()
+            for e in contact_df.get("email", [])
+            if str(e).strip()
+        }
+    except Exception:
+        # Best-effort; if contacts table or column is missing, skip
+        pass
+
+# Configure SMTP
     sent = 0
     logs = []
     smtp = None
@@ -17313,6 +17337,19 @@ def o6_handle_query_unsubscribe(conn):
                 if row and row[0]:
                     email = row[0]
                     o6_add_optout(conn, email, reason="link_click")
+                    try:
+                        with conn:
+                            conn.execute(
+                                "UPDATE contacts "
+                                "SET unsubscribe_all = 1, "
+                                "    unsubscribe_reason = COALESCE(unsubscribe_reason, ?), "
+                                "    last_unsubscribed_at = CURRENT_TIMESTAMP "
+                                "WHERE lower(email) = lower(?);",
+                                ("link_click", email),
+                            )
+                    except Exception:
+                        # Do not block unsubscribe flow if contacts table/columns are absent
+                        pass
                     with conn:
                         conn.execute(
                             "UPDATE outreach_unsub_codes "
@@ -17330,6 +17367,19 @@ def o6_handle_query_unsubscribe(conn):
             email = (qp.get("unsubscribe_email", [None]) or [None])[0]
             if email:
                 o6_add_optout(conn, email, reason="direct_param")
+                try:
+                    with conn:
+                        conn.execute(
+                            "UPDATE contacts "
+                            "SET unsubscribe_all = 1, "
+                            "    unsubscribe_reason = COALESCE(unsubscribe_reason, ?), "
+                            "    last_unsubscribed_at = CURRENT_TIMESTAMP "
+                            "WHERE lower(email) = lower(?);",
+                            ("direct_param", email),
+                        )
+                except Exception:
+                    # Ignore failures; core unsubscribe still recorded via outreach_optouts
+                    pass
                 _st.success(f"{email} unsubscribed.")
                 return True
     except Exception:
