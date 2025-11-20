@@ -3244,6 +3244,8 @@ def _render_ask_rfp_button(opportunity=None):
     _add("rfp_deadline", "rfp_deadline TEXT")
     _add("naics", "naics TEXT")
     _add("psc", "psc TEXT")
+    _add("engagement_score", "engagement_score REAL DEFAULT 0")
+    _add("last_engagement_at", "last_engagement_at TEXT")
 
 # Bridge names
 sqlite3 = _rtm_sqlite3
@@ -6381,13 +6383,17 @@ def get_db() -> sqlite3.Connection:
                 org TEXT,
                 unsubscribe_all INTEGER DEFAULT 0,
                 unsubscribe_reason TEXT,
-                last_unsubscribed_at TEXT
+                last_unsubscribed_at TEXT,
+                engagement_score REAL DEFAULT 0,
+                last_engagement_at TEXT
             );
         """)
         try:
             __p_ensure_column(conn, "contacts", "unsubscribe_all", "INTEGER DEFAULT 0")
             __p_ensure_column(conn, "contacts", "unsubscribe_reason", "TEXT")
             __p_ensure_column(conn, "contacts", "last_unsubscribed_at", "TEXT")
+            __p_ensure_column(conn, "contacts", "engagement_score", "REAL DEFAULT 0")
+            __p_ensure_column(conn, "contacts", "last_engagement_at", "TEXT")
         except Exception:
             pass
         cur.execute("""
@@ -6401,7 +6407,9 @@ def get_db() -> sqlite3.Connection:
                 close_date TEXT,
                 owner TEXT,
                 created_at TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                engagement_score REAL DEFAULT 0,
+                last_engagement_at TEXT
             );
         """)
         # Ensure new columns exist for Deals/SAM Watch
@@ -8143,7 +8151,11 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
 
     try:
         df = pd.read_sql_query(
-            "SELECT name, email, org FROM contacts_t ORDER BY name;", conn
+            "SELECT name, email, org, "
+            "COALESCE(engagement_score, 0) AS engagement_score, "
+            "COALESCE(last_engagement_at, '') AS last_engagement_at "
+            "FROM contacts_t ORDER BY name;",
+            conn,
         )
         st.subheader("Contact List")
         if df.empty:
@@ -12832,18 +12844,26 @@ def data_get_all_deals_for_detail(conn):
         owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
         if owner_scope and owner_scope != "All":
             df = pd.read_sql_query(
-                "SELECT id, title, agency, COALESCE(status, '') AS status, "
-                "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
-                "COALESCE(owner, '') AS owner "
+                "SELECT id, title, agency, "
+                "COALESCE(status, '') AS status, "
+                "COALESCE(value, 0) AS value, "
+                "COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                "COALESCE(owner, '') AS owner, "
+                "COALESCE(engagement_score, 0) AS engagement_score, "
+                "COALESCE(last_engagement_at, '') AS last_engagement_at "
                 "FROM deals_t WHERE owner_user=? ORDER BY id DESC;",
                 conn,
                 params=(owner_scope,),
             )
         else:
             df = pd.read_sql_query(
-                "SELECT id, title, agency, COALESCE(status, '') AS status, "
-                "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, "
-                "COALESCE(owner, '') AS owner "
+                "SELECT id, title, agency, "
+                "COALESCE(status, '') AS status, "
+                "COALESCE(value, 0) AS value, "
+                "COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                "COALESCE(owner, '') AS owner, "
+                "COALESCE(engagement_score, 0) AS engagement_score, "
+                "COALESCE(last_engagement_at, '') AS last_engagement_at "
                 "FROM deals_t ORDER BY id DESC;",
                 conn,
                 params=(),
@@ -13376,7 +13396,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 body = (
                     f"Agency: {row['agency']}\n\n"
                     f"Status: {row['status']}\n\n"
-                    f"Estimated value: ${float(row['value'] or 0):,.2f}"
+                    f"Estimated value: ${float(row['value'] or 0):,.2f}\n\n"
+                    f"Engagement score: {float(row.get('engagement_score') or 0):.1f}\n"
+                    f"Last engagement: {row.get('last_engagement_at') or '—'}"
                 )
                 footer = f"Owner: {row.get('owner') or 'Unassigned'} | Due: {row.get('rfp_deadline') or '—'}"
                 render_card(f"Deal #{int(row['id'])} — {row['title']}", body=body, footer=footer)
@@ -17099,6 +17121,101 @@ def ensure_o6_schema(conn):
             FOREIGN KEY(outreach_log_id) REFERENCES outreach_log(id)
         );""")
 
+
+def _o6_bump_engagement(conn, outreach_log_id, event_type):
+    """Best-effort engagement scoring for contacts and deals based on outreach events."""
+    try:
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            # Discover available columns on outreach_log
+            try:
+                cur.execute("PRAGMA table_info(outreach_log);")
+                rows = cur.fetchall() or []
+                cols = [str(r[1]) for r in rows]
+            except Exception:
+                cols = []
+            select_cols = []
+            if "contact_id" in cols:
+                select_cols.append("contact_id")
+            if "deal_id" in cols:
+                select_cols.append("deal_id")
+            if "to_email" in cols:
+                select_cols.append("to_email")
+            if not select_cols:
+                return
+            sql = "SELECT " + ", ".join(select_cols) + " FROM outreach_log WHERE id=? LIMIT 1;"
+            try:
+                cur.execute(sql, (outreach_log_id,))
+                row = cur.fetchone()
+            except Exception:
+                row = None
+            if not row:
+                return
+            idx = 0
+            contact_id = None
+            deal_id = None
+            email = None
+            if "contact_id" in cols:
+                contact_id = row[idx]
+                idx += 1
+            if "deal_id" in cols:
+                deal_id = row[idx]
+                idx += 1
+            if "to_email" in cols and idx < len(row):
+                email = row[idx]
+
+            et = (event_type or "").lower()
+            if et == "open":
+                delta = 1.0
+            elif et == "click":
+                delta = 3.0
+            else:
+                delta = 0.0
+            if not delta:
+                return
+
+            # Update contacts
+            try:
+                if contact_id is not None:
+                    cur.execute(
+                        "UPDATE contacts "
+                        "SET engagement_score=COALESCE(engagement_score, 0)+?, "
+                        "last_engagement_at=CURRENT_TIMESTAMP "
+                        "WHERE id=?;",
+                        (delta, int(contact_id)),
+                    )
+                elif email:
+                    cur.execute(
+                        "UPDATE contacts "
+                        "SET engagement_score=COALESCE(engagement_score, 0)+?, "
+                        "last_engagement_at=CURRENT_TIMESTAMP "
+                        "WHERE LOWER(email)=LOWER(?);",
+                        (delta, email),
+                    )
+            except Exception:
+                pass
+
+            # Update deals
+            try:
+                if deal_id is not None:
+                    cur.execute(
+                        "UPDATE deals "
+                        "SET engagement_score=COALESCE(engagement_score, 0)+?, "
+                        "last_engagement_at=CURRENT_TIMESTAMP "
+                        "WHERE id=?;",
+                        (delta, int(deal_id)),
+                    )
+            except Exception:
+                pass
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    except Exception:
+        # Tracking failures should never break the app
+        pass
+
+
 def o6_log_event(conn, outreach_log_id, event_type, meta=None):
     """Insert a row into outreach_event for analytical tracking.
 
@@ -17117,6 +17234,11 @@ def o6_log_event(conn, outreach_log_id, event_type, meta=None):
                 "INSERT INTO outreach_event(outreach_log_id, type, meta_json) VALUES(?,?,?)",
                 (outreach_log_id, event_type, meta_json),
             )
+            try:
+                _o6_bump_engagement(conn, outreach_log_id, event_type)
+            except Exception:
+                # Engagement scoring should never break sending or tracking
+                pass
     except Exception:
         # Tracking failures should never break the app
         pass
