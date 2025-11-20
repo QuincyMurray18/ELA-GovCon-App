@@ -6743,6 +6743,23 @@ def get_db() -> sqlite3.Connection:
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(ts);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_rel ON activities(deal_id, contact_id);")
+
+        # CRM activity log (normalized)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS activity(
+                id INTEGER PRIMARY KEY,
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+                type TEXT,
+                status TEXT,
+                created_at TEXT,
+                meta_json TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_contact ON activity(contact_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_deal ON activity(deal_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at);")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tasks(
                 id INTEGER PRIMARY KEY,
@@ -7172,24 +7189,6 @@ def get_db() -> sqlite3.Connection:
         migrate(conn)
     except Exception:
         pass
-
-
-        # CRM activity log
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS activity(
-                id INTEGER PRIMARY KEY,
-                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
-                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
-                type TEXT,
-                status TEXT,
-                created_at TEXT,
-                meta_json TEXT
-            );
-        """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_contact ON activity(contact_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_deal ON activity(deal_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at);")
     return conn
 
 # Compatibility shim for vendors_t
@@ -8406,11 +8405,101 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             conn,
             params=params or None,
         )
+
         st.subheader("Contact List")
         if df.empty:
             st.write("No contacts yet")
         else:
             _styled_dataframe(df, use_container_width=True, hide_index=True)
+
+        st.subheader("Contact detail")
+        try:
+            df_ids = pd.read_sql_query(
+                "SELECT id, name FROM contacts_t ORDER BY name;",
+                conn,
+                params=(),
+            )
+        except Exception as e:
+            st.error(f"Failed to load contact details: {e}")
+            df_ids = None
+
+        if df_ids is not None and not df_ids.empty:
+            sel_cid = st.selectbox(
+                "Select a contact",
+                options=df_ids["id"].tolist(),
+                format_func=lambda i: f"#{i} — " + str(df_ids.loc[df_ids["id"] == i, "name"].values[0]),
+                key="contact_detail_select",
+            )
+
+            try:
+                df_one = pd.read_sql_query(
+                    "SELECT id, name, email, org, phone, title, public_source, "
+                    "COALESCE(engagement_score, 0) AS engagement_score, "
+                    "COALESCE(last_engagement_at, '') AS last_engagement_at, "
+                    "COALESCE(created_at, '') AS created_at "
+                    "FROM contacts_t WHERE id = ?;",
+                    conn,
+                    params=(int(sel_cid),),
+                )
+                if not df_one.empty:
+                    row_c = df_one.iloc[0]
+                    body = (
+                        f"Email: {row_c.get('email') or '—'}\n\n"
+                        f"Organization: {row_c.get('org') or '—'}\n\n"
+                        f"Phone: {row_c.get('phone') or '—'}\n\n"
+                        f"Title: {row_c.get('title') or '—'}\n\n"
+                        f"Engagement score: {float(row_c.get('engagement_score') or 0):.1f}\n"
+                        f"Last engagement: {row_c.get('last_engagement_at') or '—'}\n"
+                    )
+                    footer = f"Source: {row_c.get('public_source') or '—'} | Created: {row_c.get('created_at') or '—'}"
+                    render_card(f"Contact #{int(row_c['id'])} — {row_c.get('name') or ''}", body=body, footer=footer)
+            except Exception as e:
+                st.error(f"Failed to load selected contact: {e}")
+                sel_cid = None
+
+            # Activity timeline for this contact
+            if sel_cid:
+                try:
+                    owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+                    sql = "SELECT ts, type, subject, notes, deal_id FROM activities_t WHERE contact_id = ?"
+                    params_act = [int(sel_cid)]
+                    if owner_scope and owner_scope != "All":
+                        sql += " AND owner_user = ?"
+                        params_act.append(owner_scope)
+                    sql += " ORDER BY ts DESC LIMIT 200"
+                    df_act_c = pd.read_sql_query(sql, conn, params=params_act)
+                except Exception as e:
+                    st.error(f"Failed to load activities for this contact: {e}")
+                    df_act_c = None
+
+                st.subheader("Activity timeline")
+                if df_act_c is None or df_act_c.empty:
+                    st.caption("No activities logged for this contact yet.")
+                else:
+                    # Attach deal titles when possible
+                    try:
+                        df_deals_tl = pd.read_sql_query(
+                            "SELECT id, title FROM deals_t;",
+                            conn,
+                            params=(),
+                        )
+                        dmap = {int(r["id"]): str(r.get("title") or "") for _, r in df_deals_tl.iterrows()}
+                        df_act_c["deal_title"] = df_act_c["deal_id"].map(dmap).fillna("")
+                    except Exception:
+                        df_act_c["deal_title"] = ""
+
+                    df_act_c = df_act_c.rename(
+                        columns={
+                            "ts": "When",
+                            "type": "Type",
+                            "subject": "Subject",
+                            "notes": "Notes",
+                            "deal_title": "Deal",
+                        }
+                    )
+                    cols_order = [c for c in ["When", "Type", "Subject", "Notes", "Deal"] if c in df_act_c.columns]
+                    _styled_dataframe(df_act_c[cols_order], use_container_width=True, hide_index=True)
+
     except Exception as e:
         st.error(f"Failed to load contacts {e}")
 
@@ -14025,6 +14114,47 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             st.experimental_rerun()
                         except Exception as e:
                             st.error(f"Failed to update primary contact: {e}")
+                # Activity timeline for this deal
+                try:
+                    owner_scope = st.session_state.get("deal_owner_ctx", get_current_user_name())
+                    sql = "SELECT ts, type, subject, notes, contact_id FROM activities_t WHERE deal_id = ?"
+                    params = [int(row["id"])]
+                    if owner_scope and owner_scope != "All":
+                        sql += " AND owner_user = ?"
+                        params.append(owner_scope)
+                    sql += " ORDER BY ts DESC LIMIT 200"
+                    df_act = pd.read_sql_query(sql, conn, params=params)
+                except Exception as e:
+                    st.error(f"Failed to load activities for this deal: {e}")
+                    df_act = None
+
+                st.subheader("Activity timeline")
+                if df_act is None or df_act.empty:
+                    st.caption("No activities logged for this deal yet.")
+                else:
+                    # Attach contact names when possible
+                    try:
+                        df_contacts_tl = pd.read_sql_query(
+                            "SELECT id, name FROM contacts_t;",
+                            conn,
+                            params=(),
+                        )
+                        name_map = {int(r["id"]): str(r.get("name") or "") for _, r in df_contacts_tl.iterrows()}
+                        df_act["contact_name"] = df_act["contact_id"].map(name_map).fillna("")
+                    except Exception:
+                        df_act["contact_name"] = ""
+
+                    df_act = df_act.rename(
+                        columns={
+                            "ts": "When",
+                            "type": "Type",
+                            "subject": "Subject",
+                            "notes": "Notes",
+                            "contact_name": "Contact",
+                        }
+                    )
+                    cols_order = [c for c in ["When", "Type", "Subject", "Notes", "Contact"] if c in df_act.columns]
+                    _styled_dataframe(df_act[cols_order], use_container_width=True, hide_index=True)
 
 
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
