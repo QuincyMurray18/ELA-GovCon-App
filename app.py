@@ -9707,7 +9707,7 @@ def _p3_auto_stage_for_rfp(conn, rfp_id: int):
                             ),
                         )
                         conn.commit()
-except Exception:
+    except Exception:
         pass
 
 def _p3_auto_wire_crm_from_rfp(conn, rfp_id: int):
@@ -13696,7 +13696,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     st.success("Task created.")
                     st.experimental_rerun()
 
-with f1:
+        with f1:
             tf_status = st.multiselect("Status", ["Open","In Progress","Done"], default=["Open","In Progress"])
         with f2:
             tf_priority = st.multiselect("Priority", ["Low","Normal","High"], default=[])
