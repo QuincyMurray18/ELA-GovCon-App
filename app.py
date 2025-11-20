@@ -15712,18 +15712,22 @@ def o4_sender_accounts_ui(conn):
     # Ensure modern multi-sender table exists
     with conn:
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS outreach_sender_accounts("
-            "id INTEGER PRIMARY KEY, "
-            "label TEXT UNIQUE, "
-            "email TEXT, "
-            "app_password TEXT, "
-            "smtp_host TEXT DEFAULT 'smtp.gmail.com', "
-            "smtp_port INTEGER DEFAULT 587, "
-            "use_tls INTEGER DEFAULT 1, "
-            "is_active INTEGER DEFAULT 1)"
+            "CREATE TABLE IF NOT EXISTS outreach_sender_accounts(" 
+            "id INTEGER PRIMARY KEY, " 
+            "label TEXT UNIQUE, " 
+            "email TEXT, " 
+            "app_password TEXT, " 
+            "smtp_host TEXT DEFAULT 'smtp.gmail.com', " 
+            "smtp_port INTEGER DEFAULT 587, " 
+            "use_tls INTEGER DEFAULT 1, " 
+            "is_active INTEGER DEFAULT 1, " 
+            "daily_limit INTEGER DEFAULT 500, " 
+            "minute_limit INTEGER DEFAULT 60, " 
+            "sent_today_count INTEGER DEFAULT 0, " 
+            "last_sent_at TEXT" 
+            ")"
         )
-    
-    # One-time migration from legacy smtp_settings (id=1) if multi-sender table is empty
+# One-time migration from legacy smtp_settings (id=1) if multi-sender table is empty
     try:
         with closing(conn.cursor()) as cur:
             cur.execute("SELECT COUNT(*) FROM outreach_sender_accounts;")
@@ -16910,6 +16914,18 @@ def ensure_o5_schema(conn: "sqlite3.Connection") -> None:
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(seq_id) REFERENCES outreach_sequences(id)
         );""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS outreach_contact_sequences(
+            id INTEGER PRIMARY KEY,
+            contact_id INTEGER NOT NULL,
+            seq_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            current_step_no INTEGER NOT NULL DEFAULT 1,
+            last_step_sent_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(contact_id) REFERENCES contacts(id),
+            FOREIGN KEY(seq_id) REFERENCES outreach_sequences(id)
+        );""")
+
 
 def _o5_list_sequences(conn):
     try:
@@ -17380,6 +17396,70 @@ def _o6_wrap_o3_send_batch():
                 # Unsupported call pattern
                 raise TypeError("Unsupported _o3_send_batch call signature")
 
+
+        # Apply sender throttling (daily_limit, minute_limit, sent_today_count, last_sent_at)
+        throttle_info = None
+        try:
+            if conn is not None and sender:
+                _email_key = (sender.get("email") or sender.get("username") or "").strip().lower()
+                if _email_key:
+                    cur = conn.cursor()
+                    try:
+                        cur.execute(
+                            "SELECT id,daily_limit,minute_limit,sent_today_count,last_sent_at "
+                            "FROM outreach_sender_accounts WHERE lower(email)=? LIMIT 1;",
+                            (_email_key,),
+                        )
+                        row = cur.fetchone()
+                    finally:
+                        cur.close()
+                    if row:
+                        import datetime as _dt
+                        _sid, _dlim, _mlim, _sent_today, _last_ts = row
+                        _now = _dt.datetime.utcnow()
+                        _today = _now.date()
+                        _sent_today = int(_sent_today or 0)
+                        # Reset daily counter if last_sent_at is from a previous day
+                        if _last_ts:
+                            try:
+                                _last_dt = _dt.datetime.fromisoformat(str(_last_ts).replace("Z", "+00:00"))
+                                if _last_dt.date() != _today:
+                                    _sent_today = 0
+                            except Exception:
+                                pass
+                        _daily_limit = int(_dlim) if _dlim not in (None, "", 0) else None
+                        _minute_limit = int(_mlim) if _mlim not in (None, "", 0) else None
+                        _remaining_daily = None
+                        if _daily_limit is not None:
+                            _remaining_daily = max(_daily_limit - _sent_today, 0)
+                        throttle_info = {
+                            "sender_id": int(_sid),
+                            "sent_today": _sent_today,
+                            "daily_limit": _daily_limit,
+                            "minute_limit": _minute_limit,
+                            "remaining_daily": _remaining_daily,
+                            "now_iso": _now.replace(microsecond=0).isoformat() + "Z",
+                        }
+        except Exception:
+            throttle_info = None
+
+        if not test_only and throttle_info:
+            _allowed = max_send if isinstance(max_send, int) else int(max_send or 0)
+            if throttle_info.get("remaining_daily") is not None:
+                _allowed = min(_allowed, throttle_info["remaining_daily"])
+            if throttle_info.get("minute_limit") not in (None, 0):
+                _allowed = min(_allowed, int(throttle_info["minute_limit"]))
+            if _allowed <= 0:
+                # Nothing allowed to send for this sender right now
+                return 0
+            max_send = int(_allowed)
+            # Optionally trim rows to the allowed window so we do not over-queue
+            try:
+                if rows is not None and hasattr(rows, "head"):
+                    rows = rows.head(max_send)
+            except Exception:
+                pass
+
         # Ensure schema and suppression filter
         ensure_o6_schema(conn)
         if rows is not None and hasattr(rows, "copy"):
@@ -17402,7 +17482,26 @@ def _o6_wrap_o3_send_batch():
                 total += 1
             return total
 
-        return orig(conn, sender, rows, subj, sig_html, test_only=test_only, max_send=max_send)
+        result = orig(conn, sender, rows, subj, sig_html, test_only=test_only, max_send=max_send)
+        # Persist throttle counters back to outreach_sender_accounts
+        if not test_only and throttle_info and conn is not None:
+            try:
+                _sent_count = int(result or 0)
+            except Exception:
+                _sent_count = 0
+            try:
+                if _sent_count > 0:
+                    _new_sent = int(throttle_info.get("sent_today") or 0) + _sent_count
+                    with conn:
+                        conn.execute(
+                            "UPDATE outreach_sender_accounts "
+                            "SET sent_today_count=?, last_sent_at=? "
+                            "WHERE id=?;",
+                            (_new_sent, throttle_info.get("now_iso"), int(throttle_info.get("sender_id"))),
+                        )
+            except Exception:
+                pass
+        return result
     wrapped._o6_wrapped = True
     g["_o3_send_batch"] = wrapped
 
@@ -18068,7 +18167,7 @@ def __p_db(conn, q, args=()):
 def __p_ensure_core(conn):
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS outreach_templates(id INTEGER PRIMARY KEY, name TEXT UNIQUE, subject TEXT, body TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS outreach_sender_accounts(id INTEGER PRIMARY KEY, label TEXT UNIQUE, email TEXT, app_password TEXT, smtp_host TEXT DEFAULT 'smtp.gmail.com', smtp_port INTEGER DEFAULT 587, use_tls INTEGER DEFAULT 1, is_active INTEGER DEFAULT 1)")
+    c.execute("CREATE TABLE IF NOT EXISTS outreach_sender_accounts(id INTEGER PRIMARY KEY, label TEXT UNIQUE, email TEXT, app_password TEXT, smtp_host TEXT DEFAULT 'smtp.gmail.com', smtp_port INTEGER DEFAULT 587, use_tls INTEGER DEFAULT 1, is_active INTEGER DEFAULT 1, daily_limit INTEGER DEFAULT 500, minute_limit INTEGER DEFAULT 60, sent_today_count INTEGER DEFAULT 0, last_sent_at TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS outreach_audit(id INTEGER PRIMARY KEY, ts TEXT DEFAULT (datetime('now')), actor TEXT, action TEXT, meta TEXT)")
     c.execute("CREATE TABLE IF NOT EXISTS outreach_optouts(id INTEGER PRIMARY KEY, email TEXT UNIQUE, reason TEXT, ts TEXT DEFAULT (datetime('now')))")
     c.execute("CREATE TABLE IF NOT EXISTS outreach_sequences(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)")
