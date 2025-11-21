@@ -25519,4 +25519,31 @@ def sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments):
         )
     conn.commit()
 
+def download_sam_attachment(conn, att_id, base_dir="data/sam_attachments"):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT tenant_id, notice_id, file_name, file_url FROM sam_attachments WHERE id = ?",
+        (att_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    tenant_id, notice_id, file_name, file_url = row
+
+    os.makedirs(base_dir, exist_ok=True)
+    safe_name = f"{tenant_id}_{notice_id}_{file_name}".replace("/", "_")
+    local_path = os.path.join(base_dir, safe_name)
+
+    resp = requests.get(file_url, timeout=60)
+    resp.raise_for_status()
+    with open(local_path, "wb") as f:
+        f.write(resp.content)
+
+    cur.execute(
+        "UPDATE sam_attachments SET local_path = ?, status = 'downloaded' WHERE id = ?",
+        (local_path, att_id,),
+    )
+    conn.commit()
+    return local_path
+
 
