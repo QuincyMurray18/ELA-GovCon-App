@@ -916,6 +916,47 @@ def ensure_unified_schemas(conn):
                 _debug_log(conn, "vendors_capability_cols", e)
 
         except Exception as e: _debug_log(conn, "vendors", e)
+        # vendor capacity and past performance
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS vendor_capacity(
+                    id INTEGER PRIMARY KEY,
+                    vendor_id INTEGER NOT NULL,
+                    capacity_notes TEXT,
+                    max_concurrent_jobs INTEGER,
+                    max_annual_value REAL,
+                    current_load_notes TEXT,
+                    quality REAL,
+                    schedule REAL,
+                    communication REAL,
+                    price REAL,
+                    overall_score REAL,
+                    last_updated TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vendor_capacity_vendor ON vendor_capacity(vendor_id);")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS vendor_job(
+                    id INTEGER PRIMARY KEY,
+                    vendor_id INTEGER NOT NULL,
+                    job_name TEXT,
+                    agency TEXT,
+                    contract_number TEXT,
+                    naics TEXT,
+                    role TEXT,
+                    start_date TEXT,
+                    end_date TEXT,
+                    contract_value REAL,
+                    quality REAL,
+                    schedule REAL,
+                    communication REAL,
+                    price REAL,
+                    overall_score REAL,
+                    notes TEXT
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vendor_job_vendor ON vendor_job(vendor_id);")
+        except Exception as e: _debug_log(conn, "vendor_capacity_job", e)
         # subfinder cache
         try:
             cur.execute("""CREATE TABLE IF NOT EXISTS subfinder_cache(
@@ -12567,6 +12608,312 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                 st.caption(" • " + "  |  ".join(meta_parts))
             if capability_tags:
                 st.caption(f" • Capabilities {capability_tags}")
+
+            # Capacity and past performance UI per vendor
+            vid = int(row["id"])
+            with st.expander("Capacity and past performance", expanded=False):
+                # Latest capacity snapshot
+                existing_cap = None
+                try:
+                    df_cap = safe_read_sql(
+                        conn,
+                        """
+                        SELECT capacity_notes,
+                               max_concurrent_jobs,
+                               max_annual_value,
+                               current_load_notes,
+                               quality,
+                               schedule,
+                               communication,
+                               price,
+                               overall_score,
+                               last_updated
+                        FROM vendor_capacity
+                        WHERE vendor_id=?
+                        ORDER BY last_updated DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (vid,),
+                    )
+                    if df_cap is not None and not df_cap.empty:
+                        existing_cap = df_cap.iloc[0]
+                except Exception:
+                    df_cap = None
+                    existing_cap = None
+
+                if existing_cap is not None:
+                    last_ts = existing_cap.get("last_updated") or ""
+                    st.caption(f"Last capacity snapshot: {last_ts}")
+                    score_parts = []
+                    for key_label in [
+                        ("quality", "Quality"),
+                        ("schedule", "Schedule"),
+                        ("communication", "Communication"),
+                        ("price", "Price"),
+                        ("overall_score", "Overall"),
+                    ]:
+                        key, label_txt = key_label
+                        val = existing_cap.get(key)
+                        if val not in (None, ""):
+                            try:
+                                score_parts.append(f"{label_txt} {float(val):.1f}")
+                            except Exception:
+                                score_parts.append(f"{label_txt} {val}")
+                    if score_parts:
+                        st.caption("Scores: " + "  |  ".join(score_parts))
+                    if existing_cap.get("capacity_notes"):
+                        st.write(f"Capacity notes: {existing_cap.get('capacity_notes')}")
+                    if existing_cap.get("current_load_notes"):
+                        st.write(f"Current load: {existing_cap.get('current_load_notes')}")
+                else:
+                    st.caption("No capacity snapshot logged yet.")
+
+                st.markdown("**Update capacity snapshot**")
+                vcap_notes = st.text_area(
+                    "Capacity notes",
+                    value=(existing_cap.get("capacity_notes") if existing_cap is not None else ""),
+                    key=f"vcap_notes_{vid}",
+                )
+                vcap_current = st.text_area(
+                    "Current load notes",
+                    value=(existing_cap.get("current_load_notes") if existing_cap is not None else ""),
+                    key=f"vcap_current_{vid}",
+                )
+                vcap_max_jobs = st.number_input(
+                    "Max concurrent jobs",
+                    min_value=0,
+                    step=1,
+                    value=int(existing_cap.get("max_concurrent_jobs") or 0) if existing_cap is not None else 0,
+                    key=f"vcap_max_jobs_{vid}",
+                )
+                vcap_max_value = st.number_input(
+                    "Max annual value (approx)",
+                    min_value=0.0,
+                    step=1000.0,
+                    value=float(existing_cap.get("max_annual_value") or 0.0) if existing_cap is not None else 0.0,
+                    key=f"vcap_max_value_{vid}",
+                )
+                c_scores = st.columns(5)
+                with c_scores[0]:
+                    vcap_quality = st.number_input(
+                        "Quality",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        value=float(existing_cap.get("quality") or 0.0) if existing_cap is not None else 0.0,
+                        key=f"vcap_quality_{vid}",
+                    )
+                with c_scores[1]:
+                    vcap_schedule = st.number_input(
+                        "Schedule",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        value=float(existing_cap.get("schedule") or 0.0) if existing_cap is not None else 0.0,
+                        key=f"vcap_schedule_{vid}",
+                    )
+                with c_scores[2]:
+                    vcap_comm = st.number_input(
+                        "Communication",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        value=float(existing_cap.get("communication") or 0.0) if existing_cap is not None else 0.0,
+                        key=f"vcap_comm_{vid}",
+                    )
+                with c_scores[3]:
+                    vcap_price = st.number_input(
+                        "Price",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        value=float(existing_cap.get("price") or 0.0) if existing_cap is not None else 0.0,
+                        key=f"vcap_price_{vid}",
+                    )
+                with c_scores[4]:
+                    vcap_overall = st.number_input(
+                        "Overall",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        value=float(existing_cap.get("overall_score") or 0.0) if existing_cap is not None else 0.0,
+                        key=f"vcap_overall_{vid}",
+                    )
+
+                if st.button("Save capacity snapshot", key=f"save_vcap_{vid}"):
+                    try:
+                        with conn:
+                            conn.execute(
+                                """
+                                INSERT INTO vendor_capacity(
+                                    vendor_id,
+                                    capacity_notes,
+                                    max_concurrent_jobs,
+                                    max_annual_value,
+                                    current_load_notes,
+                                    quality,
+                                    schedule,
+                                    communication,
+                                    price,
+                                    overall_score
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    vid,
+                                    vcap_notes.strip(),
+                                    int(vcap_max_jobs),
+                                    float(vcap_max_value),
+                                    vcap_current.strip(),
+                                    float(vcap_quality),
+                                    float(vcap_schedule),
+                                    float(vcap_comm),
+                                    float(vcap_price),
+                                    float(vcap_overall),
+                                ),
+                            )
+                        st.success("Capacity snapshot saved")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+
+                st.markdown("**Log past performance job**")
+                vj_name = st.text_input("Job name", key=f"vj_name_{vid}")
+                vj_agency = st.text_input("Agency", key=f"vj_agency_{vid}")
+                vj_role = st.text_input("Role (for example prime or sub)", key=f"vj_role_{vid}")
+                vj_contract = st.text_input("Contract number", key=f"vj_contract_{vid}")
+                vj_naics = st.text_input("NAICS", key=f"vj_naics_{vid}")
+                col_dates = st.columns(2)
+                with col_dates[0]:
+                    vj_start = st.text_input("Start date", key=f"vj_start_{vid}")
+                with col_dates[1]:
+                    vj_end = st.text_input("End date", key=f"vj_end_{vid}")
+                vj_value = st.number_input(
+                    "Contract value",
+                    min_value=0.0,
+                    step=1000.0,
+                    key=f"vj_value_{vid}",
+                )
+                score_cols = st.columns(5)
+                with score_cols[0]:
+                    vj_quality = st.number_input(
+                        "Quality (0 to 5)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        key=f"vj_quality_{vid}",
+                    )
+                with score_cols[1]:
+                    vj_schedule = st.number_input(
+                        "Schedule (0 to 5)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        key=f"vj_schedule_{vid}",
+                    )
+                with score_cols[2]:
+                    vj_comm = st.number_input(
+                        "Communication (0 to 5)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        key=f"vj_comm_{vid}",
+                    )
+                with score_cols[3]:
+                    vj_price = st.number_input(
+                        "Price (0 to 5)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        key=f"vj_price_{vid}",
+                    )
+                with score_cols[4]:
+                    vj_overall = st.number_input(
+                        "Overall (0 to 5)",
+                        min_value=0.0,
+                        max_value=5.0,
+                        step=0.1,
+                        key=f"vj_overall_{vid}",
+                    )
+                vj_notes = st.text_area("Job notes", key=f"vj_notes_{vid}", height=80)
+
+                if st.button("Add job record", key=f"vj_add_{vid}") and vj_name.strip():
+                    try:
+                        with conn:
+                            conn.execute(
+                                """
+                                INSERT INTO vendor_job(
+                                    vendor_id,
+                                    job_name,
+                                    agency,
+                                    contract_number,
+                                    naics,
+                                    role,
+                                    start_date,
+                                    end_date,
+                                    contract_value,
+                                    quality,
+                                    schedule,
+                                    communication,
+                                    price,
+                                    overall_score,
+                                    notes
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    vid,
+                                    vj_name.strip(),
+                                    vj_agency.strip(),
+                                    vj_contract.strip(),
+                                    vj_naics.strip(),
+                                    vj_role.strip(),
+                                    vj_start.strip(),
+                                    vj_end.strip(),
+                                    float(vj_value),
+                                    float(vj_quality),
+                                    float(vj_schedule),
+                                    float(vj_comm),
+                                    float(vj_price),
+                                    float(vj_overall),
+                                    vj_notes.strip(),
+                                ),
+                            )
+                        st.success("Job record added")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
+
+                # Recent jobs table
+                try:
+                    df_jobs = safe_read_sql(
+                        conn,
+                        """
+                        SELECT job_name,
+                               agency,
+                               role,
+                               contract_number,
+                               naics,
+                               start_date,
+                               end_date,
+                               contract_value,
+                               quality,
+                               schedule,
+                               communication,
+                               price,
+                               overall_score
+                        FROM vendor_job
+                        WHERE vendor_id=?
+                        ORDER BY COALESCE(end_date, start_date) DESC, id DESC
+                        LIMIT 10
+                        """,
+                        (vid,),
+                    )
+                except Exception:
+                    df_jobs = None
+
+                if df_jobs is not None and not df_jobs.empty:
+                    st.dataframe(df_jobs, use_container_width=True)
+                else:
+                    st.caption("No past performance jobs logged yet.")
 
             if chk:
                 selected_ids.append(int(row["id"]))
