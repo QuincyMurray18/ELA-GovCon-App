@@ -9111,6 +9111,227 @@ def run_deals(conn: "sqlite3.Connection") -> None:
 
 
 
+
+def _ensure_deal_for_notice_and_rfp(conn, tenant_id, notice, rfp_id):
+    """Ensure there is a deals row linked to this notice/rfp_id and update rfp_id if missing.
+
+    This keeps SAM Watch, RFP Analyzer, Deals, and Proposal Builder in sync so you can
+    move from notice ▶ RFP ▶ pipeline ▶ proposal without re-entering data.
+    """
+    from contextlib import closing as _closing
+
+    # Best-effort lookup of notice_id from the notice dict
+    notice_id = ""
+    try:
+        if "_extract_notice_id_from_obj" in globals():
+            notice_id = _extract_notice_id_from_obj(notice)
+        else:
+            if isinstance(notice, dict):
+                notice_id = str(
+                    notice.get("notice_id")
+                    or notice.get("Notice ID")
+                    or notice.get("NoticeID")
+                    or notice.get("id")
+                    or ""
+                ).strip()
+    except Exception:
+        notice_id = ""
+    try:
+        rid_int = int(rfp_id) if rfp_id is not None else None
+    except Exception:
+        rid_int = None
+
+    if not notice_id and not rid_int:
+        return
+
+    # Try to update an existing deal first
+    try:
+        with _closing(conn.cursor()) as cur:
+            if notice_id:
+                cur.execute(
+                    "SELECT id, rfp_id FROM deals WHERE notice_id = ? ORDER BY id DESC LIMIT 1;",
+                    (notice_id,),
+                )
+                row = cur.fetchone()
+            else:
+                row = None
+        if row:
+            did, cur_rfp = row
+            if rid_int and (not cur_rfp):
+                try:
+                    with _closing(conn.cursor()) as cur2:
+                        cur2.execute(
+                            "UPDATE deals SET rfp_id = ?, updated_at = datetime('now') WHERE id = ?;",
+                            (int(rid_int), int(did)),
+                        )
+                    conn.commit()
+                except Exception:
+                    pass
+            return
+    except Exception:
+        # If lookup fails, fall through and attempt a create below.
+        pass
+
+    # No existing deal found; create a lightweight one so the pipeline stays in sync
+    try:
+        with _closing(conn.cursor()) as cur:
+            try:
+                cur.execute("PRAGMA table_info(deals);")
+                cols = [r[1] for r in cur.fetchall() or []]
+            except Exception:
+                cols = []
+    except Exception:
+        cols = []
+    colset = set(cols)
+
+    title = ""
+    agency = ""
+    sam_url = ""
+    solnum = ""
+    posted = ""
+    due = ""
+    naics = ""
+    psc = ""
+    try:
+        if isinstance(notice, dict):
+            title = str(
+                notice.get("Title")
+                or notice.get("title")
+                or notice.get("Notice Title")
+                or f"Notice {notice_id}"
+                or "New deal"
+            )
+            agency = str(
+                notice.get("Agency Path")
+                or notice.get("Agency")
+                or notice.get("agency")
+                or ""
+            )
+            sam_url = str(
+                notice.get("SAM Link")
+                or notice.get("sam_url")
+                or ""
+            )
+            solnum = str(
+                notice.get("Solicitation")
+                or notice.get("Sol Number")
+                or notice.get("solicitation_number")
+                or ""
+            )
+            posted = str(
+                notice.get("Posted")
+                or notice.get("Post Date")
+                or notice.get("Posted Date")
+                or ""
+            )
+            due = str(
+                notice.get("Response Due")
+                or notice.get("Response Date")
+                or notice.get("due_date")
+                or ""
+            )
+            naics = str(
+                notice.get("NAICS")
+                or notice.get("naics")
+                or ""
+            )
+            psc = str(
+                notice.get("PSC")
+                or notice.get("psc")
+                or ""
+            )
+    except Exception:
+        pass
+
+    owner = None
+    try:
+        if "get_current_user_name" in globals():
+            owner = get_current_user_name()
+    except Exception:
+        owner = None
+    if not owner:
+        owner = "Quincy"
+
+    cols_ins = []
+    vals = []
+
+    # Required-ish fields
+    if "title" in colset:
+        cols_ins.append("title")
+        vals.append(title or f"Notice {notice_id}" or "New deal")
+    if "agency" in colset:
+        cols_ins.append("agency")
+        vals.append(agency or "")
+    if "status" in colset:
+        cols_ins.append("status")
+        vals.append("Open")
+    if "stage" in colset:
+        cols_ins.append("stage")
+        vals.append("Bidding")
+    if "value" in colset:
+        cols_ins.append("value")
+        vals.append(0.0)
+    if "owner" in colset:
+        cols_ins.append("owner")
+        vals.append(owner)
+    if "owner_user" in colset:
+        cols_ins.append("owner_user")
+        vals.append(owner)
+
+    # Linkage fields
+    if "notice_id" in colset and notice_id:
+        cols_ins.append("notice_id")
+        vals.append(str(notice_id))
+    if "solnum" in colset and solnum:
+        cols_ins.append("solnum")
+        vals.append(solnum)
+    if "posted_date" in colset and posted:
+        cols_ins.append("posted_date")
+        vals.append(posted)
+    if "rfp_deadline" in colset and due:
+        cols_ins.append("rfp_deadline")
+        vals.append(due)
+    if "naics" in colset and naics:
+        cols_ins.append("naics")
+        vals.append(naics)
+    if "psc" in colset and psc:
+        cols_ins.append("psc")
+        vals.append(psc)
+    if "sam_url" in colset and sam_url:
+        cols_ins.append("sam_url")
+        vals.append(sam_url)
+    if "rfp_id" in colset and rid_int:
+        cols_ins.append("rfp_id")
+        vals.append(int(rid_int))
+
+    # Timestamps
+    if "created_at" in colset:
+        cols_ins.append("created_at")
+        try:
+            from datetime import datetime as _dt
+            vals.append(_dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))
+        except Exception:
+            vals.append(None)
+
+    if not cols_ins:
+        return
+
+    placeholders = ", ".join(["?"] * len(cols_ins))
+    col_sql = ", ".join(cols_ins)
+    sql = f"INSERT INTO deals({col_sql}) VALUES ({placeholders});"
+
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(sql, vals)
+        conn.commit()
+    except Exception:
+        # Best-effort only; do not block the main SAM Watch flow.
+        try:
+            _debug_log(conn, "ensure_deal_for_notice_and_rfp", "insert_failed")
+        except Exception:
+            pass
+
+
 def get_or_create_rfp_from_notice(conn, tenant_id, notice_row):
     """Create an RFP Analyzer rfps record from a SAM Watch row if it does not exist.
 
@@ -9894,6 +10115,13 @@ def run_sam_watch(conn) -> None:
                                     rfp_id = _ensure_rfp_for_notice(conn, notice)
                                 except Exception as _e:
                                     st.error(f"Could not create RFP for this notice: {_e}")
+                            # Link this RFP into the deals pipeline
+                            try:
+                                _ensure_deal_for_notice_and_rfp(conn, tenant_id, notice, rfp_id)
+                            except Exception:
+                                # Keep SAM Watch resilient even if linking fails
+                                pass
+
                             # 4: download files and link to RFP
                             linked = 0
                             if rfp_id:
@@ -12901,6 +13129,13 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             st.rerun()
     with right:
         st.subheader("Guidance and limits")
+        # Surface AI attachments for the selected RFP so you do not need to re-upload files here.
+        try:
+            with st.expander("AI attachments for this RFP", expanded=False):
+                render_ai_attachments_panel(conn, int(rfp_id))
+        except Exception:
+            # Keep Proposal Builder usable even if the AI attachments panel is unavailable.
+            pass
         spacing = st.selectbox("Line spacing", ["Single", "1.15", "Double"], index=1)
         font_name = st.selectbox("Font", ["Times New Roman", "Calibri", "Arial"], index=0)
         font_size = st.number_input("Font size", min_value=10, max_value=12, value=11)
@@ -15991,6 +16226,28 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 )
                 footer = f"Owner: {row.get('owner') or 'Unassigned'} | Due: {row.get('rfp_deadline') or '—'}"
                 render_card(f"Deal #{int(row['id'])} — {row['title']}", body=body, footer=footer)
+                # RFP Analyzer deep link from deal detail
+                _linked_rfp_id = None
+                try:
+                    from contextlib import closing as _closing
+                    with _closing(conn.cursor()) as _cur:
+                        _cur.execute("SELECT rfp_id FROM deals WHERE id=?;", (int(sel_id),))
+                        _row_rfp = _cur.fetchone()
+                    if _row_rfp and _row_rfp[0]:
+                        _linked_rfp_id = int(_row_rfp[0])
+                except Exception:
+                    _linked_rfp_id = None
+                if _linked_rfp_id:
+                    if st.button("Open in RFP Analyzer", key=f"deal_open_rfp_{int(sel_id)}"):
+                        st.session_state["current_rfp_id"] = int(_linked_rfp_id)
+                        st.session_state["nav_target"] = "RFP Analyzer"
+                        try:
+                            router("RFP Analyzer", conn); st.stop()
+                        except Exception:
+                            try:
+                                st.rerun()
+                            except Exception:
+                                pass
                 # Suggested subs / matching vendors for this deal
                 try:
                     from contextlib import closing as _closing
