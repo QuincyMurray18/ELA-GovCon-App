@@ -14683,6 +14683,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
         with a_col3:
             a_notes = st.text_area("Notes", height=100, key="act_notes")
             if st.button("Save Activity", key="act_save"):
+                note_id = None
                 with closing(conn.cursor()) as cur:
                     # Store activity under the current logical user; tenant_id is handled by triggers.
                     cur.execute(
@@ -14697,7 +14698,24 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             get_current_user_name(),
                         ),
                     )
+                    note_id = cur.lastrowid
                     conn.commit()
+                # Index this note into the full-text search index for global search.
+                if note_id:
+                    try:
+                        if a_deal:
+                            ref_type = "deal_note"
+                        elif a_contact:
+                            ref_type = "contact_note"
+                        else:
+                            ref_type = "note"
+                        title = (a_subject or "").strip() or f"{ref_type.replace('_', ' ').title()} #{int(note_id)}"
+                        body = (a_notes or "").strip()
+                        if body:
+                            _fts_upsert_doc(conn, ref_type, int(note_id), title, body)
+                    except Exception:
+                        # FTS is best-effort; do not block saving the activity.
+                        pass
                 st.success("Saved")
 
         st.subheader("Activity Log")
@@ -17314,6 +17332,13 @@ def nav() -> str:
             key="current_user_name",
         )
 
+        st.markdown("#### Global search")
+        st.text_input(
+            "Search everything",
+            key="global_search_query",
+            placeholder="Search RFPs, proposals, notes",
+        )
+
         st.markdown("#### Journeys")
         journey_labels = [j[0] for j in journeys]
         selected_journey = st.radio(
@@ -17719,6 +17744,170 @@ def ns(scope: str, key: str) -> str:
 
 
 
+
+def _global_search_nav_to(conn: "sqlite3.Connection", ref_type: str, ref_id: str | int) -> None:
+    """
+    Navigate from a global search result into the appropriate page and record.
+    """
+    import streamlit as st
+    from contextlib import closing as _closing
+
+    try:
+        rid = int(ref_id)
+    except Exception:
+        rid = ref_id
+
+    if ref_type == "rfp":
+        st.session_state["current_rfp_id"] = rid
+        st.session_state["nav_target"] = "RFP Analyzer"
+        try:
+            router("RFP Analyzer", conn)
+            st.stop()
+        except Exception:
+            st.rerun()
+    elif ref_type == "proposal":
+        # Proposal Builder is record-aware via proposal id session key.
+        st.session_state["x7_current_proposal_id"] = rid
+        st.session_state["nav_target"] = "Proposal Builder"
+        try:
+            router("Proposal Builder", conn)
+            st.stop()
+        except Exception:
+            st.rerun()
+    elif ref_type in ("deal_note", "contact_note", "note"):
+        deal_id = None
+        contact_id = None
+        try:
+            with _closing(conn.cursor()) as cur:
+                cur.execute(
+                    "SELECT deal_id, contact_id FROM activities WHERE id=?;",
+                    (rid,),
+                )
+                row = cur.fetchone()
+            if row:
+                deal_id, contact_id = row[0], row[1]
+        except Exception:
+            deal_id = None
+            contact_id = None
+
+        if deal_id:
+            st.session_state["current_deal_id"] = int(deal_id)
+            st.session_state["nav_target"] = "Deals"
+            try:
+                router("Deals", conn)
+                st.stop()
+            except Exception:
+                st.rerun()
+        elif contact_id:
+            st.session_state["current_contact_id"] = int(contact_id)
+            st.session_state["nav_target"] = "Contacts"
+            try:
+                router("Contacts", conn)
+                st.stop()
+            except Exception:
+                st.rerun()
+        else:
+            # Fallback to Deals list if we cannot resolve a specific record.
+            st.session_state["nav_target"] = "Deals"
+            try:
+                router("Deals", conn)
+                st.stop()
+            except Exception:
+                st.rerun()
+
+
+def _global_search_panel(conn: "sqlite3.Connection") -> None:
+    """
+    Render global search results using the FTS index.
+    """
+    import streamlit as st
+    import pandas as _pd
+    from contextlib import closing as _closing
+
+    query = (st.session_state.get("global_search_query") or "").strip()
+    if not query:
+        return
+
+    try:
+        _ensure_fts_docs(conn)
+    except Exception:
+        # FTS is optional; if not available just skip the panel.
+        return
+
+    st.markdown("### Global search results")
+    st.caption("Matches across RFPs, proposals, contact notes, and deal notes indexed into fts_docs.")
+
+    allowed_types = ["rfp", "proposal", "contact_note", "deal_note", "note"]
+    clauses = ["fts_docs MATCH ?"]
+    params: list[object] = [query]
+    placeholders = ",".join("?" * len(allowed_types))
+    clauses.append(f"ref_type IN ({placeholders})")
+    params.extend(allowed_types)
+    where_sql = " AND ".join(clauses)
+
+    rows: list[tuple] = []
+    error_msg = ""
+    try:
+        with _closing(conn.cursor()) as cur:
+            sql = f"""
+                SELECT
+                    ref_type,
+                    ref_id,
+                    title,
+                    snippet(fts_docs, 4, '…', '…', ' … ', 18) AS snippet
+                FROM fts_docs
+                WHERE {where_sql}
+                LIMIT 75;
+            """
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    except Exception as e:
+        error_msg = str(e)
+
+    if error_msg:
+        st.error("Global search failed. The full-text index may not be available.")
+        st.text(error_msg)
+        return
+
+    if not rows:
+        st.info("No results found for your query.")
+        return
+
+    df = _pd.DataFrame(rows, columns=["ref_type", "ref_id", "title", "snippet"])
+    groups: dict[str, _pd.DataFrame] = {}
+    for rtype in ["rfp", "proposal", "deal_note", "contact_note", "note"]:
+        sub = df[df["ref_type"] == rtype]
+        if not sub.empty:
+            groups[rtype] = sub
+
+    label_map = {
+        "rfp": "RFPs",
+        "proposal": "Proposals",
+        "deal_note": "Deal notes",
+        "contact_note": "Contact notes",
+        "note": "Other notes",
+    }
+
+    for rtype in ["rfp", "proposal", "deal_note", "contact_note", "note"]:
+        sub = groups.get(rtype)
+        if sub is None or sub.empty:
+            continue
+        st.markdown(f"#### {label_map.get(rtype, rtype.title())}")
+        for _, row in sub.iterrows():
+            col1, col2 = st.columns([4, 1])
+            title = row.get("title") or ""
+            snippet = row.get("snippet") or ""
+            ref_id = row.get("ref_id")
+            with col1:
+                st.markdown(f"**{title or '(untitled)'}**")
+                if snippet:
+                    st.caption(snippet)
+            with col2:
+                if st.button("Open", key=f"gs_open_{rtype}_{ref_id}"):
+                    _global_search_nav_to(conn, rtype, ref_id)
+                    st.stop()
+        st.divider()
+
 def run_knowledge_hub(conn) -> None:
     import streamlit as st
     import pandas as _pd
@@ -18090,6 +18279,11 @@ def main() -> None:
 
     st.title(APP_TITLE)
     st.caption(BUILD_LABEL)
+
+    try:
+        _global_search_panel(conn)
+    except Exception:
+        pass
     # Y0 main panel (always on)
     try:
         y0_ai_panel()
