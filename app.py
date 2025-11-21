@@ -1857,157 +1857,6 @@ def _extract_notice_id_from_obj(notice: object) -> str:
         pass
     return ""
 
-
-def fetch_sam_attachments_for_notice(notice_row):
-    """
-    Best-effort helper to enumerate attachments for a SAM.gov notice.
-
-    Returns a list of dicts with the keys:
-        - file_name
-        - file_url
-        - file_type
-        - last_updated
-
-    It prefers a project-level `sam_list_attachments` helper if present.
-    As a fallback it will try `sam_try_fetch_attachments` (which returns
-    (filename, bytes) pairs) and fabricate minimal metadata.
-    """
-    from datetime import datetime
-
-    # Normalize the notice object into something sam_list_attachments can use
-    notice_obj = notice_row
-    try:
-        # Many implementations expect a plain dict, not a pandas Series
-        if hasattr(notice_row, "to_dict"):
-            notice_obj = notice_row.to_dict()
-    except Exception:
-        notice_obj = notice_row
-
-    attachments = []
-
-    # Preferred path: use a richer project-level attachment lister if available.
-    try:
-        if "sam_list_attachments" in globals():
-            try:
-                # Some implementations accept a notice dict, others a notice_id string.
-                items = sam_list_attachments(notice_obj) or []
-            except TypeError:
-                # Retry with notice_id only.
-                try:
-                    notice_id = _extract_notice_id_from_obj(notice_obj)
-                except Exception:
-                    notice_id = ""
-                if notice_id:
-                    try:
-                        items = sam_list_attachments(notice_id) or []
-                    except Exception:
-                        items = []
-            except Exception:
-                items = []
-        else:
-            items = []
-    except Exception:
-        items = []
-
-    # Fallback: if there is no metadata endpoint but we have a bulk-download helper,
-    # use its filenames to at least seed attachment rows (URLs will be blank).
-    try:
-        if (not items) and ("sam_try_fetch_attachments" in globals()):
-            try:
-                notice_id = _extract_notice_id_from_obj(notice_obj)
-            except Exception:
-                notice_id = ""
-            if notice_id:
-                try:
-                    files = sam_try_fetch_attachments(str(notice_id)) or []
-                except Exception:
-                    files = []
-                now = datetime.utcnow().isoformat(timespec="seconds")
-                for fname, _data in files:
-                    fname_s = str(fname or "attachment").strip() or "attachment"
-                    attachments.append(
-                        {
-                            "file_name": fname_s,
-                            "file_url": "",
-                            "file_type": "",
-                            "last_updated": now,
-                        }
-                    )
-                # If we were able to fabricate at least one attachment, we can return now.
-                if attachments:
-                    return attachments
-    except Exception:
-        # Hard failure: just fall through and return whatever we have.
-        pass
-
-    # Map whatever `items` we got into the normalized attachment dict shape.
-    for it in items or []:
-        try:
-            # Many attachment payloads use different keys for the same concept.
-            fname = (
-                it.get("file_name")
-                or it.get("name")
-                or it.get("filename")
-                or it.get("File Name")
-                or it.get("title")
-                or "attachment"
-            )
-            fname = str(fname or "attachment").strip() or "attachment"
-
-            url = (
-                it.get("file_url")
-                or it.get("url")
-                or it.get("URL")
-                or it.get("link")
-                or it.get("href")
-                or ""
-            )
-            url = str(url or "").strip()
-
-            ftype = (
-                it.get("file_type")
-                or it.get("mime")
-                or it.get("MimeType")
-                or it.get("contentType")
-                or it.get("content_type")
-                or ""
-            )
-            ftype = str(ftype or "").strip()
-
-            ts = (
-                it.get("last_updated")
-                or it.get("lastModified")
-                or it.get("modified")
-                or it.get("lastModifiedDate")
-                or ""
-            )
-
-            # Normalize timestamp into an ISO-ish string where possible.
-            if isinstance(ts, datetime):
-                ts_str = ts.isoformat(timespec="seconds")
-            elif isinstance(ts, (int, float)):
-                try:
-                    ts_str = datetime.utcfromtimestamp(ts).isoformat(timespec="seconds")
-                except Exception:
-                    ts_str = ""
-            else:
-                ts_str = str(ts or "").strip()
-
-            attachments.append(
-                {
-                    "file_name": fname,
-                    "file_url": url,
-                    "file_type": ftype,
-                    "last_updated": ts_str,
-                }
-            )
-        except Exception:
-            # Skip any malformed item but continue processing others.
-            continue
-
-    return attachments
-
-
 def _sam_upsert_attachment_record(conn, notice_id: str, file_name: str, url: str | None = None,
                                   mime_type: str | None = None, size_bytes: int | None = None,
                                   status: str | None = None, last_error: str | None = None) -> int:
@@ -9957,49 +9806,103 @@ def run_sam_watch(conn) -> None:
                                     _ask_rfp_analyzer_modal(row.to_dict())
                                 except Exception as _e:
                                     st.warning(f'Analyzer dialog unavailable: {_e}')
-                    # Push notice to Analyzer tab: create RFP, fetch attachments, and open Analyzer
-                    if st.button("Create RFP + fetch attachments ▶", key=f"push_to_rfp_{i}"):
+                                        # Push notice to Analyzer tab: create RFP, sync attachments, download, and open Analyzer
+                    try:
+                        tenant_id = get_current_tenant_id(conn)
+                    except Exception:
+                        tenant_id = 1
+                    if st.button("AI attachments ▶", key=f"ai_att_{i}"):
                         # Normalize the notice dict so downstream helpers have context
                         try:
                             notice = row.to_dict()
                         except Exception:
                             notice = {}
-                        rid = None
-                        try:
-                            rid = _ensure_rfp_for_notice(conn, notice)
-                            st.session_state["current_rfp_id"] = int(rid)
-                        except Exception as _e:
-                            st.warning(f"RFP record not created: {_e}")
-
-                        attached_count = 0
-                        if rid:
-                            try:
-                                # Phase 3 pipeline:
-                                # - sam_attachments: metadata + status
-                                # - rfp_documents: link attachments to this RFP
-                                # - rfp_files: actual file blobs via Phase 1 downloader
-                                attached_count = int(rfp_documents_fetch_from_sam(conn, int(rid), notice) or 0)
-                            except Exception as _e:
-                                st.warning(f"Attachment fetch/ingest error: {_e}")
-
-                        # Hand off into RFP Analyzer with this notice as context
-                        st.session_state["rfp_selected_notice"] = notice
-                        st.session_state["nav_target"] = "RFP Analyzer"
-                        if rid:
-                            if attached_count:
-                                st.success(f"RFP #{rid} ready. Fetched and ingested {attached_count} attachment(s) from SAM.gov.")
-                            else:
-                                st.info(f"RFP #{rid} ready. No attachments were ingested from SAM.gov.")
+                        notice_id = str(
+                            (notice.get("notice_id")
+                             or notice.get("Notice ID")
+                             or notice.get("NoticeID")
+                             or notice.get("id")
+                             or "")
+                        ).strip()
+                        if not notice_id:
+                            st.warning("Could not resolve a notice_id for this row; cannot fetch attachments.")
                         else:
-                            st.info("Opening RFP Analyzer…")
-
-                        try:
-                            router("RFP Analyzer", conn); st.stop()
-                        except Exception:
+                            # 1: fetch attachment metadata from SAM.gov
+                            attachments = []
                             try:
-                                st.rerun()
+                                attachments = fetch_sam_attachments_for_notice(notice)
+                            except Exception as _e:
+                                st.warning(f"Attachment enumeration failed: {_e}")
+                            # 2: sync metadata into sam_attachments
+                            if attachments:
+                                try:
+                                    sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments)
+                                except Exception as _e:
+                                    st.warning(f"Attachment metadata sync failed: {_e}")
+                            # 3: create or get the RFP record
+                            rfp_id = None
+                            try:
+                                rfp_id = get_or_create_rfp_from_notice(conn, tenant_id, notice)
                             except Exception:
-                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                                try:
+                                    rfp_id = _ensure_rfp_for_notice(conn, notice)
+                                except Exception as _e:
+                                    st.error(f"Could not create RFP for this notice: {_e}")
+                            # 4: download files and link to RFP
+                            linked = 0
+                            if rfp_id:
+                                try:
+                                    cur = conn.cursor()
+                                    cur.execute(
+                                        "SELECT id, notice_id, file_name, file_type, local_path "
+                                        "FROM sam_attachments WHERE tenant_id = ? AND notice_id = ?",
+                                        (tenant_id, notice_id),
+                                    )
+                                    for att_id, notice_id2, fname, ftype, local_path in cur.fetchall():
+                                        try:
+                                            local_path2 = local_path
+                                            if not local_path2:
+                                                local_path2 = download_sam_attachment(conn, att_id)
+                                            if not local_path2:
+                                                continue
+                                            att_row = {
+                                                "notice_id": notice_id2,
+                                                "file_name": fname,
+                                                "file_type": ftype,
+                                                "local_path": local_path2,
+                                            }
+                                            link_attachment_to_rfp(conn, tenant_id, rfp_id, att_row)
+                                            linked += 1
+                                        except Exception:
+                                            continue
+                                except Exception as _e:
+                                    st.warning(f"Attachment download/linking error: {_e}")
+
+                                # Hand off into RFP Analyzer with this notice as context
+                                st.session_state["current_rfp_id"] = int(rfp_id)
+                                st.session_state["rfp_selected_notice"] = notice
+                                st.session_state["nav_target"] = "RFP Analyzer"
+                                if linked:
+                                    st.success(f"RFP #{rfp_id} ready. Linked {linked} attachment(s) from SAM.gov.")
+                                else:
+                                    st.info(f"RFP #{rfp_id} ready. No attachments were linked from SAM.gov.")
+                                try:
+                                    router("RFP Analyzer", conn); st.stop()
+                                except Exception:
+                                    try:
+                                        st.rerun()
+                                    except Exception:
+                                        st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                            else:
+                                # Could not create RFP; still try to route to Analyzer so user can work manually
+                                st.info("Opening RFP Analyzer…")
+                                try:
+                                    router("RFP Analyzer", conn); st.stop()
+                                except Exception:
+                                    try:
+                                        st.rerun()
+                                    except Exception:
+                                        st.info("Switch to RFP Analyzer tab to continue.")
 
             # Selected details panel
 
@@ -25646,6 +25549,92 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
+
+
+def fetch_sam_attachments_for_notice(notice_row):
+    """
+    Best-effort helper to enumerate attachments for a SAM.gov notice.
+
+    This uses sam_list_attachments when available (preferred), and falls back
+    to sam_try_fetch_attachments to at least recover filenames. It returns a
+    list of dicts with keys: file_name, file_url, file_type, last_updated.
+    """
+    items = []
+    # Preferred path: SamSearch / SAM client helper
+    if "sam_list_attachments" in globals():
+        try:
+            items = list(sam_list_attachments(notice_row) or [])
+        except Exception:
+            items = []
+
+    # Fallback: use sam_try_fetch_attachments to get at least names
+    if not items and "sam_try_fetch_attachments" in globals():
+        try:
+            tmp = list(sam_try_fetch_attachments(notice_row) or [])
+        except Exception:
+            tmp = []
+        for it in tmp:
+            if isinstance(it, dict):
+                name = it.get("name") or it.get("filename") or it.get("File Name") or "attachment"
+                url = it.get("url") or it.get("URL") or it.get("link")
+                mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
+                updated = (
+                    it.get("last_updated")
+                    or it.get("LastUpdated")
+                    or it.get("lastModified")
+                    or it.get("last_modified")
+                )
+                items.append(
+                    {
+                        "file_name": str(name).strip() or "attachment",
+                        "file_url": str(url).strip() if url else None,
+                        "file_type": str(mime).strip() if mime else None,
+                        "last_updated": str(updated) if updated else None,
+                    }
+                )
+            else:
+                # Could be (name, bytes) tuples
+                try:
+                    name, _blob = it
+                    items.append(
+                        {
+                            "file_name": str(name).strip() or "attachment",
+                            "file_url": None,
+                            "file_type": None,
+                            "last_updated": None,
+                        }
+                    )
+                except Exception:
+                    continue
+        return items
+
+    results = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = (
+            it.get("name")
+            or it.get("filename")
+            or it.get("File Name")
+            or "attachment"
+        )
+        url = it.get("url") or it.get("URL") or it.get("link")
+        mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
+        updated = (
+            it.get("last_updated")
+            or it.get("LastUpdated")
+            or it.get("lastModified")
+            or it.get("last_modified")
+        )
+        results.append(
+            {
+                "file_name": str(name).strip() or "attachment",
+                "file_url": str(url).strip() if url else None,
+                "file_type": str(mime).strip() if mime else None,
+                "last_updated": str(updated) if updated else None,
+            }
+        )
+    return results
 
 def sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments):
     """Insert or update attachment rows for a notice.
