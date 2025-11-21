@@ -23943,6 +23943,186 @@ def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
 
 
 
+def fetch_sam_attachments_for_notice(notice):
+    """
+    Best-effort helper to enumerate attachments for a SAM.gov notice.
+
+    `notice` may be a row dict from SAM Watch or a plain notice_id string.
+
+    This uses sam_list_attachments when available (preferred), and falls back
+    to sam_try_fetch_attachments to at least recover filenames. It returns a
+    list of dicts with keys: file_name, file_url, file_type, last_updated.
+    """
+    # Normalize inputs
+    notice_row = {}
+    notice_id = ""
+    if isinstance(notice, dict):
+        notice_row = notice
+        notice_id = str(
+            notice_row.get("notice_id")
+            or notice_row.get("Notice ID")
+            or notice_row.get("NoticeID")
+            or notice_row.get("id")
+            or ""
+        ).strip()
+    else:
+        notice_id = str(notice or "").strip()
+
+    items = []
+
+    # Preferred path: SamSearch / SAM client helper that understands row context
+    if "sam_list_attachments" in globals():
+        try:
+            # Pass the row dict when we have it; otherwise a minimal stub
+            ctx = notice_row or {"notice_id": notice_id, "Notice ID": notice_id}
+            items = list(sam_list_attachments(ctx) or [])
+        except Exception:
+            items = []
+
+    # Fallback: use sam_try_fetch_attachments to get at least names via notice_id
+    if not items and "sam_try_fetch_attachments" in globals() and notice_id:
+        try:
+            tmp = list(sam_try_fetch_attachments(notice_id) or [])
+        except Exception:
+            tmp = []
+        items = []
+        for it in tmp:
+            if isinstance(it, dict):
+                name = it.get("name") or it.get("filename") or it.get("File Name") or "attachment"
+                url = it.get("url") or it.get("URL") or it.get("link")
+                mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
+                updated = (
+                    it.get("last_updated")
+                    or it.get("LastUpdated")
+                    or it.get("lastModified")
+                    or it.get("last_modified")
+                )
+                items.append(
+                    {
+                        "file_name": str(name).strip() or "attachment",
+                        "file_url": str(url).strip() if url else None,
+                        "file_type": str(mime).strip() if mime else None,
+                        "last_updated": str(updated) if updated else None,
+                    }
+                )
+            else:
+                # Could be (name, bytes) tuples
+                try:
+                    name, _blob = it
+                    items.append(
+                        {
+                            "file_name": str(name).strip() or "attachment",
+                            "file_url": None,
+                            "file_type": None,
+                            "last_updated": None,
+                        }
+                    )
+                except Exception:
+                    continue
+        return items
+
+    # Normalize any dict-style items into the standard shape
+    results = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = (
+            it.get("name")
+            or it.get("filename")
+            or it.get("File Name")
+            or "attachment"
+        )
+        url = it.get("url") or it.get("URL") or it.get("link")
+        mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
+        updated = (
+            it.get("last_updated")
+            or it.get("LastUpdated")
+            or it.get("lastModified")
+            or it.get("last_modified")
+        )
+        results.append(
+            {
+                "file_name": str(name).strip() or "attachment",
+                "file_url": str(url).strip() if url else None,
+                "file_type": str(mime).strip() if mime else None,
+                "last_updated": str(updated) if updated else None,
+            }
+        )
+    return results
+
+
+def sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments):
+    """Insert or update attachment rows for a notice.
+    attachments is a list of dicts with keys file_name, file_url, file_type, last_updated.
+    """
+    cur = conn.cursor()
+    for att in attachments:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO sam_attachments
+            (tenant_id, notice_id, file_name, file_url, file_type, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tenant_id,
+                notice_id,
+                att.get('file_name'),
+                att.get('file_url'),
+                att.get('file_type'),
+                att.get('last_updated'),
+            ),
+        )
+    conn.commit()
+
+def download_sam_attachment(conn, att_id, base_dir="data/sam_attachments"):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT tenant_id, notice_id, file_name, file_url FROM sam_attachments WHERE id = ?",
+        (att_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    tenant_id, notice_id, file_name, file_url = row
+
+    os.makedirs(base_dir, exist_ok=True)
+    safe_name = f"{tenant_id}_{notice_id}_{file_name}".replace("/", "_")
+    local_path = os.path.join(base_dir, safe_name)
+
+    resp = requests.get(file_url, timeout=60)
+    resp.raise_for_status()
+    with open(local_path, "wb") as f:
+        f.write(resp.content)
+
+    cur.execute(
+        "UPDATE sam_attachments SET local_path = ?, status = 'downloaded' WHERE id = ?",
+        (local_path, att_id,),
+    )
+    conn.commit()
+    return local_path
+
+def link_attachment_to_rfp(conn, tenant_id, rfp_id, att_row):
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO rfp_documents (
+            tenant_id, rfp_id, notice_id, file_name, local_path, file_type, source, status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'sam_watch', 'pending')
+        """,
+        (
+            tenant_id,
+            rfp_id,
+            att_row['notice_id'],
+            att_row['file_name'],
+            att_row['local_path'],
+            att_row['file_type'],
+        ),
+    )
+    conn.commit()
+
+
+
+
 if __name__ == '__main__':
     import argparse as _argparse
     import traceback as _traceback
@@ -25596,183 +25776,5 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
 
-
-
-def fetch_sam_attachments_for_notice(notice):
-    """
-    Best-effort helper to enumerate attachments for a SAM.gov notice.
-
-    `notice` may be a row dict from SAM Watch or a plain notice_id string.
-
-    This uses sam_list_attachments when available (preferred), and falls back
-    to sam_try_fetch_attachments to at least recover filenames. It returns a
-    list of dicts with keys: file_name, file_url, file_type, last_updated.
-    """
-    # Normalize inputs
-    notice_row = {}
-    notice_id = ""
-    if isinstance(notice, dict):
-        notice_row = notice
-        notice_id = str(
-            notice_row.get("notice_id")
-            or notice_row.get("Notice ID")
-            or notice_row.get("NoticeID")
-            or notice_row.get("id")
-            or ""
-        ).strip()
-    else:
-        notice_id = str(notice or "").strip()
-
-    items = []
-
-    # Preferred path: SamSearch / SAM client helper that understands row context
-    if "sam_list_attachments" in globals():
-        try:
-            # Pass the row dict when we have it; otherwise a minimal stub
-            ctx = notice_row or {"notice_id": notice_id, "Notice ID": notice_id}
-            items = list(sam_list_attachments(ctx) or [])
-        except Exception:
-            items = []
-
-    # Fallback: use sam_try_fetch_attachments to get at least names via notice_id
-    if not items and "sam_try_fetch_attachments" in globals() and notice_id:
-        try:
-            tmp = list(sam_try_fetch_attachments(notice_id) or [])
-        except Exception:
-            tmp = []
-        items = []
-        for it in tmp:
-            if isinstance(it, dict):
-                name = it.get("name") or it.get("filename") or it.get("File Name") or "attachment"
-                url = it.get("url") or it.get("URL") or it.get("link")
-                mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
-                updated = (
-                    it.get("last_updated")
-                    or it.get("LastUpdated")
-                    or it.get("lastModified")
-                    or it.get("last_modified")
-                )
-                items.append(
-                    {
-                        "file_name": str(name).strip() or "attachment",
-                        "file_url": str(url).strip() if url else None,
-                        "file_type": str(mime).strip() if mime else None,
-                        "last_updated": str(updated) if updated else None,
-                    }
-                )
-            else:
-                # Could be (name, bytes) tuples
-                try:
-                    name, _blob = it
-                    items.append(
-                        {
-                            "file_name": str(name).strip() or "attachment",
-                            "file_url": None,
-                            "file_type": None,
-                            "last_updated": None,
-                        }
-                    )
-                except Exception:
-                    continue
-        return items
-
-    # Normalize any dict-style items into the standard shape
-    results = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        name = (
-            it.get("name")
-            or it.get("filename")
-            or it.get("File Name")
-            or "attachment"
-        )
-        url = it.get("url") or it.get("URL") or it.get("link")
-        mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
-        updated = (
-            it.get("last_updated")
-            or it.get("LastUpdated")
-            or it.get("lastModified")
-            or it.get("last_modified")
-        )
-        results.append(
-            {
-                "file_name": str(name).strip() or "attachment",
-                "file_url": str(url).strip() if url else None,
-                "file_type": str(mime).strip() if mime else None,
-                "last_updated": str(updated) if updated else None,
-            }
-        )
-    return results
-
-
-def sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments):
-    """Insert or update attachment rows for a notice.
-    attachments is a list of dicts with keys file_name, file_url, file_type, last_updated.
-    """
-    cur = conn.cursor()
-    for att in attachments:
-        cur.execute(
-            """
-            INSERT OR IGNORE INTO sam_attachments
-            (tenant_id, notice_id, file_name, file_url, file_type, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                tenant_id,
-                notice_id,
-                att.get('file_name'),
-                att.get('file_url'),
-                att.get('file_type'),
-                att.get('last_updated'),
-            ),
-        )
-    conn.commit()
-
-def download_sam_attachment(conn, att_id, base_dir="data/sam_attachments"):
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT tenant_id, notice_id, file_name, file_url FROM sam_attachments WHERE id = ?",
-        (att_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return None
-    tenant_id, notice_id, file_name, file_url = row
-
-    os.makedirs(base_dir, exist_ok=True)
-    safe_name = f"{tenant_id}_{notice_id}_{file_name}".replace("/", "_")
-    local_path = os.path.join(base_dir, safe_name)
-
-    resp = requests.get(file_url, timeout=60)
-    resp.raise_for_status()
-    with open(local_path, "wb") as f:
-        f.write(resp.content)
-
-    cur.execute(
-        "UPDATE sam_attachments SET local_path = ?, status = 'downloaded' WHERE id = ?",
-        (local_path, att_id,),
-    )
-    conn.commit()
-    return local_path
-
-def link_attachment_to_rfp(conn, tenant_id, rfp_id, att_row):
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO rfp_documents (
-            tenant_id, rfp_id, notice_id, file_name, local_path, file_type, source, status
-        ) VALUES (?, ?, ?, ?, ?, ?, 'sam_watch', 'pending')
-        """,
-        (
-            tenant_id,
-            rfp_id,
-            att_row['notice_id'],
-            att_row['file_name'],
-            att_row['local_path'],
-            att_row['file_type'],
-        ),
-    )
-    conn.commit()
 
 
