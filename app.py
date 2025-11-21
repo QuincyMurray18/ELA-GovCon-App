@@ -3316,6 +3316,7 @@ def _render_ask_rfp_button(opportunity=None):
     _add("last_engagement_at", "last_engagement_at TEXT")
     _add("first_entered_stage_date", "first_entered_stage_date TEXT")
     _add("last_stage_change_date", "last_stage_change_date TEXT")
+    _add("work_type_tags", "work_type_tags TEXT")
 
 # Bridge names
 sqlite3 = _rtm_sqlite3
@@ -12430,6 +12431,159 @@ def _vendor_recompute_score(conn: "sqlite3.Connection", vendor_id: int) -> None:
         except Exception:
             pass
 
+
+def _get_suggested_subs(conn: "sqlite3.Connection", required_naics: str = "", work_type_tags: str = "", limit: int = 10):
+    """
+    Compute a ranked list of suggested subcontractors based on required NAICS and work_type tags.
+
+    - required_naics: single NAICS code (or comma-separated list); we use the first non-empty token.
+    - work_type_tags: comma/semicolon separated capability labels, e.g. "janitorial, grounds, HVAC".
+    """
+    try:
+        import pandas as _pd
+    except Exception:
+        return None
+
+    def _norm_naics(s):
+        vals = []
+        for part in str(s or "").replace(";", ",").split(","):
+            p = part.strip()
+            if not p:
+                continue
+            # Keep only leading digits (NAICS codes are numeric)
+            digits = "".join(ch for ch in p if ch.isdigit())
+            if digits:
+                vals.append(digits)
+        return set(vals)
+
+    def _norm_tags(s):
+        tags = set()
+        raw = str(s or "")
+        for sep in [";", ",", "|", "/"]:
+            raw = raw.replace(sep, ",")
+        for part in raw.split(","):
+            t = part.strip().lower()
+            if t:
+                tags.add(t)
+        return tags
+
+    req_naics = ""
+    for part in str(required_naics or "").replace(";", ",").split(","):
+        p = part.strip()
+        if p:
+            # normalize to digits only for comparison, but keep raw for display
+            req_naics = "".join(ch for ch in p if ch.isdigit()) or p
+            break
+
+    req_tags = _norm_tags(work_type_tags)
+
+    if not req_naics and not req_tags:
+        return _pd.DataFrame(columns=["id", "name", "city", "state", "naics", "primary_naics",
+                                      "other_naics", "capability_tags", "vendor_score",
+                                      "naics_match", "tag_match_count", "rank_score"])
+
+    try:
+        tid = _current_tenant(conn)
+    except Exception:
+        tid = 1
+
+    try:
+        df_v = _pd.read_sql_query(
+            """
+            SELECT id, name, city, state,
+                   COALESCE(primary_naics, '') AS primary_naics,
+                   COALESCE(other_naics, '') AS other_naics,
+                   COALESCE(naics, '') AS naics,
+                   COALESCE(capability_tags, '') AS capability_tags,
+                   COALESCE(vendor_score, 0.0) AS vendor_score
+            FROM vendors
+            WHERE (tenant_id = ? OR tenant_id IS NULL)
+            """,
+            conn,
+            params=(int(tid),),
+        )
+    except Exception:
+        # Fall back to base table without tenant scoping if needed
+        try:
+            df_v = _pd.read_sql_query(
+                """
+                SELECT id, name, city, state,
+                       COALESCE(primary_naics, '') AS primary_naics,
+                       COALESCE(other_naics, '') AS other_naics,
+                       COALESCE(naics, '') AS naics,
+                       COALESCE(capability_tags, '') AS capability_tags,
+                       COALESCE(vendor_score, 0.0) AS vendor_score
+                FROM vendors
+                """,
+                conn,
+                params=(),
+            )
+        except Exception:
+            return None
+
+    if df_v is None or df_v.empty:
+        return df_v
+
+    scores = []
+    naics_matches = []
+    tag_counts = []
+    for _, r in df_v.iterrows():
+        v_primary = _norm_naics(r.get("primary_naics"))
+        v_other = _norm_naics(r.get("other_naics"))
+        v_naics = _norm_naics(r.get("naics"))
+        v_tags = _norm_tags(r.get("capability_tags"))
+
+        base = 0.0
+        match_label = ""
+        all_naics = v_primary | v_other | v_naics
+
+        if req_naics:
+            if req_naics in v_primary:
+                base += 3.0
+                match_label = "primary"
+            elif req_naics in all_naics:
+                base += 2.0
+                match_label = "other"
+            else:
+                # prefix match (e.g., 561 for 561720)
+                if any(x.startswith(req_naics) or req_naics.startswith(x) for x in all_naics):
+                    base += 1.5
+                    match_label = "prefix"
+                else:
+                    match_label = ""
+
+        tag_match = len(req_tags & v_tags) if req_tags else 0
+        if tag_match:
+            base += 1.0 + 0.5 * tag_match  # reward multiple tag hits
+
+        vscore = 0.0
+        try:
+            vscore = float(r.get("vendor_score") or 0.0)
+        except Exception:
+            vscore = 0.0
+
+        # Blend vendor_score into ranking, normalized to ~0-1 range
+        rank = base + (vscore / 5.0)
+
+        scores.append(rank)
+        naics_matches.append(match_label)
+        tag_counts.append(tag_match)
+
+    df_v = df_v.copy()
+    df_v["naics_match"] = naics_matches
+    df_v["tag_match_count"] = tag_counts
+    df_v["rank_score"] = scores
+
+    try:
+        df_v = df_v.sort_values(by=["rank_score", "vendor_score", "name"], ascending=[False, False, True])
+    except Exception:
+        pass
+
+    if limit and limit > 0:
+        df_v = df_v.head(int(limit))
+
+    return df_v
+
 def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     st.header("Subcontractor Finder")
     st.caption("Use this page to search for qualified subcontractors by location and service and add them to your pipeline.")
@@ -15126,6 +15280,82 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 )
                 footer = f"Owner: {row.get('owner') or 'Unassigned'} | Due: {row.get('rfp_deadline') or '—'}"
                 render_card(f"Deal #{int(row['id'])} — {row['title']}", body=body, footer=footer)
+                # Suggested subs / matching vendors for this deal
+                try:
+                    from contextlib import closing as _closing
+                    required_naics = ""
+                    work_type_tags = ""
+                    notice_id = ""
+                    try:
+                        with _closing(conn.cursor()) as _cur:
+                            _cur.execute(
+                                "SELECT notice_id, COALESCE(naics, ''), COALESCE(work_type_tags, '') "
+                                "FROM deals WHERE id=?;",
+                                (int(sel_id),),
+                            )
+                            _r = _cur.fetchone()
+                        if _r:
+                            notice_id = str(_r[0] or "")
+                            required_naics = str(_r[1] or "")
+                            work_type_tags = str(_r[2] or "")
+                        if (not required_naics) and notice_id:
+                            with _closing(conn.cursor()) as _cur2:
+                                _cur2.execute("SELECT naics FROM notices WHERE notice_id=?;", (notice_id,))
+                                _n = _cur2.fetchone()
+                            if _n and _n[0]:
+                                required_naics = str(_n[0] or "")
+                    except Exception:
+                        pass
+
+                    with st.expander("Deal tags & suggested subs", expanded=False):
+                        c_tag1, c_tag2 = st.columns(2)
+                        with c_tag1:
+                            st.write(f"Required NAICS: {required_naics or 'n/a'}")
+                        with c_tag2:
+                            tags_input = st.text_input(
+                                "Work type tags (comma-separated)",
+                                value=work_type_tags or "",
+                                key=f"deal_detail_worktypes_{int(sel_id)}",
+                                help="Examples: janitorial, grounds, HVAC, snow removal",
+                            )
+                            if st.button("Save tags", key=f"deal_detail_save_worktypes_{int(sel_id)}"):
+                                try:
+                                    with _closing(conn.cursor()) as _cur3:
+                                        _cur3.execute(
+                                            "UPDATE deals SET work_type_tags=? WHERE id=?;",
+                                            (tags_input.strip(), int(sel_id)),
+                                        )
+                                        conn.commit()
+                                    st.success("Updated work type tags for this deal.")
+                                    work_type_tags = tags_input
+                                except Exception as _e:
+                                    st.error(f"Failed to update tags: {_e}")
+
+                        df_suggest = _get_suggested_subs(conn, required_naics, work_type_tags)
+                        if (not required_naics) and (not (work_type_tags or '').strip()):
+                            st.caption("Add NAICS or work type tags for this deal to see suggested subcontractors.")
+                        elif df_suggest is None or df_suggest.empty:
+                            st.caption("No matching vendors yet. Seed vendors with matching capabilities in Subcontractor Finder.")
+                        else:
+                            import pandas as _pd
+                            df_view = df_suggest.copy()
+                            try:
+                                df_view["location"] = (
+                                    df_view["city"].fillna("").str.strip()
+                                    + _pd.Series([", "] * len(df_view))
+                                    + df_view["state"].fillna("").str.strip()
+                                )
+                            except Exception:
+                                df_view["location"] = df_view.get("city", "") + ", " + df_view.get("state", "")
+                            df_view = df_view.rename(
+                                columns={"vendor_score": "score", "naics_match": "NAICS match", "tag_match_count": "tag matches"}
+                            )
+                            cols_show = [c for c in ["name", "location", "score", "NAICS match", "tag matches", "capability_tags"] if c in df_view.columns]
+                            if cols_show:
+                                st.dataframe(df_view[cols_show], use_container_width=True)
+                except Exception as _e:
+                    logger.exception("Suggested subs panel failed for deal detail")
+
 
                 # Optional: allow changing primary CO / contact from detail view
                 try:
@@ -17044,6 +17274,73 @@ def run_rfp_analyzer(conn) -> None:
     except Exception:
         st.session_state["current_rfp_id"] = rid
 
+    # Suggested subs for this RFP
+    try:
+        rid_int = int(_ensure_selected_rfp_id(conn))
+    except Exception:
+        rid_int = None
+    if rid_int:
+        # Resolve NAICS from meta or linked notice
+        req_naics = _p3_rfp_meta_get(conn, rid_int, "naics", "")
+        notice_id = _p3_rfp_meta_get(conn, rid_int, "notice_id", "")
+        from contextlib import closing as _closing
+        if not notice_id:
+            try:
+                with _closing(conn.cursor()) as _cur:
+                    _cur.execute("SELECT notice_id FROM rfps WHERE id=?;", (int(rid_int),))
+                    _row = _cur.fetchone()
+                if _row and _row[0]:
+                    notice_id = str(_row[0] or "")
+            except Exception:
+                notice_id = ""
+        if (not req_naics) and notice_id:
+            try:
+                with _closing(conn.cursor()) as _cur2:
+                    _cur2.execute("SELECT naics FROM notices WHERE notice_id=?;", (notice_id,))
+                    _n = _cur2.fetchone()
+                if _n and _n[0]:
+                    req_naics = str(_n[0] or "")
+            except Exception:
+                pass
+        work_tags = _p3_rfp_meta_get(conn, rid_int, "work_type_tags", "")
+        with st.expander("Suggested subs for this RFP", expanded=False):
+            st.write(f"Required NAICS: {req_naics or 'n/a'}")
+            tags_input = st.text_input(
+                "Work type tags (comma-separated)",
+                value=work_tags or "",
+                key=f"rfp_worktypes_{rid_int}",
+                help="Examples: janitorial, grounds, HVAC, snow removal",
+            )
+            if st.button("Save RFP tags", key=f"rfp_worktypes_save_{rid_int}"):
+                try:
+                    _p3_rfp_meta_set(conn, rid_int, "work_type_tags", tags_input.strip())
+                    st.success("Updated RFP work type tags.")
+                    work_tags = tags_input
+                except Exception as _e:
+                    st.error(f"Failed to update tags: {_e}")
+            df_suggest_rfp = _get_suggested_subs(conn, req_naics, work_tags)
+            if (not req_naics) and (not (work_tags or '').strip()):
+                st.caption("Add NAICS or work type tags for this RFP to see suggested subcontractors.")
+            elif df_suggest_rfp is None or df_suggest_rfp.empty:
+                st.caption("No matching vendors yet. Seed vendors with matching capabilities in Subcontractor Finder.")
+            else:
+                import pandas as _pd
+                df_view_r = df_suggest_rfp.copy()
+                try:
+                    df_view_r["location"] = (
+                        df_view_r["city"].fillna("").str.strip()
+                        + _pd.Series([", "] * len(df_view_r))
+                        + df_view_r["state"].fillna("").str.strip()
+                    )
+                except Exception:
+                    df_view_r["location"] = df_view_r.get("city", "") + ", " + df_view_r.get("state", "")
+                df_view_r = df_view_r.rename(
+                    columns={"vendor_score": "score", "naics_match": "NAICS match", "tag_match_count": "tag matches"}
+                )
+                cols_r = [c for c in ["name", "location", "score", "NAICS match", "tag matches", "capability_tags"] if c in df_view_r.columns]
+                if cols_r:
+                    st.dataframe(df_view_r[cols_r], use_container_width=True)
+    # If suggested subs panel fails, errors will surface in the Streamlit logs.
     # Danger zone: delete current RFP
     with st.expander("Danger zone: Delete this RFP", expanded=False):
         st.write("This will permanently remove this RFP and its related analyzer records.")
