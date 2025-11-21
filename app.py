@@ -10147,31 +10147,34 @@ def run_sam_watch(conn) -> None:
                                 except Exception as _e:
                                     st.warning(f"Attachment download/linking error: {_e}")
 
-                                # Hand off into RFP Analyzer with this notice as context
+                                # Hand off into the main RFP Analyzer page with this notice as context
                                 st.session_state["current_rfp_id"] = int(rfp_id)
                                 st.session_state["rfp_selected_notice"] = notice
                                 st.session_state["nav_target"] = "RFP Analyzer"
+                                st.session_state["_force_rfp_analyzer"] = True
                                 if linked:
                                     st.success(f"RFP #{rfp_id} ready. Linked {linked} attachment(s) from SAM.gov.")
                                 else:
                                     st.info(f"RFP #{rfp_id} ready. No attachments were linked from SAM.gov.")
                                 try:
-                                    router("RFP Analyzer", conn); st.stop()
+                                    st.rerun()
                                 except Exception:
                                     try:
-                                        st.rerun()
+                                        st.info("Sent to RFP Analyzer. Use the sidebar to open that page if it did not switch automatically.")
                                     except Exception:
-                                        st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                                        pass
                             else:
                                 # Could not create RFP; still try to route to Analyzer so user can work manually
                                 st.info("Opening RFP Analyzer…")
+                                st.session_state["nav_target"] = "RFP Analyzer"
+                                st.session_state["_force_rfp_analyzer"] = True
                                 try:
-                                    router("RFP Analyzer", conn); st.stop()
+                                    st.rerun()
                                 except Exception:
                                     try:
-                                        st.rerun()
+                                        st.info("Switch to RFP Analyzer page using the sidebar if it did not change automatically.")
                                     except Exception:
-                                        st.info("Switch to RFP Analyzer tab to continue.")
+                                        pass
 
             # Selected details panel
 
@@ -16239,13 +16242,15 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     _linked_rfp_id = None
                 if _linked_rfp_id:
                     if st.button("Open in RFP Analyzer", key=f"deal_open_rfp_{int(sel_id)}"):
+                        # Hand off to the main RFP Analyzer page, not an inline view
                         st.session_state["current_rfp_id"] = int(_linked_rfp_id)
                         st.session_state["nav_target"] = "RFP Analyzer"
+                        st.session_state["_force_rfp_analyzer"] = True
                         try:
-                            router("RFP Analyzer", conn); st.stop()
+                            st.rerun()
                         except Exception:
                             try:
-                                st.rerun()
+                                st.info("Sent to RFP Analyzer. Use the sidebar to open that page if it did not switch automatically.")
                             except Exception:
                                 pass
                 # Suggested subs / matching vendors for this deal
