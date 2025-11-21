@@ -895,6 +895,26 @@ def ensure_unified_schemas(conn):
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_place_id ON vendors(place_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_norm_phone ON vendors(normalized_name, phone);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_vendors_naics_state ON vendors(naics, state);")
+            # Ensure capability fields exist on vendors table
+            try:
+                for _col, _ctype in [
+                    ("primary_naics", "TEXT"),
+                    ("other_naics", "TEXT"),
+                    ("coverage_locations", "TEXT"),
+                    ("capability_tags", "TEXT"),
+                    ("small_business_flag", "INTEGER"),
+                    ("set_aside_flags", "TEXT"),
+                ]:
+                    try:
+                        cur.execute("SELECT " + _col + " FROM vendors LIMIT 1;")
+                    except Exception:
+                        try:
+                            cur.execute("ALTER TABLE vendors ADD COLUMN " + _col + " " + _ctype + ";")
+                        except Exception as e2:
+                            _debug_log(conn, "vendors_" + _col, e2)
+            except Exception as e:
+                _debug_log(conn, "vendors_capability_cols", e)
+
         except Exception as e: _debug_log(conn, "vendors", e)
         # subfinder cache
         try:
@@ -12307,11 +12327,14 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
         with c1:
             f_naics = st.text_input("NAICS", value=default_naics, key="filter_naics")
         with c2:
-            f_state = st.text_input("State (e.g., TX)", value=default_state, key="filter_state")
+            f_state = st.text_input("State (for example TX)", value=default_state, key="filter_state")
         with c3:
             f_city = st.text_input("City contains", key="filter_city")
         with c4:
-            f_kw = st.text_input("Keyword in name/notes", key="filter_kw")
+            f_kw = st.text_input("Keyword in name or notes", key="filter_kw")
+        c5, _ = st.columns([2,2])
+        with c5:
+            f_capability = st.text_input("Capability keyword (tags)", key="filter_capability")
         st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
     with st.expander("Import Vendors (CSV)", expanded=False):
@@ -12362,10 +12385,16 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             v_city = st.text_input("City", key="add_city")
             v_state = st.text_input("State", key="add_state")
             v_naics = st.text_input("NAICS", key="add_naics")
+            v_primary_naics = st.text_input("Primary NAICS", key="add_primary_naics", value=v_naics)
         with c3:
+            v_other_naics = st.text_input("Other NAICS codes", key="add_other_naics")
+            v_coverage_locations = st.text_input("Coverage locations (states or regions)", key="add_coverage_locations")
             v_cage = st.text_input("CAGE", key="add_cage")
             v_uei = st.text_input("UEI", key="add_uei")
-            v_site = st.text_input("Website", key="add_site")
+        v_site = st.text_input("Website", key="add_site")
+        v_capability_tags = st.text_input("Capability tags (comma separated, for example janitorial, HVAC, grounds)", key="add_capability_tags")
+        v_set_aside_flags = st.text_input("Set aside flags (for example WOSB, SDVOSB)", key="add_set_aside_flags")
+        v_small_business_flag = st.checkbox("Small business", key="add_small_business_flag", value=True)
         v_notes = st.text_area("Notes", height=80, key="add_notes")
         if st.button("Save Vendor"):
             if not v_name.strip():
@@ -12375,18 +12404,40 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                     with closing(conn.cursor()) as cur:
                         cur.execute(
                             """
-                            INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO vendors(
+                                name, cage, uei, naics, city, state, phone, email, website, notes,
+                                primary_naics, other_naics, coverage_locations, capability_tags,
+                                small_business_flag, set_aside_flags
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ;
                             """,
-                            (v_name.strip(), v_cage.strip(), v_uei.strip(), v_naics.strip(), v_city.strip(), v_state.strip(), v_phone.strip(), v_email.strip(), v_site.strip(), v_notes.strip()),
+                            (
+                                v_name.strip(),
+                                v_cage.strip(),
+                                v_uei.strip(),
+                                v_naics.strip(),
+                                v_city.strip(),
+                                v_state.strip(),
+                                v_phone.strip(),
+                                v_email.strip(),
+                                v_site.strip(),
+                                v_notes.strip(),
+                                v_primary_naics.strip(),
+                                v_other_naics.strip(),
+                                v_coverage_locations.strip(),
+                                v_capability_tags.strip(),
+                                1 if v_small_business_flag else 0,
+                                v_set_aside_flags.strip(),
+                            ),
                         )
                         conn.commit()
                     st.success("Vendor saved")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
-    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors_t WHERE 1=1"
+    # Vendor listing with capability fields
+    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes, primary_naics, other_naics, coverage_locations, capability_tags, small_business_flag, set_aside_flags FROM vendors WHERE 1=1"
     params: List[Any] = []
     if f_naics:
         q += " AND (naics LIKE ? )"
@@ -12413,9 +12464,41 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     else:
         selected_ids = []
         for _, row in df_v.iterrows():
-            chk = st.checkbox(f"Select — {row['name']}  ({row['email'] or 'no email'})", key=f"vend_{int(row['id'])}")
+            label = f"{row['name']}  ({row['email'] or 'no email'})"
+            chk = st.checkbox(f"Select — {label}", key=f"vend_{int(row['id'])}")
+
+            # Show capability summary for each vendor
+            primary_naics = row.get("primary_naics") if "primary_naics" in row else None
+            other_naics = row.get("other_naics") if "other_naics" in row else None
+            coverage_locations = row.get("coverage_locations") if "coverage_locations" in row else None
+            capability_tags = row.get("capability_tags") if "capability_tags" in row else None
+            small_business_flag = row.get("small_business_flag") if "small_business_flag" in row else None
+            set_aside_flags = row.get("set_aside_flags") if "set_aside_flags" in row else None
+
+            meta_parts: List[str] = []
+            if row.get("naics"):
+                meta_parts.append(f"NAICS {row.get('naics')}")
+            if primary_naics:
+                meta_parts.append(f"Primary {primary_naics}")
+            if other_naics:
+                meta_parts.append(f"Other {other_naics}")
+            if coverage_locations:
+                meta_parts.append(f"Coverage {coverage_locations}")
+            if small_business_flag not in (None, ""):
+                try:
+                    sb_val = int(small_business_flag or 0)
+                except Exception:
+                    sb_val = 0
+                meta_parts.append("Small business" if sb_val else "Not small business")
+            if set_aside_flags:
+                meta_parts.append(f"Set asides {set_aside_flags}")
+            if meta_parts:
+                st.caption(" • " + "  |  ".join(meta_parts))
+            if capability_tags:
+                st.caption(f" • Capabilities {capability_tags}")
+
             if chk:
-                selected_ids.append(int(row['id']))
+                selected_ids.append(int(row["id"]))
         c1, c2 = st.columns([2,2])
         with c1:
             if st.button("Send to Outreach ▶") and selected_ids:
