@@ -9878,7 +9878,11 @@ def run_sam_watch(conn) -> None:
                             # 2: sync metadata into sam_attachments
                             if attachments:
                                 try:
-                                    sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments)
+                                    _sync_fn = globals().get("sync_sam_attachments_metadata")
+                                    if _sync_fn is not None:
+                                        _sync_fn(conn, tenant_id, notice_id, attachments)
+                                    else:
+                                        st.warning("Attachment metadata sync helper not available in this build.")
                                 except Exception as _e:
                                     st.warning(f"Attachment metadata sync failed: {_e}")
                             # 3: create or get the RFP record
