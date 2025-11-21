@@ -25546,4 +25546,23 @@ def download_sam_attachment(conn, att_id, base_dir="data/sam_attachments"):
     conn.commit()
     return local_path
 
+def link_attachment_to_rfp(conn, tenant_id, rfp_id, att_row):
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO rfp_documents (
+            tenant_id, rfp_id, notice_id, file_name, local_path, file_type, source, status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'sam_watch', 'pending')
+        """,
+        (
+            tenant_id,
+            rfp_id,
+            att_row['notice_id'],
+            att_row['file_name'],
+            att_row['local_path'],
+            att_row['file_type'],
+        ),
+    )
+    conn.commit()
+
 
