@@ -12393,7 +12393,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             v_uei = st.text_input("UEI", key="add_uei")
         v_site = st.text_input("Website", key="add_site")
         v_capability_tags = st.text_input("Capability tags (comma separated, for example janitorial, HVAC, grounds)", key="add_capability_tags")
-        v_set_aside_flags = st.text_input("Set aside flags (for example WOSB, SDVOSB)", key="add_set_aside_flags")
+        v_set_aside_flags = st.text_input("Set-aside flags (for example WOSB, SDVOSB)", key="add_set_aside_flags")
         v_small_business_flag = st.checkbox("Small business", key="add_small_business_flag", value=True)
         v_notes = st.text_area("Notes", height=80, key="add_notes")
         if st.button("Save Vendor"):
@@ -12440,8 +12440,8 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes, primary_naics, other_naics, coverage_locations, capability_tags, small_business_flag, set_aside_flags FROM vendors WHERE 1=1"
     params: List[Any] = []
     if f_naics:
-        q += " AND (naics LIKE ? )"
-        params.append(f"%{f_naics}%")
+        q += " AND (naics LIKE ? OR primary_naics LIKE ? OR other_naics LIKE ?)"
+        params.extend([f"%{f_naics}%", f"%{f_naics}%", f"%{f_naics}%"])
     if f_state:
         q += " AND (state LIKE ?)"
         params.append(f"%{f_state}%")
@@ -12451,6 +12451,9 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     if f_kw:
         q += " AND (name LIKE ? OR notes LIKE ?)"
         params.extend([f"%{f_kw}%", f"%{f_kw}%"])
+    if "f_capability" in locals() and f_capability:
+        q += " AND (capability_tags LIKE ? OR primary_naics LIKE ? OR other_naics LIKE ?)"
+        params.extend([f"%{f_capability}%", f"%{f_capability}%", f"%{f_capability}%"])
 
     try:
         df_v = pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
@@ -12491,7 +12494,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                     sb_val = 0
                 meta_parts.append("Small business" if sb_val else "Not small business")
             if set_aside_flags:
-                meta_parts.append(f"Set asides {set_aside_flags}")
+                meta_parts.append(f"Set-asides {set_aside_flags}")
             if meta_parts:
                 st.caption(" • " + "  |  ".join(meta_parts))
             if capability_tags:
