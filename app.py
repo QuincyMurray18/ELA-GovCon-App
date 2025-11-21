@@ -21667,7 +21667,7 @@ def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
             """
         )
 
-conn.commit()
+        conn.commit()
 
 
 def x7_render_template_text(
