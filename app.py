@@ -1835,6 +1835,253 @@ def _download_with_retry(url: str, retries: int = 3, timeout: int = 30) -> tuple
         time.sleep(2 * (i + 1))
     return None, last_err
 
+
+def _extract_notice_id_from_obj(notice: object) -> str:
+    """Best-effort extraction of a SAM notice identifier from a dict or string."""
+    try:
+        if isinstance(notice, dict):
+            for key in (
+                "Notice ID", "NoticeID", "notice_id", "id", "NoticeId",
+                "Sol Number", "Solicitation", "NoticeIdentifier"
+            ):
+                v = notice.get(key)
+                if v:
+                    s = str(v).strip()
+                    if s:
+                        return s
+        elif isinstance(notice, str):
+            s = notice.strip()
+            if s:
+                return s
+    except Exception:
+        pass
+    return ""
+
+def _sam_upsert_attachment_record(conn, notice_id: str, file_name: str, url: str | None = None,
+                                  mime_type: str | None = None, size_bytes: int | None = None,
+                                  status: str | None = None, last_error: str | None = None) -> int:
+    """
+    Ensure there is a sam_attachments row for (notice_id, file_name, url) and
+    update basic metadata / status. Returns the attachment id (or 0 on failure).
+    """
+    if not notice_id or not file_name:
+        return 0
+    try:
+        with conn:
+            cur = conn.execute(
+                """
+                SELECT id FROM sam_attachments
+                 WHERE notice_id = ? AND file_name = ? AND IFNULL(url,'') = IFNULL(?, '');
+                """,
+                (notice_id, file_name, url or "")
+            )
+            row = cur.fetchone()
+            if row:
+                att_id = int(row[0])
+                conn.execute(
+                    """
+                    UPDATE sam_attachments
+                       SET mime_type   = COALESCE(?, mime_type),
+                           size_bytes  = COALESCE(?, size_bytes),
+                           status      = COALESCE(?, status),
+                           last_error  = COALESCE(?, last_error),
+                           updated_at  = datetime('now')
+                     WHERE id = ?;
+                    """,
+                    (mime_type, size_bytes, status, last_error, att_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO sam_attachments
+                        (notice_id, file_name, url, mime_type, size_bytes, status, last_error, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'));
+                    """,
+                    (notice_id, file_name, url, mime_type, size_bytes, status or "pending", last_error or ""),
+                )
+                att_id = int(conn.execute("SELECT last_insert_rowid();").fetchone()[0])
+        return att_id
+    except Exception:
+        return 0
+
+def _rfp_documents_link_record(
+    conn,
+    rfp_id: int,
+    sam_attachment_id: int,
+    notice_id: str | None = None,
+    file_name: str | None = None,
+    url: str | None = None,
+    status: str | None = None,
+    last_error: str | None = None,
+    stored_path: str | None = None,
+) -> int:
+    """
+    Ensure there is an rfp_documents row tying an RFP record to a SAM attachment.
+    Returns the rfp_documents.id (or 0 on failure).
+    """
+    if not rfp_id or not sam_attachment_id:
+        return 0
+    try:
+        with conn:
+            cur = conn.execute(
+                "SELECT id FROM rfp_documents WHERE rfp_id = ? AND sam_attachment_id = ?;",
+                (int(rfp_id), int(sam_attachment_id)),
+            )
+            row = cur.fetchone()
+            if row:
+                doc_id = int(row[0])
+                conn.execute(
+                    """
+                    UPDATE rfp_documents
+                       SET notice_id   = COALESCE(?, notice_id),
+                           file_name   = COALESCE(?, file_name),
+                           url         = COALESCE(?, url),
+                           status      = COALESCE(?, status),
+                           last_error  = COALESCE(?, last_error),
+                           stored_path = COALESCE(?, stored_path),
+                           updated_at  = datetime('now')
+                     WHERE id = ?;
+                    """,
+                    (notice_id, file_name, url, status, last_error, stored_path, doc_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO rfp_documents
+                        (rfp_id, sam_attachment_id, notice_id, file_name, url, status, last_error, stored_path, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'));
+                    """,
+                    (int(rfp_id), int(sam_attachment_id), notice_id, file_name, url, status or "pending", last_error or "", stored_path),
+                )
+                doc_id = int(conn.execute("SELECT last_insert_rowid();").fetchone()[0])
+        return doc_id
+    except Exception:
+        return 0
+
+def rfp_documents_fetch_from_sam(conn, rfp_id: int, notice: object) -> int:
+    """
+    High-level helper for the new AI attachment pipeline:
+
+      - Enumerates attachments for the given notice using sam_list_attachments (when available)
+      - Upserts rows into sam_attachments (metadata + pending status)
+      - Upserts rows into rfp_documents to tie attachments to an RFP record
+      - Delegates actual download + status updates to _phase1_fetch_sam_attachments
+      - Reconciles rfp_documents / sam_attachments status and stored_path from rfp_files
+
+    Returns:
+        Count of attachments linked to this RFP (best-effort).
+    """
+    notice_id = _extract_notice_id_from_obj(notice)
+    if not notice_id:
+        return 0
+
+    # Step 1: enumerate metadata (best-effort)
+    items = []
+    if "sam_list_attachments" in globals():
+        try:
+            items = list(sam_list_attachments(notice) or [])
+        except Exception:
+            items = []
+
+    linked = []
+    for it in items:
+        try:
+            name = (it.get("name") or it.get("filename") or it.get("File Name") or "attachment")
+            name = str(name).strip() or "attachment"
+            url = (it.get("url") or it.get("URL") or it.get("link") or "") or ""
+            url = str(url).strip()
+            mime_type = it.get("mime") or it.get("MimeType") or it.get("content_type")
+            size_val = it.get("size") or it.get("size_bytes")
+            try:
+                size_int = int(size_val) if size_val is not None else None
+            except Exception:
+                size_int = None
+
+            att_id = _sam_upsert_attachment_record(
+                conn,
+                notice_id=notice_id,
+                file_name=name,
+                url=url or None,
+                mime_type=str(mime_type or "") or None,
+                size_bytes=size_int,
+                status="pending",
+                last_error=None,
+            )
+            if att_id:
+                _rfp_documents_link_record(
+                    conn,
+                    rfp_id=int(rfp_id),
+                    sam_attachment_id=att_id,
+                    notice_id=notice_id,
+                    file_name=name,
+                    url=url or None,
+                    status="pending",
+                )
+                linked.append((att_id, name, url))
+        except Exception:
+            continue
+
+    # Step 2: run the existing Phase 1 pipeline to actually download into rfp_files
+    try:
+        _phase1_fetch_sam_attachments(conn, int(rfp_id), notice)
+    except Exception:
+        # Even if download fails, we still keep metadata rows
+        pass
+
+    # Step 3: reconcile status + stored_path from rfp_files back into sam_attachments / rfp_documents
+    try:
+        base_dir = _ensure_phase3_dirs()
+        rfp_dir = os.path.join(base_dir, f"rfp_{int(rfp_id)}")
+    except Exception:
+        rfp_dir = "./rfp_store"
+
+    for att_id, name, url in linked:
+        try:
+            cur = conn.execute(
+                """
+                SELECT id, path, status, last_error
+                  FROM rfp_files
+                 WHERE rfp_id = ?
+                   AND (filename = ? OR (src_url IS NOT NULL AND src_url = ?))
+                 ORDER BY id DESC
+                 LIMIT 1;
+                """,
+                (int(rfp_id), name, url or None),
+            )
+            row = cur.fetchone()
+            if not row:
+                continue
+            file_id, path, status, last_error = row
+            stored_path = path or os.path.join(rfp_dir, "attachments", name)
+
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE sam_attachments
+                       SET status       = ?,
+                           last_error   = COALESCE(?, last_error),
+                           downloaded_at = CASE WHEN ? = 'downloaded' THEN datetime('now') ELSE downloaded_at END,
+                           updated_at   = datetime('now')
+                     WHERE id = ?;
+                    """,
+                    (status or "downloaded", last_error or "", status or "", int(att_id)),
+                )
+                conn.execute(
+                    """
+                    UPDATE rfp_documents
+                       SET status      = ?,
+                           last_error  = COALESCE(?, last_error),
+                           stored_path = COALESCE(?, stored_path),
+                           updated_at  = datetime('now')
+                     WHERE rfp_id = ? AND sam_attachment_id = ?;
+                    """,
+                    (status or "downloaded", last_error or "", stored_path, int(rfp_id), int(att_id)),
+                )
+        except Exception:
+            continue
+
+    return len(linked)
+
 def _phase1_fetch_sam_attachments(conn: "sqlite3.Connection", rfp_id: int, notice: str | dict) -> int:
     """
     Preferred path:
@@ -6733,6 +6980,41 @@ def get_db() -> sqlite3.Connection:
             __p_ensure_column(conn, "sam_attachments", "downloaded_at", "TEXT")
             __p_ensure_column(conn, "sam_attachments", "created_at", "TEXT DEFAULT (datetime('now'))")
             __p_ensure_column(conn, "sam_attachments", "updated_at", "TEXT")
+        except Exception:
+            pass
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rfp_documents(
+                id INTEGER PRIMARY KEY,
+                rfp_id INTEGER,
+                sam_attachment_id INTEGER,
+                notice_id TEXT,
+                file_name TEXT,
+                url TEXT,
+                mime_type TEXT,
+                size_bytes INTEGER,
+                status TEXT,
+                last_error TEXT,
+                stored_path TEXT,
+                downloaded_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfp_documents_rfp ON rfp_documents(rfp_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rfp_documents_sam ON rfp_documents(sam_attachment_id);")
+        try:
+            __p_ensure_column(conn, "rfp_documents", "notice_id", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "file_name", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "url", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "mime_type", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "size_bytes", "INTEGER")
+            __p_ensure_column(conn, "rfp_documents", "status", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "last_error", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "stored_path", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "downloaded_at", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "created_at", "TEXT DEFAULT (datetime('now'))")
+            __p_ensure_column(conn, "rfp_documents", "updated_at", "TEXT")
         except Exception:
             pass
 
