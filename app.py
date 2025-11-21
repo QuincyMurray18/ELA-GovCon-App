@@ -25495,3 +25495,28 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
+
+def sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments):
+    """Insert or update attachment rows for a notice.
+    attachments is a list of dicts with keys file_name, file_url, file_type, last_updated.
+    """
+    cur = conn.cursor()
+    for att in attachments:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO sam_attachments
+            (tenant_id, notice_id, file_name, file_url, file_type, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tenant_id,
+                notice_id,
+                att.get('file_name'),
+                att.get('file_url'),
+                att.get('file_type'),
+                att.get('last_updated'),
+            ),
+        )
+    conn.commit()
+
+
