@@ -6876,6 +6876,42 @@ def get_db() -> sqlite3.Connection:
             );
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rfq_attach_pack ON rfq_attach(pack_id);");
+        # Fast RFQ one-page quote tables
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fast_rfq_quotes(
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                customer TEXT,
+                customer_ref TEXT,
+                solnum TEXT,
+                notice_id INTEGER REFERENCES notices(id) ON DELETE SET NULL,
+                deal_id INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+                rfp_id INTEGER REFERENCES rfps(id) ON DELETE SET NULL,
+                contact_name TEXT,
+                contact_email TEXT,
+                contact_phone TEXT,
+                due_date TEXT,
+                valid_through TEXT,
+                terms TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fast_rfq_lines(
+                id INTEGER PRIMARY KEY,
+                quote_id INTEGER NOT NULL REFERENCES fast_rfq_quotes(id) ON DELETE CASCADE,
+                clin_label TEXT,
+                description TEXT,
+                qty REAL,
+                unit TEXT,
+                unit_price REAL,
+                extended_price REAL
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_fast_rfq_lines_quote ON fast_rfq_lines(quote_id);");
+
 
         # Phase M (Tenancy 1)
 
@@ -7049,7 +7085,7 @@ def get_db() -> sqlite3.Connection:
 
             "contacts","vendors","files",
 
-            "rfq_packs","rfq_lines","rfq_vendors","rfq_attach",
+            "rfq_packs","rfq_lines","rfq_vendors","rfq_attach","fast_rfq_quotes","fast_rfq_lines",
 
             "saved_searches","alerts","sam_versions","sam_extracts","notices",
 
@@ -14953,6 +14989,485 @@ def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
         st.error(f"ZIP failed: {e}")
         return None
 
+
+def run_fast_rfq(conn: "sqlite3.Connection") -> None:
+    """Fast RFQ mode: lean CLINs and one-page quote export for small opportunities."""
+    st.header("Fast RFQ")
+    st.caption("Use this page when you just need a lean CLIN table and a one-page quote DOCX for a small RFQ.")
+
+    # Create / open layout
+    left, right = st.columns([2, 2])
+
+    # --- Create new fast RFQ quote ---
+    with left:
+        st.subheader("Create")
+        try:
+            df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+        except Exception:
+            df_rf = pd.DataFrame(columns=["id", "title"])
+        try:
+            df_deals = pd.read_sql_query("SELECT id, nickname, stage FROM deals_t ORDER BY id DESC;", conn, params=())
+        except Exception:
+            df_deals = pd.DataFrame(columns=["id", "nickname", "stage"])
+
+        rfp_opts = [None] + df_rf["id"].tolist() if not df_rf.empty else [None]
+        deal_opts = [None] + df_deals["id"].tolist() if not df_deals.empty else [None]
+
+        def _rfp_label(rid: int | None) -> str:
+            if not rid:
+                return "None"
+            try:
+                row = df_rf.loc[df_rf["id"] == rid].iloc[0]
+                return f"#{int(row['id'])} — {row['title'] or 'Untitled'}"
+            except Exception:
+                return f"#{rid}"
+
+        def _deal_label(did: int | None) -> str:
+            if not did:
+                return "None"
+            try:
+                row = df_deals.loc[df_deals["id"] == did].iloc[0]
+                nick = row.get("nickname") or f"Deal {int(row['id'])}"
+                stage = row.get("stage") or ""
+                if stage:
+                    return f"#{int(row['id'])} — {nick} ({stage})"
+                return f"#{int(row['id'])} — {nick}"
+            except Exception:
+                return f"#{did}"
+
+        rfp_id = st.selectbox(
+            "RFP context (optional)",
+            options=rfp_opts,
+            format_func=_rfp_label,
+            key="fast_rfq_rfp_sel",
+        )
+        deal_id = st.selectbox(
+            "Deal context (optional)",
+            options=deal_opts,
+            format_func=_deal_label,
+            key="fast_rfq_deal_sel",
+        )
+
+        title = st.text_input("Quote title", key="fast_rfq_title")
+        customer = st.text_input("Customer / Agency", key="fast_rfq_customer")
+        contact_name = st.text_input("Customer POC name", key="fast_rfq_contact_name")
+        contact_email = st.text_input("Customer POC email", key="fast_rfq_contact_email")
+        contact_phone = st.text_input("Customer POC phone", key="fast_rfq_contact_phone")
+        due_date = st.date_input("Quote due date", key="fast_rfq_due_date")
+        valid_through = st.text_input("Quote valid through (e.g., 30 days)", key="fast_rfq_valid")
+        terms = st.text_input("Key terms (optional)", key="fast_rfq_terms")
+        notes = st.text_area("Notes to include in quote body (optional)", key="fast_rfq_notes", height=100)
+
+        if st.button("Create Fast RFQ quote", key="fast_rfq_create"):
+            if not title:
+                st.error("Title is required.")
+            else:
+                from contextlib import closing as _closing
+                with _closing(conn.cursor()) as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO fast_rfq_quotes(
+                            title, customer, customer_ref, solnum, notice_id,
+                            deal_id, rfp_id,
+                            contact_name, contact_email, contact_phone,
+                            due_date, valid_through, terms, notes,
+                            created_at, updated_at
+                        )
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+                        """,
+                        (
+                            title,
+                            customer or None,
+                            None,
+                            None,
+                            None,
+                            int(deal_id) if deal_id else None,
+                            int(rfp_id) if rfp_id else None,
+                            contact_name or None,
+                            contact_email or None,
+                            contact_phone or None,
+                            str(due_date) if due_date else None,
+                            valid_through or None,
+                            terms or None,
+                            notes or None,
+                        ),
+                    )
+                conn.commit()
+                st.success("Fast RFQ quote created.")
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
+
+    # --- Open / edit existing fast RFQ quote ---
+    with right:
+        st.subheader("Open")
+        try:
+            df_q = pd.read_sql_query(
+                "SELECT id, title, customer, due_date, valid_through, created_at FROM fast_rfq_quotes_t ORDER BY id DESC;",
+                conn,
+                params=(),
+            )
+        except Exception:
+            df_q = pd.DataFrame(columns=["id", "title", "customer", "due_date", "valid_through", "created_at"])
+
+        if df_q.empty:
+            st.info("No Fast RFQ quotes yet. Create one using the form on the left.")
+            return
+
+        def _quote_label(qid: int) -> str:
+            try:
+                row = df_q.loc[df_q["id"] == qid].iloc[0]
+                cust = row.get("customer") or ""
+                title = row.get("title") or "Untitled"
+                prefix = f"#{int(row['id'])}"
+                if cust:
+                    return f"{prefix} — {cust} — {title}"
+                return f"{prefix} — {title}"
+            except Exception:
+                return f"Quote #{qid}"
+
+        quote_id = st.selectbox(
+            "Fast RFQ quote",
+            options=df_q["id"].tolist(),
+            format_func=_quote_label,
+            key="fast_rfq_open_sel",
+        )
+
+    if not quote_id:
+        return
+
+    # Reload full row for editing
+    try:
+        df_q_full = pd.read_sql_query(
+            "SELECT * FROM fast_rfq_quotes_t WHERE id=?;",
+            conn,
+            params=(int(quote_id),),
+        )
+    except Exception:
+        df_q_full = pd.DataFrame()
+
+    if df_q_full.empty:
+        st.error("Selected Fast RFQ quote not found.")
+        return
+
+    qrow = df_q_full.iloc[0]
+
+    st.subheader("Quote details")
+    c1, c2 = st.columns([2, 2])
+    with c1:
+        title_e = st.text_input("Quote title", value=qrow.get("title") or "", key=f"fast_rfq_title_e_{int(quote_id)}")
+        customer_e = st.text_input("Customer / Agency", value=qrow.get("customer") or "", key=f"fast_rfq_customer_e_{int(quote_id)}")
+        valid_through_e = st.text_input(
+            "Quote valid through",
+            value=qrow.get("valid_through") or "",
+            key=f"fast_rfq_valid_e_{int(quote_id)}",
+        )
+    with c2:
+        contact_name_e = st.text_input(
+            "Customer POC name",
+            value=qrow.get("contact_name") or "",
+            key=f"fast_rfq_contact_name_e_{int(quote_id)}",
+        )
+        contact_email_e = st.text_input(
+            "Customer POC email",
+            value=qrow.get("contact_email") or "",
+            key=f"fast_rfq_contact_email_e_{int(quote_id)}",
+        )
+        contact_phone_e = st.text_input(
+            "Customer POC phone",
+            value=qrow.get("contact_phone") or "",
+            key=f"fast_rfq_contact_phone_e_{int(quote_id)}",
+        )
+
+    notes_e = st.text_area(
+        "Notes to include in quote body",
+        value=qrow.get("notes") or "",
+        key=f"fast_rfq_notes_e_{int(quote_id)}",
+        height=80,
+    )
+    terms_e = st.text_input(
+        "Key terms",
+        value=qrow.get("terms") or "",
+        key=f"fast_rfq_terms_e_{int(quote_id)}",
+    )
+
+    if st.button("Save quote details", key=f"fast_rfq_save_hdr_{int(quote_id)}"):
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                UPDATE fast_rfq_quotes
+                SET title=?, customer=?, contact_name=?, contact_email=?, contact_phone=?,
+                    valid_through=?, terms=?, notes=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=?;
+                """,
+                (
+                    title_e or None,
+                    customer_e or None,
+                    contact_name_e or None,
+                    contact_email_e or None,
+                    contact_phone_e or None,
+                    valid_through_e or None,
+                    terms_e or None,
+                    notes_e or None,
+                    int(quote_id),
+                ),
+            )
+        conn.commit()
+        st.success("Quote details saved.")
+
+    
+    st.subheader("CLINs / line items (lean table)")
+    try:
+        df_lines = pd.read_sql_query(
+            "SELECT id, clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
+            conn,
+            params=(int(quote_id),),
+        )
+    except Exception:
+        df_lines = pd.DataFrame(columns=["id", "clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
+
+    if df_lines.empty:
+        base = pd.DataFrame(
+            [
+                {
+                    "clin_label": "",
+                    "description": "",
+                    "qty": 1.0,
+                    "unit": "EA",
+                    "unit_price": 0.0,
+                    "extended_price": 0.0,
+                }
+            ]
+        )
+    else:
+        base = df_lines[["clin_label", "description", "qty", "unit", "unit_price", "extended_price"]].copy()
+
+    edited = st.data_editor(
+        base,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key=f"fast_rfq_lines_editor_{int(quote_id)}",
+    )
+
+    if st.button("Save CLIN table", key=f"fast_rfq_save_clins_{int(quote_id)}"):
+        df_e = pd.DataFrame(edited).copy()
+
+        def _to_float(val):
+            try:
+                if val in (None, ""):
+                    return None
+                return float(val)
+            except Exception:
+                return None
+
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute("DELETE FROM fast_rfq_lines WHERE quote_id=?;", (int(quote_id),))
+            for _, row in df_e.iterrows():
+                if not (str(row.get("clin_label") or "").strip() or str(row.get("description") or "").strip()):
+                    continue
+                qty_v = _to_float(row.get("qty"))
+                up_v = _to_float(row.get("unit_price"))
+                ext_v = _to_float(row.get("extended_price"))
+                if ext_v is None and qty_v is not None and up_v is not None:
+                    ext_v = qty_v * up_v
+                cur.execute(
+                    """
+                    INSERT INTO fast_rfq_lines(
+                        quote_id, clin_label, description, qty, unit, unit_price, extended_price
+                    )
+                    VALUES(?,?,?,?,?,?,?);
+                    """,
+                    (
+                        int(quote_id),
+                        (row.get("clin_label") or "").strip() or None,
+                        (row.get("description") or "").strip() or None,
+                        qty_v,
+                        (row.get("unit") or "").strip() or None,
+                        up_v,
+                        ext_v,
+                    ),
+                )
+        conn.commit()
+        st.success("CLIN table saved.")
+
+    try:
+        df_lines_saved = pd.read_sql_query(
+            "SELECT extended_price FROM fast_rfq_lines WHERE quote_id=?;",
+            conn,
+            params=(int(quote_id),),
+        )
+    except Exception:
+        df_lines_saved = pd.DataFrame(columns=["extended_price"])
+
+    total_value = float(df_lines_saved["extended_price"].fillna(0).sum()) if not df_lines_saved.empty else 0.0
+    st.caption(f"Estimated total value: ${total_value:,.2f}")
+    st.subheader("Export one-page quote")
+    if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
+        # Ensure jobs schema exists
+        try:
+            ensure_jobs_schema(conn)
+        except Exception:
+            pass
+
+        # Build CLIN rows in the format expected by _export_docx
+        try:
+            df_clins = pd.read_sql_query(
+                "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
+                conn,
+                params=(int(quote_id),),
+            )
+        except Exception:
+            df_clins = pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
+
+        clins_payload = []
+        if not df_clins.empty:
+            for _, row in df_clins.iterrows():
+                clins_payload.append(
+                    {
+                        "clin": row.get("clin_label"),
+                        "description": row.get("description"),
+                        "qty": row.get("qty"),
+                        "unit": row.get("unit"),
+                        "unit_price": row.get("unit_price"),
+                        "extended_price": row.get("extended_price"),
+                    }
+                )
+
+        # Track this export as a job row (even though work runs inline for now)
+        try:
+            try:
+                _user_name = get_current_user_name()
+            except Exception:
+                _user_name = ""
+            payload = {
+                "scope": "fast_rfq_export_docx",
+                "quote_id": int(quote_id),
+                "has_clins": bool(clins_payload),
+            }
+            job_id = jobs_enqueue(
+                conn,
+                job_type="fast_rfq_export_docx",
+                payload=payload,
+                created_by=_user_name or None,
+            )
+        except Exception:
+            job_id = None
+
+        out_name = f"Fast_RFQ_{int(quote_id)}.docx"
+        out_path = os.path.join(DATA_DIR, out_name)
+
+        # Compose simple one-page style body
+        body_lines = []
+        cust_label = customer_e or qrow.get("customer") or ""
+        if cust_label:
+            body_lines.append(cust_label)
+        poc_line = ""
+        if contact_name_e:
+            poc_line += contact_name_e
+        if contact_email_e:
+            poc_line += f" <{contact_email_e}>"
+        if contact_phone_e:
+            if poc_line:
+                poc_line += " | "
+            poc_line += contact_phone_e
+        if poc_line:
+            body_lines.append(poc_line)
+
+        body_lines.append("")
+        subj = title_e or qrow.get("title") or "Quote"
+        body_lines.append(f"Subject: {subj}")
+        body_lines.append("")
+        body_lines.append("Thank you for the opportunity to provide pricing. Below is our proposed pricing for the requested work.")
+        if notes_e:
+            body_lines.append("")
+            body_lines.append(notes_e)
+
+        if terms_e:
+            body_lines.append("")
+            body_lines.append(f"Terms: {terms_e}")
+
+        sections = [
+            {
+                "title": "Quote",
+                "body": "\n".join(body_lines),
+            }
+        ]
+
+        try:
+            if job_id:
+                try:
+                    jobs_update_status(
+                        conn,
+                        job_id,
+                        status="running",
+                        progress=0.1,
+                        mark_started=True,
+                    )
+                except Exception:
+                    pass
+
+            exported = _export_docx(
+                out_path,
+                doc_title=subj,
+                sections=sections,
+                clins=clins_payload,
+                checklist=None,
+                metadata={
+                    "fast_rfq": True,
+                    "quote_id": int(quote_id),
+                },
+            )
+
+            if exported and job_id:
+                try:
+                    jobs_update_status(
+                        conn,
+                        job_id,
+                        status="done",
+                        progress=1.0,
+                        result={"path": str(exported)},
+                        mark_finished=True,
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                st.error(f"Fast RFQ DOCX export failed: {e}")
+            except Exception:
+                pass
+            if job_id:
+                try:
+                    jobs_update_status(
+                        conn,
+                        job_id,
+                        status="failed",
+                        error_message=str(e),
+                        mark_finished=True,
+                    )
+                except Exception:
+                    pass
+            exported = None
+
+        if exported:
+            st.success(f"Exported to {exported}")
+            try:
+                with open(exported, "rb") as _f:
+                    _data = _f.read()
+                st.download_button(
+                    "Download Fast RFQ DOCX",
+                    data=_data,
+                    file_name=out_name,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"dl_fast_rfq_docx_{int(quote_id)}",
+                )
+            except Exception:
+                st.info("Fast RFQ DOCX is ready. Check the data directory if the download button is not available.")
+
+
 def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.header("RFQ Pack")
     st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
@@ -15774,6 +16289,7 @@ def nav() -> str:
             "Past Performance",
             "White Paper Builder",
             "RFQ Pack",
+            "Fast RFQ",
         ]),
         ("Deals and CRM", [
             "Deals",
