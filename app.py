@@ -6708,6 +6708,34 @@ def get_db() -> sqlite3.Connection:
         except Exception:
             pass
 
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sam_attachments(
+                id INTEGER PRIMARY KEY,
+                notice_id TEXT NOT NULL,
+                file_name TEXT,
+                url TEXT,
+                mime_type TEXT,
+                size_bytes INTEGER,
+                status TEXT,
+                last_error TEXT,
+                downloaded_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT
+            );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_attachments_notice ON sam_attachments(notice_id);")
+        try:
+            __p_ensure_column(conn, "sam_attachments", "mime_type", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "size_bytes", "INTEGER")
+            __p_ensure_column(conn, "sam_attachments", "status", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "last_error", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "downloaded_at", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "created_at", "TEXT DEFAULT (datetime('now'))")
+            __p_ensure_column(conn, "sam_attachments", "updated_at", "TEXT")
+        except Exception:
+            pass
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS notice_contacts(
                 id INTEGER PRIMARY KEY,
