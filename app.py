@@ -12310,20 +12310,49 @@ def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     view = df.iloc[start:end].copy() if df is not None else df
     st.session_state[page_key] = page
     return view, page, pages
+
 def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     st.header("Subcontractor Finder")
     st.caption("Use this page to search for qualified subcontractors by location and service and add them to your pipeline.")
     st.caption("Seed and manage vendors by NAICS/PSC/state; handoff selected vendors to Outreach.")
 
     ctx = st.session_state.get("rfp_selected_notice", {})
-    default_naics = ctx.get("NAICS") or st.session_state.get("sub_default_naics","")
-    default_state = st.session_state.get("sub_default_state","")
+    default_naics = ctx.get("NAICS") or st.session_state.get("sub_default_naics", "")
+    default_state = st.session_state.get("sub_default_state", "")
 
     # Default Place of Performance from selected notice if available
     default_pop = (ctx.get("Place of Performance") or ctx.get("place_of_performance") or ctx.get("POP") or "").strip()
 
+    # Ensure vendor capability columns exist and detect if they are available
+    has_vendor_caps = False
+    try:
+        with closing(conn.cursor()) as cur:
+            for _col, _ctype in [
+                ("primary_naics", "TEXT"),
+                ("other_naics", "TEXT"),
+                ("coverage_locations", "TEXT"),
+                ("capability_tags", "TEXT"),
+                ("small_business_flag", "INTEGER"),
+                ("set_aside_flags", "TEXT"),
+            ]:
+                try:
+                    cur.execute("SELECT " + _col + " FROM vendors LIMIT 1;")
+                except Exception:
+                    try:
+                        cur.execute("ALTER TABLE vendors ADD COLUMN " + _col + " " + _ctype + ";")
+                    except Exception:
+                        # If this fails we still try to continue with base columns
+                        pass
+            conn.commit()
+            cur.execute("PRAGMA table_info(vendors);")
+            cols = [r[1] for r in cur.fetchall()]
+            _needed = {"primary_naics", "other_naics", "coverage_locations", "capability_tags", "small_business_flag", "set_aside_flags"}
+            has_vendor_caps = _needed.issubset(set(cols))
+    except Exception:
+        has_vendor_caps = False
+
     with st.expander("Filters", expanded=True):
-        c1, c2, c3, c4 = st.columns([2,2,2,2])
+        c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
         with c1:
             f_naics = st.text_input("NAICS", value=default_naics, key="filter_naics")
         with c2:
@@ -12332,9 +12361,9 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             f_city = st.text_input("City contains", key="filter_city")
         with c4:
             f_kw = st.text_input("Keyword in name or notes", key="filter_kw")
-        c5, _ = st.columns([2,2])
+        c5, _ = st.columns([2, 2])
         with c5:
-            f_capability = st.text_input("Capability keyword (tags)", key="filter_capability")
+            f_capability = st.text_input("Capability keyword (tags)", key="filter_capability") if has_vendor_caps else ""
         st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
     with st.expander("Import Vendors (CSV)", expanded=False):
@@ -12347,7 +12376,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                     st.error("CSV must include a 'name' column")
                 else:
                     df.columns = [c.lower() for c in df.columns]
-                    n=0
+                    n = 0
                     with closing(conn.cursor()) as cur:
                         for _, r in df.iterrows():
                             cur.execute(
@@ -12357,26 +12386,26 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                                 ;
                                 """,
                                 (
-                                    str(r.get("name",""))[:200],
-                                    str(r.get("cage",""))[:20],
-                                    str(r.get("uei",""))[:40],
-                                    str(r.get("naics",""))[:20],
-                                    str(r.get("city",""))[:100],
-                                    str(r.get("state",""))[:10],
-                                    str(r.get("phone",""))[:40],
-                                    str(r.get("email",""))[:120],
-                                    str(r.get("website",""))[:200],
-                                    str(r.get("notes",""))[:500],
+                                    str(r.get("name", ""))[:200],
+                                    str(r.get("cage", ""))[:20],
+                                    str(r.get("uei", ""))[:40],
+                                    str(r.get("naics", ""))[:20],
+                                    str(r.get("city", ""))[:100],
+                                    str(r.get("state", ""))[:10],
+                                    str(r.get("phone", ""))[:40],
+                                    str(r.get("email", ""))[:120],
+                                    str(r.get("website", ""))[:200],
+                                    str(r.get("notes", ""))[:500],
                                 ),
                             )
-                            n+=1
+                            n += 1
                     conn.commit()
                     st.success(f"Imported {n} vendors")
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
     with st.expander("Add Vendor", expanded=False):
-        c1, c2, c3 = st.columns([2,2,2])
+        c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
             v_name = st.text_input("Company name", key="add_name")
             v_email = st.text_input("Email", key="add_email")
@@ -12385,16 +12414,22 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             v_city = st.text_input("City", key="add_city")
             v_state = st.text_input("State", key="add_state")
             v_naics = st.text_input("NAICS", key="add_naics")
-            v_primary_naics = st.text_input("Primary NAICS", key="add_primary_naics", value=v_naics)
+            v_primary_naics = st.text_input("Primary NAICS", key="add_primary_naics", value=v_naics) if has_vendor_caps else v_naics
         with c3:
-            v_other_naics = st.text_input("Other NAICS codes", key="add_other_naics")
-            v_coverage_locations = st.text_input("Coverage locations (states or regions)", key="add_coverage_locations")
+            v_other_naics = st.text_input("Other NAICS codes", key="add_other_naics") if has_vendor_caps else ""
+            v_coverage_locations = st.text_input("Coverage locations (states or regions)", key="add_coverage_locations") if has_vendor_caps else ""
             v_cage = st.text_input("CAGE", key="add_cage")
             v_uei = st.text_input("UEI", key="add_uei")
         v_site = st.text_input("Website", key="add_site")
-        v_capability_tags = st.text_input("Capability tags (comma separated, for example janitorial, HVAC, grounds)", key="add_capability_tags")
-        v_set_aside_flags = st.text_input("Set-aside flags (for example WOSB, SDVOSB)", key="add_set_aside_flags")
-        v_small_business_flag = st.checkbox("Small business", key="add_small_business_flag", value=True)
+        v_capability_tags = st.text_input(
+            "Capability tags (comma separated, for example janitorial, HVAC, grounds)",
+            key="add_capability_tags",
+        ) if has_vendor_caps else ""
+        v_set_aside_flags = st.text_input(
+            "Set-aside flags (for example WOSB, SDVOSB)",
+            key="add_set_aside_flags",
+        ) if has_vendor_caps else ""
+        v_small_business_flag = st.checkbox("Small business", key="add_small_business_flag", value=True) if has_vendor_caps else False
         v_notes = st.text_area("Notes", height=80, key="add_notes")
         if st.button("Save Vendor"):
             if not v_name.strip():
@@ -12402,46 +12437,79 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             else:
                 try:
                     with closing(conn.cursor()) as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO vendors(
-                                name, cage, uei, naics, city, state, phone, email, website, notes,
-                                primary_naics, other_naics, coverage_locations, capability_tags,
-                                small_business_flag, set_aside_flags
+                        if has_vendor_caps:
+                            cur.execute(
+                                """
+                                INSERT INTO vendors(
+                                    name, cage, uei, naics, city, state, phone, email, website, notes,
+                                    primary_naics, other_naics, coverage_locations, capability_tags,
+                                    small_business_flag, set_aside_flags
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ;
+                                """,
+                                (
+                                    v_name.strip(),
+                                    v_cage.strip(),
+                                    v_uei.strip(),
+                                    v_naics.strip(),
+                                    v_city.strip(),
+                                    v_state.strip(),
+                                    v_phone.strip(),
+                                    v_email.strip(),
+                                    v_site.strip(),
+                                    v_notes.strip(),
+                                    (v_primary_naics or "").strip(),
+                                    (v_other_naics or "").strip(),
+                                    (v_coverage_locations or "").strip(),
+                                    (v_capability_tags or "").strip(),
+                                    1 if v_small_business_flag else 0,
+                                    (v_set_aside_flags or "").strip(),
+                                ),
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ;
-                            """,
-                            (
-                                v_name.strip(),
-                                v_cage.strip(),
-                                v_uei.strip(),
-                                v_naics.strip(),
-                                v_city.strip(),
-                                v_state.strip(),
-                                v_phone.strip(),
-                                v_email.strip(),
-                                v_site.strip(),
-                                v_notes.strip(),
-                                v_primary_naics.strip(),
-                                v_other_naics.strip(),
-                                v_coverage_locations.strip(),
-                                v_capability_tags.strip(),
-                                1 if v_small_business_flag else 0,
-                                v_set_aside_flags.strip(),
-                            ),
-                        )
+                        else:
+                            cur.execute(
+                                """
+                                INSERT INTO vendors(name, cage, uei, naics, city, state, phone, email, website, notes)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ;
+                                """,
+                                (
+                                    v_name.strip(),
+                                    v_cage.strip(),
+                                    v_uei.strip(),
+                                    v_naics.strip(),
+                                    v_city.strip(),
+                                    v_state.strip(),
+                                    v_phone.strip(),
+                                    v_email.strip(),
+                                    v_site.strip(),
+                                    v_notes.strip(),
+                                ),
+                            )
                         conn.commit()
                     st.success("Vendor saved")
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
-    # Vendor listing with capability fields
-    q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes, primary_naics, other_naics, coverage_locations, capability_tags, small_business_flag, set_aside_flags FROM vendors WHERE 1=1"
+    # Vendor listing
+    if has_vendor_caps:
+        q = (
+            "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes, "
+            "primary_naics, other_naics, coverage_locations, capability_tags, small_business_flag, set_aside_flags "
+            "FROM vendors WHERE 1=1"
+        )
+    else:
+        # Fallback to the legacy view if capability columns are not reliably present
+        q = "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes FROM vendors_t WHERE 1=1"
     params: List[Any] = []
     if f_naics:
-        q += " AND (naics LIKE ? OR primary_naics LIKE ? OR other_naics LIKE ?)"
-        params.extend([f"%{f_naics}%", f"%{f_naics}%", f"%{f_naics}%"])
+        if has_vendor_caps:
+            q += " AND (naics LIKE ? OR primary_naics LIKE ? OR other_naics LIKE ?)"
+            params.extend([f"%{f_naics}%", f"%{f_naics}%", f"%{f_naics}%"])
+        else:
+            q += " AND (naics LIKE ?)"
+            params.append(f"%{f_naics}%")
     if f_state:
         q += " AND (state LIKE ?)"
         params.append(f"%{f_state}%")
@@ -12451,7 +12519,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     if f_kw:
         q += " AND (name LIKE ? OR notes LIKE ?)"
         params.extend([f"%{f_kw}%", f"%{f_kw}%"])
-    if "f_capability" in locals() and f_capability:
+    if has_vendor_caps and f_capability:
         q += " AND (capability_tags LIKE ? OR primary_naics LIKE ? OR other_naics LIKE ?)"
         params.extend([f"%{f_capability}%", f"%{f_capability}%", f"%{f_capability}%"])
 
@@ -12470,7 +12538,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             label = f"{row['name']}  ({row['email'] or 'no email'})"
             chk = st.checkbox(f"Select — {label}", key=f"vend_{int(row['id'])}")
 
-            # Show capability summary for each vendor
+            # Show capability summary for each vendor if columns are present
             primary_naics = row.get("primary_naics") if "primary_naics" in row else None
             other_naics = row.get("other_naics") if "other_naics" in row else None
             coverage_locations = row.get("coverage_locations") if "coverage_locations" in row else None
@@ -12502,14 +12570,13 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
 
             if chk:
                 selected_ids.append(int(row["id"]))
-        c1, c2 = st.columns([2,2])
+        c1, c2 = st.columns([2, 2])
         with c1:
             if st.button("Send to Outreach ▶") and selected_ids:
-                st.session_state['rfq_vendor_ids'] = selected_ids
+                st.session_state["rfq_vendor_ids"] = selected_ids
                 st.success(f"Queued {len(selected_ids)} vendors for Outreach")
         with c2:
             st.caption("Selections are stored in session and available in Outreach tab")
-
 # ---------- Outreach (Phase D) ----------
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
