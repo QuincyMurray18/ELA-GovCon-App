@@ -9830,7 +9830,49 @@ def run_sam_watch(conn) -> None:
                             # 1: fetch attachment metadata from SAM.gov
                             attachments = []
                             try:
-                                attachments = fetch_sam_attachments_for_notice(notice)
+                                if "fetch_sam_attachments_for_notice" in globals():
+                                    attachments = fetch_sam_attachments_for_notice(notice)
+                                else:
+                                    # Fallback directly to sam_try_fetch_attachments by notice_id string
+                                    tmp = []
+                                    if "sam_try_fetch_attachments" in globals() and notice_id:
+                                        try:
+                                            tmp = list(sam_try_fetch_attachments(notice_id) or [])
+                                        except Exception:
+                                            tmp = []
+                                    # Normalize any fallback tuples into metadata dicts
+                                    for it in tmp:
+                                        if isinstance(it, dict):
+                                            name = it.get("name") or it.get("filename") or it.get("File Name") or "attachment"
+                                            url = it.get("url") or it.get("URL") or it.get("link")
+                                            mime = it.get("mime") or it.get("MimeType") or it.get("content_type")
+                                            updated = (
+                                                it.get("last_updated")
+                                                or it.get("LastUpdated")
+                                                or it.get("lastModified")
+                                                or it.get("last_modified")
+                                            )
+                                            attachments.append(
+                                                {
+                                                    "file_name": str(name).strip() or "attachment",
+                                                    "file_url": str(url).strip() if url else None,
+                                                    "file_type": str(mime).strip() if mime else None,
+                                                    "last_updated": str(updated) if updated else None,
+                                                }
+                                            )
+                                        else:
+                                            try:
+                                                name, _blob = it
+                                                attachments.append(
+                                                    {
+                                                        "file_name": str(name).strip() or "attachment",
+                                                        "file_url": None,
+                                                        "file_type": None,
+                                                        "last_updated": None,
+                                                    }
+                                                )
+                                            except Exception:
+                                                continue
                             except Exception as _e:
                                 st.warning(f"Attachment enumeration failed: {_e}")
                             # 2: sync metadata into sam_attachments
@@ -25551,28 +25593,50 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
 
 
-def fetch_sam_attachments_for_notice(notice_row):
+
+def fetch_sam_attachments_for_notice(notice):
     """
     Best-effort helper to enumerate attachments for a SAM.gov notice.
+
+    `notice` may be a row dict from SAM Watch or a plain notice_id string.
 
     This uses sam_list_attachments when available (preferred), and falls back
     to sam_try_fetch_attachments to at least recover filenames. It returns a
     list of dicts with keys: file_name, file_url, file_type, last_updated.
     """
+    # Normalize inputs
+    notice_row = {}
+    notice_id = ""
+    if isinstance(notice, dict):
+        notice_row = notice
+        notice_id = str(
+            notice_row.get("notice_id")
+            or notice_row.get("Notice ID")
+            or notice_row.get("NoticeID")
+            or notice_row.get("id")
+            or ""
+        ).strip()
+    else:
+        notice_id = str(notice or "").strip()
+
     items = []
-    # Preferred path: SamSearch / SAM client helper
+
+    # Preferred path: SamSearch / SAM client helper that understands row context
     if "sam_list_attachments" in globals():
         try:
-            items = list(sam_list_attachments(notice_row) or [])
+            # Pass the row dict when we have it; otherwise a minimal stub
+            ctx = notice_row or {"notice_id": notice_id, "Notice ID": notice_id}
+            items = list(sam_list_attachments(ctx) or [])
         except Exception:
             items = []
 
-    # Fallback: use sam_try_fetch_attachments to get at least names
-    if not items and "sam_try_fetch_attachments" in globals():
+    # Fallback: use sam_try_fetch_attachments to get at least names via notice_id
+    if not items and "sam_try_fetch_attachments" in globals() and notice_id:
         try:
-            tmp = list(sam_try_fetch_attachments(notice_row) or [])
+            tmp = list(sam_try_fetch_attachments(notice_id) or [])
         except Exception:
             tmp = []
+        items = []
         for it in tmp:
             if isinstance(it, dict):
                 name = it.get("name") or it.get("filename") or it.get("File Name") or "attachment"
@@ -25608,6 +25672,7 @@ def fetch_sam_attachments_for_notice(notice_row):
                     continue
         return items
 
+    # Normalize any dict-style items into the standard shape
     results = []
     for it in items:
         if not isinstance(it, dict):
@@ -25635,6 +25700,7 @@ def fetch_sam_attachments_for_notice(notice_row):
             }
         )
     return results
+
 
 def sync_sam_attachments_metadata(conn, tenant_id, notice_id, attachments):
     """Insert or update attachment rows for a notice.
