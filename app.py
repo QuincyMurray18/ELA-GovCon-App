@@ -12352,6 +12352,84 @@ def _s1d_paginate(df, page_size: int, page_key: str = "s1d_page"):
     st.session_state[page_key] = page
     return view, page, pages
 
+
+def _vendor_recompute_score(conn: "sqlite3.Connection", vendor_id: int) -> None:
+    """Recompute rolled-up vendor_score for a vendor from capacity snapshots and job history."""
+    from contextlib import closing as _closing
+    try:
+        vid = int(vendor_id)
+    except Exception:
+        try:
+            vid = int(str(vendor_id or "0").strip() or "0")
+        except Exception:
+            return
+    try:
+        with _closing(conn.cursor()) as cur:
+            # Average of all recorded job overall scores
+            try:
+                cur.execute(
+                    "SELECT AVG(overall_score) FROM vendor_job WHERE vendor_id=? AND overall_score IS NOT NULL;",
+                    (vid,),
+                )
+                row = cur.fetchone()
+                job_avg = float(row[0]) if row and row[0] is not None else None
+            except Exception:
+                job_avg = None
+
+            # Latest capacity snapshot overall score
+            try:
+                cur.execute(
+                    """
+                    SELECT overall_score
+                    FROM vendor_capacity
+                    WHERE vendor_id=?
+                    ORDER BY last_updated DESC, id DESC
+                    LIMIT 1;
+                    """,
+                    (vid,),
+                )
+                row = cur.fetchone()
+                cap_score = float(row[0]) if row and row[0] is not None else None
+            except Exception:
+                cap_score = None
+
+            scores = []
+            if cap_score is not None:
+                scores.append(cap_score)
+            if job_avg is not None:
+                scores.append(job_avg)
+
+            vscore = None
+            if scores:
+                try:
+                    vscore = sum(scores) / float(len(scores))
+                except Exception:
+                    try:
+                        vscore = float(scores[-1])
+                    except Exception:
+                        vscore = None
+
+            try:
+                if vscore is not None:
+                    cur.execute(
+                        "UPDATE vendors SET vendor_score=? WHERE id=?;",
+                        (float(vscore), vid),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE vendors SET vendor_score=NULL WHERE id=?;",
+                        (vid,),
+                    )
+            except Exception:
+                # Column may not exist on very old schemas; safe to ignore.
+                pass
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
 def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     st.header("Subcontractor Finder")
     st.caption("Use this page to search for qualified subcontractors by location and service and add them to your pipeline.")
@@ -12375,6 +12453,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                 ("capability_tags", "TEXT"),
                 ("small_business_flag", "INTEGER"),
                 ("set_aside_flags", "TEXT"),
+                ("vendor_score", "REAL"),
             ]:
                 try:
                     cur.execute("SELECT " + _col + " FROM vendors LIMIT 1;")
@@ -12537,7 +12616,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     if has_vendor_caps:
         q = (
             "SELECT id, name, email, phone, city, state, naics, cage, uei, website, notes, "
-            "primary_naics, other_naics, coverage_locations, capability_tags, small_business_flag, set_aside_flags "
+            "primary_naics, other_naics, coverage_locations, capability_tags, small_business_flag, set_aside_flags, vendor_score "
             "FROM vendors WHERE 1=1"
         )
     else:
@@ -12604,6 +12683,15 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                 meta_parts.append("Small business" if sb_val else "Not small business")
             if set_aside_flags:
                 meta_parts.append(f"Set-asides {set_aside_flags}")
+            # Show rolled-up vendor_score if present
+            vendor_score_val = None
+            try:
+                if "vendor_score" in row and row.get("vendor_score") is not None:
+                    vendor_score_val = float(row.get("vendor_score"))
+            except Exception:
+                vendor_score_val = None
+            if vendor_score_val is not None:
+                meta_parts.append(f"Score {vendor_score_val:.1f}/5.0")
             if meta_parts:
                 st.caption(" • " + "  |  ".join(meta_parts))
             if capability_tags:
@@ -12773,6 +12861,10 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                                 ),
                             )
                         st.success("Capacity snapshot saved")
+                        try:
+                            _vendor_recompute_score(conn, vid)
+                        except Exception:
+                            pass
                     except Exception as e:
                         st.error(f"Save failed: {e}")
 
@@ -12879,6 +12971,10 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                                 ),
                             )
                         st.success("Job record added")
+                        try:
+                            _vendor_recompute_score(conn, vid)
+                        except Exception:
+                            pass
                     except Exception as e:
                         st.error(f"Save failed: {e}")
 
