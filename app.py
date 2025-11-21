@@ -6127,6 +6127,34 @@ def ensure_y5_tables(conn: "sqlite3.Connection") -> None:
     except Exception:
         pass
 
+
+def _ensure_fts_docs(conn: "sqlite3.Connection") -> None:
+    """
+    Ensure the full-text search virtual table for large documents exists.
+
+    This table is intended to index RFPs, proposals, and large notes so they
+    can be searched quickly by title and content. Metadata columns are stored
+    as UNINDEXED so searches stay focused on the text fields.
+    """
+    try:
+        from contextlib import closing as _closing
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS fts_docs USING fts5(
+                    id UNINDEXED,
+                    ref_type UNINDEXED,
+                    ref_id UNINDEXED,
+                    title,
+                    content
+                );
+                """
+            )
+    except Exception:
+        # Some SQLite builds may not have FTS5 enabled; fail silently so
+        # the rest of the app still works even without FTS.
+        pass
+
 def y5_chunk_text(text: str, target_chars: int = 9000, overlap: int = 500) -> list[str]:
     t = (text or "").strip()
     if not t:
@@ -7311,6 +7339,10 @@ def get_db() -> sqlite3.Connection:
         conn.commit()
     try:
         ensure_y5_tables(conn)
+    except Exception:
+        pass
+    try:
+        _ensure_fts_docs(conn)
     except Exception:
         pass
     try:
@@ -17117,6 +17149,9 @@ def nav() -> str:
             "RFQ Pack",
             "Fast RFQ",
         ]),
+        ("Knowledge Hub", [
+            "Knowledge Hub",
+        ]),
         ("Deals and CRM", [
             "Deals",
             "Contacts",
@@ -17569,6 +17604,134 @@ def ns(scope: str, key: str) -> str:
     return f"{scope}::{key}"
 # === S1 Subcontractor Finder: Google Places ===
 
+
+
+def run_knowledge_hub(conn) -> None:
+    import streamlit as st
+    import pandas as _pd
+    from contextlib import closing as _closing
+
+    st.title("Knowledge Hub — Full‑Text Search")
+    st.caption(
+        "Use this page to search across RFPs, proposals, and large notes that have been "
+        "indexed into the full‑text engine (fts_docs)."
+    )
+
+    q = st.text_input(
+        "Search query",
+        key="kh_query",
+        placeholder="security plan, past performance, clause, requirement, etc.",
+    )
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        type_filter = st.multiselect(
+            "Document types (optional filter)",
+            options=["rfp", "proposal", "note"],
+            default=[],
+            help="Filter by how the document was tagged when it was indexed (ref_type column).",
+        )
+    with c2:
+        limit = st.number_input(
+            "Max results",
+            min_value=10,
+            max_value=500,
+            value=50,
+            step=10,
+        )
+
+    if not q:
+        st.info(
+            "Enter a few keywords above to search across all indexed documents. "
+            "Advanced: you can use AND/OR, phrase search with quotes, and wildcard * where supported by SQLite FTS5."
+        )
+        return
+
+    clauses = ["fts_docs MATCH ?"]
+    params: list[object] = [q.strip()]
+
+    if type_filter:
+        placeholders = ",".join(["?"] * len(type_filter))
+        clauses.append(f"ref_type IN ({placeholders})")
+        params.extend(type_filter)
+
+    where_sql = " AND ".join(clauses)
+
+    rows = []
+    error_msg = None
+    try:
+        with _closing(conn.cursor()) as cur:
+            sql = f"""
+                SELECT
+                    rowid AS doc_rowid,
+                    ref_type,
+                    ref_id,
+                    title,
+                    snippet(fts_docs, 4, '…', '…', ' … ', 20) AS snippet,
+                    bm25(fts_docs) AS rank
+                FROM fts_docs
+                WHERE {where_sql}
+                ORDER BY rank ASC
+                LIMIT ?
+            """
+            cur.execute(sql, (*params, int(limit)))
+            rows = cur.fetchall()
+    except Exception:
+        try:
+            with _closing(conn.cursor()) as cur:
+                sql = f"""
+                    SELECT
+                        rowid AS doc_rowid,
+                        ref_type,
+                        ref_id,
+                        title,
+                        snippet(fts_docs, 4, '…', '…', ' … ', 20) AS snippet
+                    FROM fts_docs
+                    WHERE {where_sql}
+                    LIMIT ?
+                """
+                cur.execute(sql, (*params, int(limit)))
+                rows = cur.fetchall()
+        except Exception as e2:
+            error_msg = str(e2)
+
+    if error_msg:
+        st.error(
+            "Search failed. The full‑text index may not be available in this SQLite build "
+            "or the fts_docs table is missing."
+        )
+        st.text(error_msg)
+        return
+
+    if not rows:
+        st.warning("No documents matched your search. Try different keywords or remove filters.")
+        return
+
+    df = _pd.DataFrame(
+        rows,
+        columns=["doc_rowid", "ref_type", "ref_id", "title", "snippet"][: len(rows[0])],
+    )
+
+    # Normalize columns in case bm25 is not available
+    if "doc_rowid" not in df.columns:
+        df["doc_rowid"] = None
+    for col in ["ref_type", "ref_id", "title", "snippet"]:
+        if col not in df.columns:
+            df[col] = None
+
+    df_view = df[["ref_type", "ref_id", "title", "snippet"]]
+
+    st.markdown("### Results")
+    st.dataframe(
+        df_view,
+        use_container_width=True,
+        height=min(700, 100 + 30 * len(df_view)),
+    )
+
+    st.caption(
+        "Tip: use this page as your internal knowledge hub. As more RFPs, proposals, and notes "
+        "are indexed into fts_docs, they will automatically become searchable here."
+    )
 
 def router(page: str, conn: "sqlite3.Connection") -> None:
     """Dynamic router. Resolves run_<snake_case(page)> and executes safely."""
