@@ -5014,6 +5014,11 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
                         (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)),
                     )
                 added += 1
+    try:
+        _fts_index_rfp(conn, int(rfp_id))
+    except Exception:
+        # FTS indexing is best-effort; ignore failures.
+        pass
     return {"ok": True, "added": added, "skipped": skipped}
 def _y1_search_uncached(conn: "sqlite3.Connection", rfp_id: int, query: str, k: int = 6) -> list[dict]:
     _ensure_y1_schema(conn)
@@ -6243,6 +6248,114 @@ def y5_extract_from_rfp(conn: "sqlite3.Connection", rfp_id: int) -> str:
         elif name.endswith(".pdf"):
             parts.append(_extract_pdf_bytes(bytes(data)))
     return "\n\n".join([p for p in parts if p]).strip()
+
+
+def _fts_upsert_doc(conn: "sqlite3.Connection", ref_type: str, ref_id: int | str, title: str, content: str) -> None:
+    """
+    Insert or replace a document in the FTS index.
+
+    We de-duplicate by (ref_type, ref_id) so each logical document only has
+    one row in fts_docs.
+    """
+    if not content:
+        return
+    text = (content or "").strip()
+    if not text:
+        return
+    _ensure_fts_docs(conn)
+    from contextlib import closing as _closing
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("DELETE FROM fts_docs WHERE ref_type=? AND ref_id=?;", (ref_type, str(ref_id)))
+            cur.execute(
+                "INSERT INTO fts_docs(id, ref_type, ref_id, title, content) VALUES(?,?,?,?,?);",
+                (f"{ref_type}:{ref_id}", ref_type, str(ref_id), title or "", text),
+            )
+        conn.commit()
+    except Exception:
+        # FTS is best-effort; never block the main workflow.
+        pass
+
+
+def _fts_index_rfp(conn: "sqlite3.Connection", rfp_id: int) -> None:
+    """
+    Build or refresh the FTS record for a given RFP from its linked files.
+    """
+    try:
+        import pandas as _pd
+        df = _pd.read_sql_query(
+            "SELECT title, solnum FROM rfps WHERE id=?;",
+            conn,
+            params=(int(rfp_id),),
+        )
+    except Exception:
+        df = None
+    title = f"RFP #{int(rfp_id)}"
+    try:
+        if df is not None and not df.empty:
+            _t = str(df.iloc[0].get("title") or "").strip()
+            _s = str(df.iloc[0].get("solnum") or "").strip()
+            if _t:
+                title = _t
+            if _s:
+                title = f"{title} ({_s})"
+    except Exception:
+        pass
+
+    try:
+        content = y5_extract_from_rfp(conn, int(rfp_id)) or ""
+    except Exception:
+        content = ""
+    if not content or not content.strip():
+        return
+    _fts_upsert_doc(conn, "rfp", int(rfp_id), title, content)
+
+
+def _fts_index_proposal(conn: "sqlite3.Connection", proposal_id: int) -> None:
+    """
+    Build or refresh the FTS record for a proposal by concatenating its sections.
+    """
+    try:
+        import pandas as _pd
+        df_p = _pd.read_sql_query(
+            "SELECT title FROM proposals WHERE id=?;",
+            conn,
+            params=(int(proposal_id),),
+        )
+    except Exception:
+        df_p = None
+    title = f"Proposal #{int(proposal_id)}"
+    try:
+        if df_p is not None and not df_p.empty:
+            _t = str(df_p.iloc[0].get("title") or "").strip()
+            if _t:
+                title = _t
+    except Exception:
+        pass
+
+    try:
+        import pandas as _pd
+        df_s = _pd.read_sql_query(
+            "SELECT title, content FROM proposal_sections WHERE proposal_id=? ORDER BY ord ASC;",
+            conn,
+            params=(int(proposal_id),),
+        )
+    except Exception:
+        df_s = None
+
+    parts: list[str] = []
+    if df_s is not None and not df_s.empty:
+        for _, r in df_s.iterrows():
+            stitle = str(r.get("title") or "")
+            sbody = str(r.get("content") or "")
+            if stitle.strip():
+                parts.append(stitle.strip())
+            if sbody.strip():
+                parts.append(sbody.strip())
+    content = "\n\n".join(parts).strip()
+    if not content:
+        return
+    _fts_upsert_doc(conn, "proposal", int(proposal_id), title, content)
 
 def y5_save_snippet(conn: "sqlite3.Connection", rfp_id: int, section: str, text: str, source: str = "Y5") -> None:
     if not (text or "").strip():
@@ -23425,6 +23538,11 @@ def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, tit
                 (int(pid), i, ln, "", json.dumps({"font":"Times New Roman","size":11}))
             )
     conn.commit()
+    try:
+        _fts_index_proposal(conn, int(pid))
+    except Exception:
+        # FTS indexing is best-effort; ignore failures.
+        pass
     return int(pid)
 
 
@@ -23452,11 +23570,36 @@ def x7_get_sections(conn: "sqlite3.Connection", proposal_id: int):
         import pandas as pd
         return pd.DataFrame(columns=["id","ord","title","content","settings_json"])
 
+
 def x7_save_section(conn: "sqlite3.Connection", section_id: int, content: str | None, settings_json: str | None = None) -> None:
+    """
+    Save a single proposal section and update the FTS index for the parent proposal.
+    """
     from contextlib import closing as _closing
+
+    proposal_id: int | None = None
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT proposal_id FROM proposal_sections WHERE id=?", (int(section_id),))
+            row = cur.fetchone()
+            if row:
+                proposal_id = int(row[0])
+    except Exception:
+        proposal_id = None
+
     with _closing(conn.cursor()) as cur:
-        cur.execute("UPDATE proposal_sections SET content=?, settings_json=COALESCE(?, settings_json), updated_at=datetime('now') WHERE id=?", (content or "", settings_json, int(section_id)))
+        cur.execute(
+            "UPDATE proposal_sections SET content=?, settings_json=COALESCE(?, settings_json), updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (content or "", settings_json, int(section_id)),
+        )
     conn.commit()
+
+    if proposal_id is not None:
+        try:
+            _fts_index_proposal(conn, int(proposal_id))
+        except Exception:
+            # FTS is best-effort; ignore failures so the main save path still works.
+            pass
 
 def x7_generate_section_ai(conn, rfp_id: int, section_title: str, notes: str = "", temperature: float = 0.1) -> str:
     import pandas as _pd, json
