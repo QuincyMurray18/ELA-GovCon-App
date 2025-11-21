@@ -17911,6 +17911,179 @@ def nav() -> str:
 
     return choice
 
+
+# --- RFP Analyzer: AI attachments panel using rfp_documents ---
+
+
+def load_document_text(file_path: str, max_bytes: int = 5_000_000) -> str:
+    """Load text from a stored RFP document path.
+
+    This reuses the same PDF/Office extraction helpers used elsewhere in the app.
+    Returns a best-effort UTF-8 string; empty string if nothing can be read.
+    """
+    import os
+
+    try:
+        if not file_path or not os.path.exists(file_path):
+            return ""
+        with open(file_path, "rb") as f:
+            data = f.read(max_bytes)
+    except Exception:
+        return ""
+
+    try:
+        mime = _guess_mime_from_name(os.path.basename(file_path))
+    except Exception:
+        mime = None
+
+    try:
+        if mime is not None:
+            pages = extract_text_pages(data, mime_type=mime)
+        else:
+            pages = extract_text_pages(data)
+    except Exception:
+        pages = []
+
+    text = "\n\n".join(pages or [])
+    if not text.strip():
+        try:
+            text = data.decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
+    return text
+
+
+def summarize_rfp_document(doc_text: str) -> str:
+    """Summarize a single RFP attachment for capture/proposal use."""
+    doc_trimmed = doc_text or ""
+    if not doc_trimmed.strip():
+        return "No readable text was extracted from this attachment."
+
+    # Keep prompts reasonably sized for the model
+    if len(doc_trimmed) > 20000:
+        doc_trimmed = doc_trimmed[:20000]
+
+    prompt = (
+        "You are a senior federal contracting analyst supporting proposal development.\n"
+        "Provide a concise summary of the attached document for the capture/proposal team.\n\n"
+        "Focus on:\n"
+        "- Scope of work and key tasks\n"
+        "- Performance standards or quality measures\n"
+        "- Key dates and submission instructions\n"
+        "- Any special compliance or certification requirements\n\n"
+        "Document text:\n"
+        f"{doc_trimmed}\n"
+    )
+
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a senior federal contracting officer and proposal analyst.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+        return _chat_plus_call_openai(messages, temperature=0.2, max_output_tokens=800)
+    except Exception as e:
+        return f"Summary failed: {e}"
+
+
+def ask_rfp_doc_question(doc_text: str, question: str) -> str:
+    """Answer a user question against a single RFP attachment's text."""
+    q_clean = (question or "").strip()
+    if not q_clean:
+        return "Enter a question first."
+
+    doc_trimmed = doc_text or ""
+    if not doc_trimmed.strip():
+        return "No readable text was extracted from this attachment."
+
+    if len(doc_trimmed) > 20000:
+        doc_trimmed = doc_trimmed[:20000]
+
+    prompt = (
+        "You are a federal contracting specialist. Use only the document text to answer.\n"
+        "If the answer is not clearly stated, say you cannot find it in the document.\n\n"
+        f"Question:\n{q_clean}\n\n"
+        "Document text:\n"
+        f"{doc_trimmed}\n"
+    )
+
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a careful federal contracting specialist who cites only the provided document.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+        return _chat_plus_call_openai(messages, temperature=0.2, max_output_tokens=800)
+    except Exception as e:
+        return f"Question answering failed: {e}"
+
+
+def render_ai_attachments_panel(conn, rfp_id: int) -> None:
+    """Streamlit panel to browse and analyze rfp_documents records for a given RFP."""
+    import streamlit as st
+    from contextlib import closing as _closing
+
+    if not rfp_id:
+        return
+
+    st.subheader("AI attachments")
+
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                """
+                SELECT id, file_name, stored_path, status
+                  FROM rfp_documents
+                 WHERE rfp_id = ?
+                 ORDER BY created_at;
+                """,
+                (int(rfp_id),),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        st.warning(f"Could not load RFP attachment metadata: {e}")
+        return
+
+    if not rows:
+        st.info("No attachments linked yet for this RFP.")
+        return
+
+    for doc_id, fname, path, status in rows:
+        label = str(fname or "(unnamed attachment)")
+        with st.expander(label, expanded=False):
+            st.text(f"Status: {status or 'unknown'}")
+            if not path:
+                st.caption("This attachment has not been downloaded or stored locally yet.")
+                continue
+
+            if st.button("Summarize attachment", key=f"rfpdoc_sum_{doc_id}"):
+                text = load_document_text(path)
+                if not text.strip():
+                    st.warning("No readable text could be extracted from this attachment.")
+                else:
+                    summary = summarize_rfp_document(text)
+                    st.write(summary)
+
+            user_q = st.text_input("Your question", key=f"rfpdoc_q_{doc_id}", placeholder="Ask a question about this attachment")
+            if user_q:
+                text = load_document_text(path)
+                if not text.strip():
+                    st.warning("No readable text could be extracted from this attachment.")
+                else:
+                    answer = ask_rfp_doc_question(text, user_q)
+                    st.write(answer)
+
+
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
     import streamlit as st
@@ -18168,6 +18341,15 @@ def run_rfp_analyzer(conn) -> None:
                 ui_error("Could not ingest and analyze the RFP.", str(e))
 
     # Add files
+
+    # AI attachments panel using rfp_documents linked to this RFP
+    try:
+        _rfp_id_for_ai = int(_ensure_selected_rfp_id(conn))
+    except Exception:
+        _rfp_id_for_ai = 0
+    if _rfp_id_for_ai:
+        render_ai_attachments_panel(conn, _rfp_id_for_ai)
+
     with st.container(border=True):
         st.subheader("➕ Add files to this RFP")
         uploads = st.file_uploader("Upload RFP documents (PDF/DOCX/TXT/ZIP/XLSX)", type=["pdf","doc","docx","txt","rtf","zip","xlsx","xls"],
