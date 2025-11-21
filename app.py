@@ -9898,29 +9898,24 @@ def run_sam_watch(conn) -> None:
                             linked = 0
                             if rfp_id:
                                 try:
-                                    cur = conn.cursor()
-                                    cur.execute(
-                                        "SELECT id, notice_id, file_name, file_type, local_path "
-                                        "FROM sam_attachments WHERE tenant_id = ? AND notice_id = ?",
-                                        (tenant_id, notice_id),
-                                    )
-                                    for att_id, notice_id2, fname, ftype, local_path in cur.fetchall():
+                                    # Prefer the unified RFP documents pipeline if available
+                                    if "rfp_documents_fetch_from_sam" in globals():
                                         try:
-                                            local_path2 = local_path
-                                            if not local_path2:
-                                                local_path2 = download_sam_attachment(conn, att_id)
-                                            if not local_path2:
-                                                continue
-                                            att_row = {
-                                                "notice_id": notice_id2,
-                                                "file_name": fname,
-                                                "file_type": ftype,
-                                                "local_path": local_path2,
-                                            }
-                                            link_attachment_to_rfp(conn, tenant_id, rfp_id, att_row)
-                                            linked += 1
+                                            linked = int(rfp_documents_fetch_from_sam(conn, int(rfp_id), notice or notice_id) or 0)
                                         except Exception:
-                                            continue
+                                            linked = 0
+                                    # Fallback for older builds: use sam_try_fetch_attachments + save_rfp_file_db
+                                    if (not linked) and ("sam_try_fetch_attachments" in globals()):
+                                        try:
+                                            files = sam_try_fetch_attachments(str(notice_id)) or []
+                                        except Exception:
+                                            files = []
+                                        for fname, fbytes in files:
+                                            try:
+                                                save_rfp_file_db(conn, int(rfp_id), fname, fbytes)
+                                                linked += 1
+                                            except Exception:
+                                                continue
                                 except Exception as _e:
                                     st.warning(f"Attachment download/linking error: {_e}")
 
