@@ -1,3 +1,7 @@
+def x7_snippet_library_ui(conn):
+    """Fallback stub; real implementation is defined later in the file."""
+    return None
+
 # ---- Global owner context guard ----
 try:
     import streamlit as _st
