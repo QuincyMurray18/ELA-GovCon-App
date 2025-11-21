@@ -9109,6 +9109,117 @@ def run_deals(conn: "sqlite3.Connection") -> None:
     # Deals merged into CRM. Keep a single source of truth.
     return run_crm(conn)
 
+
+
+def get_or_create_rfp_from_notice(conn, tenant_id, notice_row):
+    """Create an RFP Analyzer rfps record from a SAM Watch row if it does not exist.
+
+    notice_row is a dict and may use different key casings, for example:
+      - notice_id or "Notice ID"
+      - title or "Title"
+      - solicitation_number, "Solicitation", or "Sol Number"
+      - agency, "Agency"
+      - due_date or "Response Date"
+
+    The rfps table in this app uses columns: title, solnum, notice_id, sam_url, file_path, created_at, tenant_id.
+    We map the incoming fields onto that schema and scope by tenant_id.
+    """
+    from contextlib import closing as _closing
+
+    # Best-effort notice id extraction (aligned with _extract_notice_id_from_obj)
+    nid = ""
+    try:
+        if isinstance(notice_row, dict):
+            for key in (
+                "notice_id",
+                "Notice ID",
+                "NoticeID",
+                "id",
+                "NoticeId",
+                "NoticeIdentifier",
+                "Solicitation",
+                "Sol Number",
+            ):
+                v = notice_row.get(key)
+                if v:
+                    s = str(v).strip()
+                    if s:
+                        nid = s
+                        break
+    except Exception:
+        nid = ""
+
+    if not nid:
+        raise ValueError("Missing notice_id for get_or_create_rfp_from_notice")
+
+    # Title
+    title = (
+        (notice_row.get("title") if isinstance(notice_row, dict) else None)
+        or (notice_row.get("Title") if isinstance(notice_row, dict) else None)
+        or ""
+    )
+
+    # Solicitation / solicitation_number -> solnum
+    solnum = ""
+    if isinstance(notice_row, dict):
+        solnum = (
+            notice_row.get("solicitation_number")
+            or notice_row.get("Solicitation")
+            or notice_row.get("Sol Number")
+            or notice_row.get("solnum")
+            or ""
+        ) or ""
+
+    # SAM URL
+    sam_url = ""
+    if isinstance(notice_row, dict):
+        sam_url = (
+            notice_row.get("sam_url")
+            or notice_row.get("SAM Link")
+            or notice_row.get("URL")
+            or ""
+        ) or ""
+
+    # Normalize tenant id
+    try:
+        tenant_id_int = int(tenant_id or 1)
+    except Exception:
+        tenant_id_int = 1
+
+    with closing(conn.cursor()) as cur:
+        # First look for an rfps row matching this notice and tenant (or legacy NULL tenant)
+        cur.execute(
+            """
+            SELECT id
+            FROM rfps
+            WHERE notice_id = ?
+              AND (tenant_id = ? OR tenant_id IS NULL)
+            ORDER BY id DESC
+            LIMIT 1;
+            """,
+            (nid, tenant_id_int),
+        )
+        row = cur.fetchone()
+        if row:
+            return int(row[0])
+
+        # Insert a new rfps row scoped to this tenant
+        cur.execute(
+            """
+            INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at, tenant_id)
+            VALUES (?,?,?,?,?, datetime('now'), ?);
+            """,
+            (title.strip() if isinstance(title, str) else str(title or ""),
+             str(solnum or "").strip(),
+             nid,
+             str(sam_url or "").strip(),
+             "",
+             tenant_id_int,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
 def _ensure_rfp_for_notice(conn, notice_row: dict) -> int:
     from contextlib import closing as _closing
     nid = str(notice_row.get('Notice ID') or "")
