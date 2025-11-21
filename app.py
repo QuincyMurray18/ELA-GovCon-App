@@ -6997,26 +6997,34 @@ def get_db() -> sqlite3.Connection:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfp_documents(
                 id INTEGER PRIMARY KEY,
-                rfp_id INTEGER,
+                tenant_id INTEGER DEFAULT 1,
+                rfp_id INTEGER NOT NULL,
                 sam_attachment_id INTEGER,
                 notice_id TEXT,
                 file_name TEXT,
+                local_path TEXT,
+                file_type TEXT,
+                source TEXT DEFAULT 'sam_watch',
                 url TEXT,
                 mime_type TEXT,
                 size_bytes INTEGER,
-                status TEXT,
+                status TEXT DEFAULT 'pending',
                 last_error TEXT,
                 stored_path TEXT,
                 downloaded_at TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT
             );
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rfp_documents_rfp ON rfp_documents(rfp_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rfp_documents_sam ON rfp_documents(sam_attachment_id);")
         try:
+            __p_ensure_column(conn, "rfp_documents", "tenant_id", "INTEGER DEFAULT 1")
             __p_ensure_column(conn, "rfp_documents", "notice_id", "TEXT")
             __p_ensure_column(conn, "rfp_documents", "file_name", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "local_path", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "file_type", "TEXT")
+            __p_ensure_column(conn, "rfp_documents", "source", "TEXT DEFAULT 'sam_watch'")
             __p_ensure_column(conn, "rfp_documents", "url", "TEXT")
             __p_ensure_column(conn, "rfp_documents", "mime_type", "TEXT")
             __p_ensure_column(conn, "rfp_documents", "size_bytes", "INTEGER")
