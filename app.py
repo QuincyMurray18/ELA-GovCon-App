@@ -6962,25 +6962,28 @@ def get_db() -> sqlite3.Connection:
                 tenant_id INTEGER DEFAULT 1,
                 notice_id TEXT NOT NULL,
                 file_name TEXT,
+                file_url TEXT,
                 url TEXT,
+                file_type TEXT,
                 mime_type TEXT,
                 size_bytes INTEGER,
+                last_updated TEXT,
                 status TEXT DEFAULT 'not_downloaded',
                 last_error TEXT,
-                downloaded_at TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT,
-                file_url TEXT,
-                file_type TEXT,
-                last_updated TEXT,
                 local_path TEXT,
+                downloaded_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
                 UNIQUE(tenant_id, notice_id, file_url)
             );
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_sam_attachments_notice ON sam_attachments(notice_id);")
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sam_attachments_tenant_notice_fileurl ON sam_attachments(tenant_id, notice_id, file_url);")
         try:
             __p_ensure_column(conn, "sam_attachments", "tenant_id", "INTEGER DEFAULT 1")
+            __p_ensure_column(conn, "sam_attachments", "file_url", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "file_type", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "last_updated", "TEXT")
+            __p_ensure_column(conn, "sam_attachments", "local_path", "TEXT")
             __p_ensure_column(conn, "sam_attachments", "mime_type", "TEXT")
             __p_ensure_column(conn, "sam_attachments", "size_bytes", "INTEGER")
             __p_ensure_column(conn, "sam_attachments", "status", "TEXT")
@@ -6988,13 +6991,8 @@ def get_db() -> sqlite3.Connection:
             __p_ensure_column(conn, "sam_attachments", "downloaded_at", "TEXT")
             __p_ensure_column(conn, "sam_attachments", "created_at", "TEXT DEFAULT (datetime('now'))")
             __p_ensure_column(conn, "sam_attachments", "updated_at", "TEXT")
-            __p_ensure_column(conn, "sam_attachments", "file_url", "TEXT")
-            __p_ensure_column(conn, "sam_attachments", "file_type", "TEXT")
-            __p_ensure_column(conn, "sam_attachments", "last_updated", "TEXT")
-            __p_ensure_column(conn, "sam_attachments", "local_path", "TEXT")
         except Exception:
             pass
-
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rfp_documents(
