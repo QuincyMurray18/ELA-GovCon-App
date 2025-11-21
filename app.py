@@ -17974,6 +17974,149 @@ def run_rfp_analyzer(conn) -> None:
     except Exception:
         df_files = None
 
+    # AI attachments panel: summarize each document and ask questions
+    with st.expander("AI attachments: summarize each document and ask questions", expanded=False):
+        if df_files is None or getattr(df_files, "empty", True):
+            st.caption("No files are linked to this RFP yet. Upload or fetch attachments first.")
+        else:
+            try:
+                file_options = [str(x or "") for x in df_files["filename"].tolist()]
+            except Exception:
+                file_options = []
+            if not file_options:
+                st.caption("No filenames are available for this RFP yet.")
+            else:
+                try:
+                    rid_int = int(_ensure_selected_rfp_id(conn))
+                except Exception:
+                    rid_int = 0
+                sel_file = st.selectbox(
+                    "Attachment",
+                    options=file_options,
+                    index=0,
+                    key=f"rfp_att_file_{rid_int}",
+                    help="Pick a single attachment to summarize or ask questions about.",
+                )
+
+                st.caption("Use AI to get a quick summary of this attachment or answers about its content.")
+
+                # Summary button
+                if st.button("Summarize this attachment", key=f"rfp_att_summarize_{rid_int}"):
+                    ctx = ""
+                    if sel_file:
+                        try:
+                            df_ctx = _pd.read_sql_query(
+                                """
+                                SELECT text
+                                  FROM rfp_chunks
+                                 WHERE rfp_id = ? AND file_name = ?
+                                 ORDER BY page, chunk_idx
+                                 LIMIT 80;
+                                """
+                                ,
+                                conn,
+                                params=(int(rid_int), sel_file),
+                            )
+                        except Exception:
+                            df_ctx = _pd.DataFrame()
+                        if df_ctx is not None and not df_ctx.empty:
+                            try:
+                                ctx = "\n".join(df_ctx["text"].fillna("").tolist())[:12000]
+                            except Exception:
+                                ctx = ""
+                    if not ctx:
+                        st.warning("No extracted text found for this attachment yet. Try running One‑Click Analyze first.")
+                    else:
+                        ph = st.empty()
+                        acc = []
+                        prompt = (
+                            f"Attachment filename: {sel_file}\n\n"
+                            f"Source text (truncated):\n{ctx}\n\n"
+                            "Summarize the key requirements, deliverables, performance standards, and any dates or quantities. "
+                            "Use short bullet points suitable for a proposal writer."
+                        )
+                        try:
+                            for tok in ask_ai(
+                                [
+                                    {
+                                        "role": "system",
+                                        "content": (
+                                            "You are a federal contracting officer reviewing a single RFP attachment. "
+                                            "Write concise, factual bullets with no marketing language or fluff."
+                                        ),
+                                    },
+                                    {"role": "user", "content": prompt},
+                                ]
+                            ):
+                                acc.append(tok)
+                                ph.markdown("".join(acc))
+                        except Exception as e:
+                            st.error(f"AI summary failed: {e}")
+
+                # Q&A on attachment
+                q_key = f"rfp_att_q_{rid_int}"
+                q = st.text_input(
+                    "Question about this attachment",
+                    key=q_key,
+                    placeholder="Example: What inspection and acceptance criteria does this file specify?",
+                )
+                if st.button("Ask about this attachment", key=f"rfp_att_ask_{rid_int}"):
+                    q_clean = (q or "").strip()
+                    if not q_clean:
+                        st.warning("Enter a question first.")
+                    else:
+                        ctx = ""
+                        if sel_file:
+                            try:
+                                df_ctx = _pd.read_sql_query(
+                                    """
+                                    SELECT text
+                                      FROM rfp_chunks
+                                     WHERE rfp_id = ? AND file_name = ?
+                                     ORDER BY page, chunk_idx
+                                     LIMIT 80;
+                                    """
+                                    ,
+                                    conn,
+                                    params=(int(rid_int), sel_file),
+                                )
+                            except Exception:
+                                df_ctx = _pd.DataFrame()
+                            if df_ctx is not None and not df_ctx.empty:
+                                try:
+                                    ctx = "\n".join(df_ctx["text"].fillna("").tolist())[:12000]
+                                except Exception:
+                                    ctx = ""
+                        if not ctx:
+                            st.warning("No extracted text found for this attachment yet. Try running One‑Click Analyze first.")
+                        else:
+                            ph = st.empty()
+                            acc = []
+                            prompt = (
+                                f"Attachment filename: {sel_file}\n\n"
+                                f"Relevant text (truncated):\n{ctx}\n\n"
+                                f"Question: {q_clean}\n\n"
+                                "Answer as a federal contracting officer, citing only information that appears in this text. "
+                                "Use clear bullets or short paragraphs."
+                            )
+                            try:
+                                for tok in ask_ai(
+                                    [
+                                        {
+                                            "role": "system",
+                                            "content": (
+                                                "You are a federal contracting officer answering questions about one RFP attachment. "
+                                                "Be precise and avoid speculation or unsupported assumptions."
+                                            ),
+                                        },
+                                        {"role": "user", "content": prompt},
+                                    ]
+                                ):
+                                    acc.append(tok)
+                                    ph.markdown("".join(acc))
+                            except Exception as e:
+                                st.error(f"AI answer failed: {e}")
+
     pages: list[dict] = []
     if df_files is not None and not df_files.empty:
         for _, r in df_files.iterrows():
