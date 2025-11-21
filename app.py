@@ -9676,39 +9676,52 @@ def run_sam_watch(conn) -> None:
                                     _ask_rfp_analyzer_modal(row.to_dict())
                                 except Exception as _e:
                                     st.warning(f'Analyzer dialog unavailable: {_e}')
-# Push notice to Analyzer tab
-                        if st.button("Push to RFP Analyzer", key=f"push_to_rfp_{i}"):
+                    # Push notice to Analyzer tab: create RFP, fetch attachments, and open Analyzer
+                    if st.button("Create RFP + fetch attachments ▶", key=f"push_to_rfp_{i}"):
+                        # Normalize the notice dict so downstream helpers have context
+                        try:
+                            notice = row.to_dict()
+                        except Exception:
+                            notice = {}
+                        rid = None
+                        try:
+                            rid = _ensure_rfp_for_notice(conn, notice)
+                            st.session_state["current_rfp_id"] = int(rid)
+                        except Exception as _e:
+                            st.warning(f"RFP record not created: {_e}")
+
+                        attached_count = 0
+                        if rid:
                             try:
-                                notice = row.to_dict()
-                            except Exception:
-                                notice = {}
-                            rid = None
-                            try:
-                                rid = _ensure_rfp_for_notice(conn, notice)
-                                st.session_state["current_rfp_id"] = int(rid)
+                                # Phase 3 pipeline:
+                                # - sam_attachments: metadata + status
+                                # - rfp_documents: link attachments to this RFP
+                                # - rfp_files: actual file blobs via Phase 1 downloader
+                                attached_count = int(rfp_documents_fetch_from_sam(conn, int(rid), notice) or 0)
                             except Exception as _e:
-                                st.warning(f"RFP record not created: {_e}")
+                                st.warning(f"Attachment fetch/ingest error: {_e}")
+
+                        # Hand off into RFP Analyzer with this notice as context
+                        st.session_state["rfp_selected_notice"] = notice
+                        st.session_state["nav_target"] = "RFP Analyzer"
+                        if rid:
+                            if attached_count:
+                                st.success(f"RFP #{rid} ready. Fetched and ingested {attached_count} attachment(s) from SAM.gov.")
+                            else:
+                                st.info(f"RFP #{rid} ready. No attachments were ingested from SAM.gov.")
+                        else:
+                            st.info("Opening RFP Analyzer…")
+
+                        try:
+                            router("RFP Analyzer", conn); st.stop()
+                        except Exception:
                             try:
-                                _sam_u = str(notice.get("sam_url") or notice.get("SAM URL") or notice.get("samUrl") or notice.get("Notice URL") or "")
-                                _nid = _parse_sam_notice_id(_sam_u) if "_parse_sam_notice_id" in globals() else (notice.get("Notice ID") or _sam_u)
-                                if rid and _nid:
-                                    try:
-                                        _ = _phase1_fetch_sam_attachments(conn, int(rid), _nid)
-                                    except Exception:
-                                        pass
+                                st.rerun()
                             except Exception:
-                                pass
-                            st.session_state["rfp_selected_notice"] = notice
-                            st.session_state["nav_target"] = "RFP Analyzer"
-                            st.success("Opening RFP Analyzer…")
-                            try:
-                                router("RFP Analyzer", conn); st.stop()
-                            except Exception:
-                                try: st.rerun()
-                                except Exception:
-                                    st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
+                                st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
 
             # Selected details panel
+
 
             # Bottom pager
             bp1, bp2, bp3 = st.columns([1, 3, 1])
