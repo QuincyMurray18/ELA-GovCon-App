@@ -11875,6 +11875,13 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     )
     st.session_state["current_rfp_id"] = rfp_id
     ctx = _load_rfp_context_struct(conn, rfp_id)
+    rfp_naics = ""
+    try:
+        _rfp_df = ctx.get("rfp")
+        if isinstance(_rfp_df, pd.DataFrame) and "naics" in _rfp_df.columns and not _rfp_df.empty:
+            rfp_naics = str(_rfp_df["naics"].iloc[0] or "")
+    except Exception:
+        rfp_naics = ""
     # Load active proposal templates and show library controls
     try:
         tpl_df = pd.read_sql_query(
@@ -11887,6 +11894,9 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
 
     with st.expander("Template library (proposal templates)", expanded=False):
         x7_template_library_ui(conn)
+
+    with st.expander("Snippet library (reusable snippets)", expanded=False):
+        x7_snippet_library_ui(conn)
 
     left, right = st.columns([3, 2])
     with left:
@@ -12004,6 +12014,85 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                             st.session_state[f"pb_section_{sec}"] = _norm
                             st.session_state[ta_key] = _norm
                             st.success("Template applied.")
+                            st.rerun()
+
+            # Optional: insert reusable snippets into this section
+            with st.expander(f"Snippet library for {sec}", expanded=False):
+                categories = ["technical", "management", "past_performance", "risks"]
+                sec_lower = str(sec).lower()
+                default_cat = None
+                if "technical" in sec_lower:
+                    default_cat = "technical"
+                elif "management" in sec_lower:
+                    default_cat = "management"
+                elif "past performance" in sec_lower:
+                    default_cat = "past_performance"
+                elif "risk" in sec_lower:
+                    default_cat = "risks"
+
+                cat_index = 0
+                if default_cat in categories:
+                    try:
+                        cat_index = categories.index(default_cat)
+                    except Exception:
+                        cat_index = 0
+
+                snip_cat = st.selectbox(
+                    "Snippet category",
+                    options=categories,
+                    index=cat_index,
+                    key=f"pb_snip_cat_{sec}",
+                )
+
+                naics_default = rfp_naics or ""
+                snip_naics = st.text_input("NAICS filter", value=naics_default, key=f"pb_snip_naics_{sec}")
+                snip_work = st.text_input("Work type filter", value="", key=f"pb_snip_work_{sec}")
+
+                rows = []
+                try:
+                    from contextlib import closing as _closing
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            """
+                            SELECT id, name, category, naics, work_type, body
+                            FROM proposal_snippets
+                            WHERE is_active = 1
+                              AND category = ?
+                              AND (? = '' OR naics = ? OR naics LIKE '%' || ? || '%')
+                              AND (? = '' OR work_type = ? OR work_type LIKE '%' || ? || '%')
+                            ORDER BY created_at DESC
+                            LIMIT 100;
+                            """,
+                            (snip_cat, snip_naics, snip_naics, snip_naics, snip_work, snip_work, snip_work),
+                        )
+                        rows = cur.fetchall()
+                except Exception:
+                    rows = []
+
+                if not rows:
+                    st.caption("No matching snippets yet. Use the Snippet library controls above to add some.")
+                else:
+                    labels = {int(r[0]): f"#{int(r[0])} — {str(r[1] or '')[:80]}" for r in rows}
+                    ids = [int(r[0]) for r in rows]
+                    choice = st.selectbox(
+                        "Snippet to insert",
+                        options=[None] + ids,
+                        format_func=lambda sid: "Choose..." if sid is None else labels.get(int(sid), f"Snippet {int(sid)}"),
+                        key=f"pb_snip_sel_{sec}",
+                    )
+                    if choice is not None:
+                        body = ""
+                        for r in rows:
+                            if int(r[0]) == int(choice):
+                                body = r[5] or ""
+                                break
+                        if body:
+                            current = st.session_state.get(ta_key, "") or ""
+                            if current and not current.endswith("\n"):
+                                current = current + "\n\n"
+                            st.session_state[ta_key] = current + body
+                            st.session_state[f"pb_section_{sec}"] = st.session_state[ta_key]
+                            st.success("Snippet inserted.")
                             st.rerun()
 
             content_map[sec] = st.text_area(sec, height=200, key=ta_key)
@@ -21402,6 +21491,94 @@ def x6_save_links(conn: "sqlite3.Connection", rfp_id: int, mapping: list[tuple[i
     return int(saved)
 
 # ==== X.7 Proposal Builder v1 ====
+
+def x7_snippet_library_ui(conn: "sqlite3.Connection") -> None:
+    """Manage reusable proposal snippets that can be inserted into Proposal Builder sections.
+
+    Snippets are short blocks of text categorized by type and tagged by NAICS and work type.
+    """
+    from contextlib import closing as _closing
+
+    st.markdown("**Snippet library**")
+
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT id, name, category, naics, work_type, is_active, created_at
+            FROM proposal_snippets
+            ORDER BY created_at DESC;
+            """,
+            conn,
+            params=(),
+        )
+    except Exception:
+        df = pd.DataFrame(columns=["id", "name", "category", "naics", "work_type", "is_active", "created_at"])
+
+    if df.empty:
+        st.caption("No snippets saved yet.")
+    else:
+        st.dataframe(df)
+
+    st.markdown("### Add or edit snippet")
+
+    categories = ["technical", "management", "past_performance", "risks"]
+
+    with st.form("pb_snippet_new"):
+        name = st.text_input("Snippet name", key="pb_snip_name")
+        category = st.selectbox("Category", categories, key="pb_snip_category")
+        naics = st.text_input("NAICS code tag", key="pb_snip_naics")
+        work_type = st.text_input("Work type tag", key="pb_snip_work_type", help="Short label such as janitorial, grounds, training")
+        body = st.text_area("Snippet body", height=160, key="pb_snip_body")
+        submitted = st.form_submit_button("Save snippet")
+
+        if submitted:
+            if not name.strip():
+                st.warning("Name is required.")
+            elif not body.strip():
+                st.warning("Body is required.")
+            else:
+                try:
+                    current_user = None
+                    try:
+                        current_user = get_current_user_name()
+                    except Exception:
+                        current_user = None
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO proposal_snippets(name, category, naics, work_type, body, owner, is_active)
+                            VALUES(?,?,?,?,?,?,1);
+                            """,
+                            (name.strip(), category, naics.strip() or None, work_type.strip() or None, body.strip(), current_user),
+                        )
+                        conn.commit()
+                    st.success("Snippet saved.")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Could not save snippet: {_e}")
+
+    if not df.empty:
+        with st.expander("Archive snippet", expanded=False):
+            to_archive = st.selectbox(
+                "Snippet to archive",
+                options=[None] + df["id"].tolist(),
+                format_func=lambda sid: "Choose..." if sid is None else f"#{sid} — {df.loc[df['id']==sid,'name'].values[0]}",
+                key="pb_snip_archive_id",
+            )
+            if st.button("Archive selected snippet", disabled=to_archive is None, key="pb_snip_archive_btn"):
+                if to_archive is not None:
+                    try:
+                        with _closing(conn.cursor()) as cur:
+                            cur.execute(
+                                "UPDATE proposal_snippets SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                                (int(to_archive),),
+                            )
+                            conn.commit()
+                        st.success("Snippet archived.")
+                        st.rerun()
+                    except Exception as _e:
+                        st.error(f"Could not archive snippet: {_e}")
+
 def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
     from contextlib import closing as _closing
     with _closing(conn.cursor()) as cur:
@@ -21472,7 +21649,25 @@ def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
             );
             """
         )
-    conn.commit()
+    
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proposal_snippets(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                naics TEXT,
+                work_type TEXT,
+                body TEXT NOT NULL,
+                owner TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+conn.commit()
 
 
 def x7_render_template_text(
