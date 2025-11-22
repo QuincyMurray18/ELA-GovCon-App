@@ -2,6 +2,19 @@ def x7_snippet_library_ui(conn):
     """Fallback stub; real implementation is defined later in the file."""
     return None
 
+def x7_render_template_text(
+    conn,
+    template_id,
+    rfp_id=None,
+    deal_id=None,
+    manual_values=None,
+):
+    """Fallback stub; real implementation is defined later in the file.
+    This prevents NameError if the advanced helper has not been wired in yet.
+    """
+    return ""
+
+
 # ---- Global owner context guard ----
 try:
     import streamlit as _st
