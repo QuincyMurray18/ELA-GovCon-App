@@ -2,17 +2,161 @@ def x7_snippet_library_ui(conn):
     """Fallback stub; real implementation is defined later in the file."""
     return None
 
+
+
+
 def x7_render_template_text(
-    conn,
-    template_id,
-    rfp_id=None,
-    deal_id=None,
-    manual_values=None,
-):
-    """Fallback stub; real implementation is defined later in the file.
-    This prevents NameError if the advanced helper has not been wired in yet.
+    conn: "sqlite3.Connection",
+    template_id: int,
+    rfp_id: int | None = None,
+    deal_id: int | None = None,
+    manual_values: dict | None = None,
+) -> str:
     """
-    return ""
+    Render a proposal template by id, expanding any {{TOKENS}} using
+    deal data, RFP Analyzer data, org profile, and manual overrides.
+    """
+    from contextlib import closing as _closing
+    import re as _re
+
+    manual_values = manual_values or {}
+
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "SELECT body FROM proposal_templates WHERE id = ?;",
+            (int(template_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return ""
+        body = row[0] or ""
+
+        # Collect token names like {{TOKEN_NAME}}
+        token_names = set(_re.findall(r"{{\s*([A-Z0-9_]+)\s*}}", body))
+        if not token_names:
+            return body
+
+        # Load token metadata
+        cur.execute(
+            """
+            SELECT token_name, source_type, source_expr, default_value
+            FROM proposal_template_tokens
+            WHERE template_id = ?;
+            """,
+            (int(template_id),),
+        )
+        meta_rows = cur.fetchall()
+        meta_by_name: dict[str, tuple[str, str | None, str | None]] = {}
+        for tname, source_type, source_expr, default_value in meta_rows:
+            if not tname:
+                continue
+            meta_by_name[str(tname).upper()] = (
+                str(source_type or "manual"),
+                source_expr,
+                default_value,
+            )
+
+        deal_row = None
+        deal_cols: list[str] = []
+        rfp_row = None
+        rfp_cols: list[str] = []
+        org_row = None
+        org_cols: list[str] = []
+
+        if deal_id is not None:
+            try:
+                cur.execute("SELECT * FROM deals WHERE id = ?;", (int(deal_id),))
+                deal_row = cur.fetchone()
+                if deal_row is not None:
+                    deal_cols = [d[0] for d in cur.description]
+            except Exception:
+                deal_row = None
+                deal_cols = []
+
+        if rfp_id is not None and rfp_id != 0:
+            # Try rfps first, then rfps_t as a fallback.
+            try:
+                cur.execute("SELECT * FROM rfps WHERE id = ?;", (int(rfp_id),))
+                rfp_row = cur.fetchone()
+                if rfp_row is not None:
+                    rfp_cols = [d[0] for d in cur.description]
+            except Exception:
+                rfp_row = None
+                rfp_cols = []
+            if rfp_row is None:
+                try:
+                    cur.execute("SELECT * FROM rfps_t WHERE id = ?;", (int(rfp_id),))
+                    rfp_row = cur.fetchone()
+                    if rfp_row is not None:
+                        rfp_cols = [d[0] for d in cur.description]
+                except Exception:
+                    rfp_row = None
+                    rfp_cols = []
+
+        try:
+            cur.execute("SELECT * FROM org_profile WHERE id = 1;")
+            org_row = cur.fetchone()
+            if org_row is not None:
+                org_cols = [d[0] for d in cur.description]
+        except Exception:
+            org_row = None
+            org_cols = []
+
+    def _resolve_token(name: str) -> str:
+        # Manual values override everything.
+        if name in manual_values:
+            v = manual_values.get(name)
+            return "" if v is None else str(v)
+
+        meta = meta_by_name.get(name)
+        if not meta:
+            # Unknown token: try manual again (case-insensitive) then blank.
+            for k, v in manual_values.items():
+                if k.upper() == name:
+                    return "" if v is None else str(v)
+            return ""
+
+        source_type, source_expr, default_value = meta
+        source_type = (source_type or "manual").lower()
+        source_expr = (source_expr or "").strip()
+        default_value = default_value or ""
+
+        try:
+            if source_type == "deal" and deal_row is not None and deal_cols:
+                if source_expr and source_expr in deal_cols:
+                    idx = deal_cols.index(source_expr)
+                    val = deal_row[idx]
+                    return "" if val is None else str(val)
+            elif source_type == "rfp" and rfp_row is not None and rfp_cols:
+                if source_expr and source_expr in rfp_cols:
+                    idx = rfp_cols.index(source_expr)
+                    val = rfp_row[idx]
+                    return "" if val is None else str(val)
+            elif source_type == "org" and org_row is not None and org_cols:
+                if source_expr and source_expr in org_cols:
+                    idx = org_cols.index(source_expr)
+                    val = org_row[idx]
+                    return "" if val is None else str(val)
+            elif source_type in ("manual", "static"):
+                # For manual/static tokens, fall back to default.
+                return default_value
+        except Exception:
+            # On any lookup failure, fall back to default_value.
+            return default_value
+
+        return default_value
+
+    def _repl(match: "_re.Match") -> str:
+        tname = match.group(1) or ""
+        tname = tname.strip().upper()
+        if not tname:
+            return ""
+        return _resolve_token(tname)
+
+    return _re.sub(r"{{\s*([A-Z0-9_]+)\s*}}", _repl, body)
+
+
+
 
 
 # ---- Global owner context guard ----
@@ -25299,156 +25443,6 @@ def _ensure_x7_schema(conn: "sqlite3.Connection") -> None:
 
         conn.commit()
 
-
-def x7_render_template_text(
-    conn: "sqlite3.Connection",
-    template_id: int,
-    rfp_id: int | None = None,
-    deal_id: int | None = None,
-    manual_values: dict | None = None,
-) -> str:
-    """
-    Render a proposal template by id, expanding any {{TOKENS}} using
-    deal data, RFP Analyzer data, org profile, and manual overrides.
-    """
-    from contextlib import closing as _closing
-    import re as _re
-
-    manual_values = manual_values or {}
-
-    with _closing(conn.cursor()) as cur:
-        cur.execute(
-            "SELECT body FROM proposal_templates WHERE id = ?;",
-            (int(template_id),),
-        )
-        row = cur.fetchone()
-        if not row:
-            return ""
-        body = row[0] or ""
-
-        # Collect token names like {{TOKEN_NAME}}
-        token_names = set(_re.findall(r"{{\s*([A-Z0-9_]+)\s*}}", body))
-        if not token_names:
-            return body
-
-        # Load token metadata
-        cur.execute(
-            """
-            SELECT token_name, source_type, source_expr, default_value
-            FROM proposal_template_tokens
-            WHERE template_id = ?;
-            """,
-            (int(template_id),),
-        )
-        meta_rows = cur.fetchall()
-        meta_by_name: dict[str, tuple[str, str | None, str | None]] = {}
-        for tname, source_type, source_expr, default_value in meta_rows:
-            if not tname:
-                continue
-            meta_by_name[str(tname).upper()] = (
-                str(source_type or "manual"),
-                source_expr,
-                default_value,
-            )
-
-        deal_row = None
-        deal_cols: list[str] = []
-        rfp_row = None
-        rfp_cols: list[str] = []
-        org_row = None
-        org_cols: list[str] = []
-
-        if deal_id is not None:
-            try:
-                cur.execute("SELECT * FROM deals WHERE id = ?;", (int(deal_id),))
-                deal_row = cur.fetchone()
-                if deal_row is not None:
-                    deal_cols = [d[0] for d in cur.description]
-            except Exception:
-                deal_row = None
-                deal_cols = []
-
-        if rfp_id is not None and rfp_id != 0:
-            # Try rfps first, then rfps_t as a fallback.
-            try:
-                cur.execute("SELECT * FROM rfps WHERE id = ?;", (int(rfp_id),))
-                rfp_row = cur.fetchone()
-                if rfp_row is not None:
-                    rfp_cols = [d[0] for d in cur.description]
-            except Exception:
-                rfp_row = None
-                rfp_cols = []
-            if rfp_row is None:
-                try:
-                    cur.execute("SELECT * FROM rfps_t WHERE id = ?;", (int(rfp_id),))
-                    rfp_row = cur.fetchone()
-                    if rfp_row is not None:
-                        rfp_cols = [d[0] for d in cur.description]
-                except Exception:
-                    rfp_row = None
-                    rfp_cols = []
-
-        try:
-            cur.execute("SELECT * FROM org_profile WHERE id = 1;")
-            org_row = cur.fetchone()
-            if org_row is not None:
-                org_cols = [d[0] for d in cur.description]
-        except Exception:
-            org_row = None
-            org_cols = []
-
-    def _resolve_token(name: str) -> str:
-        # Manual values override everything.
-        if name in manual_values:
-            v = manual_values.get(name)
-            return "" if v is None else str(v)
-
-        meta = meta_by_name.get(name)
-        if not meta:
-            # Unknown token: try manual again (case-insensitive) then blank.
-            for k, v in manual_values.items():
-                if k.upper() == name:
-                    return "" if v is None else str(v)
-            return ""
-
-        source_type, source_expr, default_value = meta
-        source_type = (source_type or "manual").lower()
-        source_expr = (source_expr or "").strip()
-        default_value = default_value or ""
-
-        try:
-            if source_type == "deal" and deal_row is not None and deal_cols:
-                if source_expr and source_expr in deal_cols:
-                    idx = deal_cols.index(source_expr)
-                    val = deal_row[idx]
-                    return "" if val is None else str(val)
-            elif source_type == "rfp" and rfp_row is not None and rfp_cols:
-                if source_expr and source_expr in rfp_cols:
-                    idx = rfp_cols.index(source_expr)
-                    val = rfp_row[idx]
-                    return "" if val is None else str(val)
-            elif source_type == "org" and org_row is not None and org_cols:
-                if source_expr and source_expr in org_cols:
-                    idx = org_cols.index(source_expr)
-                    val = org_row[idx]
-                    return "" if val is None else str(val)
-            elif source_type in ("manual", "static"):
-                # For manual/static tokens, fall back to default.
-                return default_value
-        except Exception:
-            # On any lookup failure, fall back to default_value.
-            return default_value
-
-        return default_value
-
-    def _repl(match: "_re.Match") -> str:
-        tname = match.group(1) or ""
-        tname = tname.strip().upper()
-        if not tname:
-            return ""
-        return _resolve_token(tname)
-
-    return _re.sub(r"{{\s*([A-Z0-9_]+)\s*}}", _repl, body)
 
 
 def x7_create_proposal_from_outline(conn: "sqlite3.Connection", rfp_id: int, title: str | None = None) -> int:
