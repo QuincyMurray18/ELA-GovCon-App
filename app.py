@@ -15685,7 +15685,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         )
                         conn.commit()
                     st.success("Task created.")
-                    st.experimental_rerun()
+                    st.rerun()
 
         with f1:
             tf_status = st.multiselect("Status", ["Open","In Progress","Done"], default=["Open","In Progress"])
@@ -16475,7 +16475,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 )
                                 conn.commit()
                             st.success("Updated deal primary contact.")
-                            st.experimental_rerun()
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Failed to update primary contact: {e}")
                 # Quick follow-up tasks for this deal
@@ -17000,7 +17000,7 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
                 conn.commit()
                 st.success("Fast RFQ quote created.")
                 try:
-                    st.experimental_rerun()
+                    st.rerun()
                 except Exception:
                     pass
 
