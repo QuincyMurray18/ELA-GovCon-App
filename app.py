@@ -5,6 +5,17 @@ def x7_snippet_library_ui(conn):
 # ---- Global owner context guard ----
 try:
     import streamlit as _st
+    # Backwards/forwards-compatible rerun alias so older/newer Streamlit
+    # builds both expose st.rerun and st.experimental_rerun.
+    try:
+        if hasattr(_st, "rerun") and not hasattr(_st, "experimental_rerun"):
+            _st.experimental_rerun = _st.rerun  # type: ignore[attr-defined]
+        elif hasattr(_st, "experimental_rerun") and not hasattr(_st, "rerun"):
+            _st.rerun = _st.experimental_rerun  # type: ignore[attr-defined]
+    except Exception:
+        # Best-effort; app should still run even if aliasing fails.
+        pass
+
     if "deal_owner_ctx" not in _st.session_state:
         # Default to the first known user so views are user-isolated by default.
         _st.session_state["deal_owner_ctx"] = "Quincy"
