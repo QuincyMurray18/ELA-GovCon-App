@@ -20540,6 +20540,17 @@ def render_outreach_templates(conn):
                 st.error("Name required")
             else:
                 email_template_upsert(conn, name, subject or "", sig_html or "", tid)
+                # Keep Outreach and Mail Merge fields in sync immediately after save
+                try:
+                    st.session_state["tpl_name"] = name or ""
+                    st.session_state["tpl_subject"] = subject or ""
+                    st.session_state["tpl_html"] = sig_html or ""
+                    st.session_state["outreach_subject"] = subject or ""
+                    st.session_state["outreach_html"] = sig_html or ""
+                    st.session_state["o3_subject"] = subject or ""
+                    st.session_state["o3_body"] = sig_html or ""
+                except Exception:
+                    pass
                 st.success("Saved")
     with c2:
         if (tid is not None) and st.button("Duplicate"):
@@ -22389,6 +22400,7 @@ def _o6_wrap_o3_send_batch():
         sig_html = kwargs.get("sig_html")
         test_only = kwargs.get("test_only", False)
         max_send = kwargs.get("max_send", 500)
+        attachments = kwargs.get("attachments")
 
         # Positional fallbacks
         if conn is None or sender is None or rows is None or subj is None or sig_html is None:
@@ -22502,11 +22514,11 @@ def _o6_wrap_o3_send_batch():
                 subj_i = str(r.get(columns.get("subject"), subj) or "")
                 html_i = str(r.get(columns.get("sig_html"), sig_html) or "")
                 # Build single-row frame to keep orig API
-                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj_i, sig_html=html_i, test_only=test_only, max_send=1)
+                orig(conn, sender, rows=_pd.DataFrame([r]), subj=subj_i, sig_html=html_i, test_only=test_only, max_send=1, attachments=attachments)
                 total += 1
             return total
 
-        result = orig(conn, sender, rows, subj, sig_html, test_only=test_only, max_send=max_send)
+        result = orig(conn, sender, rows, subj, sig_html, test_only=test_only, max_send=max_send, attachments=attachments)
         # Persist throttle counters back to outreach_sender_accounts
         if not test_only and throttle_info and conn is not None:
             try:
