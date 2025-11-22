@@ -16609,7 +16609,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                     with b2:
                         if st.button("Delete", key=f"fm_row_del_{int(r['id'])}"):
                             with closing(conn.cursor()) as cur:
-                                cur.execute("DELETE FROM files_t WHERE id=?;", (int(r["id"]),))
+                                cur.execute("DELETE FROM files WHERE id=?;", (int(r["id"]),))
                                 conn.commit()
                             try:
                                 if r.get("path") and os.path.exists(r["path"]):
