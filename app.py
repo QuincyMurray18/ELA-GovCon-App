@@ -22706,6 +22706,7 @@ def _s1d_place_details(pid: str, key: str):
     except Exception:
         return {}
 
+
 def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
 
     # Determine writable table and ensure schema
@@ -22716,9 +22717,28 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
     saved = 0
     with conn:
         for r in rows or []:
-            cur = conn.execute(f"""
-                INSERT INTO {tbl}(source, place_id, name, email, phone, website, address, city, state, zip, naics, notes, lat, lon, created_at)
-                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            cur = conn.execute(
+                f"""
+                INSERT INTO {tbl}(
+                    source,
+                    place_id,
+                    name,
+                    email,
+                    phone,
+                    website,
+                    address,
+                    city,
+                    state,
+                    zip,
+                    naics,
+                    notes,
+                    lat,
+                    lon,
+                    created_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')
+                )
                 ON CONFLICT(place_id) DO UPDATE SET
                     name=COALESCE(excluded.name, {tbl}.name),
                     email=COALESCE(excluded.email, {tbl}.email),
@@ -22729,27 +22749,33 @@ def _s1d_save_new_vendors(conn, rows: List[Dict[str,Any]]):
                     state=COALESCE(excluded.state, {tbl}.state),
                     zip=COALESCE(excluded.zip, {tbl}.zip),
                     naics=COALESCE(excluded.naics, {tbl}.naics),
-                    notes=CASE WHEN length({tbl}.notes)>0 THEN {tbl}.notes ELSE COALESCE(excluded.notes, {tbl}.notes) END,
+                    notes=CASE
+                        WHEN length({tbl}.notes) > 0 THEN {tbl}.notes
+                        ELSE COALESCE(excluded.notes, {tbl}.notes)
+                    END,
                     lat=COALESCE(excluded.lat, {tbl}.lat),
                     lon=COALESCE(excluded.lon, {tbl}.lon)
-            """, (
-                str(r.get("source","") or ""),
-                str(r.get("place_id","") or ""),
-                str(r.get("name","") or ""),
-                str(r.get("email","") or ""),
-                str(r.get("phone","") or ""),
-                str(r.get("website","") or ""),
-                str(r.get("address","") or ""),
-                str(r.get("city","") or ""),
-                str(r.get("state","") or ""),
-                str(r.get("zip","") or ""),
-                str(r.get("naics_guess","") or r.get("naics","") or ""),
-                str(r.get("notes","") or ""),
-                float(r.get("lat") or 0) if str(r.get("lat") or "").strip() else None,
-                float(r.get("lon") or 0) if str(r.get("lon") or "").strip() else None,
-            ))
+                """,
+                (
+                    str(r.get("source", "") or ""),
+                    str(r.get("place_id", "") or ""),
+                    str(r.get("name", "") or ""),
+                    str(r.get("email", "") or ""),
+                    str(r.get("phone", "") or ""),
+                    str(r.get("website", "") or ""),
+                    str(r.get("address", "") or ""),
+                    str(r.get("city", "") or ""),
+                    str(r.get("state", "") or ""),
+                    str(r.get("zip", "") or ""),
+                    str(r.get("naics_guess", "") or r.get("naics", "") or ""),
+                    str(r.get("notes", "") or ""),
+                    float(r.get("lat") or 0) if str(r.get("lat") or "").strip() else None,
+                    float(r.get("lon") or 0) if str(r.get("lon") or "").strip() else None,
+                ),
+            )
             saved += 1
     return saved
+
 
 def _s1d_render_from_cache(conn, df):
     import streamlit as st
