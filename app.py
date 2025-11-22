@@ -14993,7 +14993,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                         for _, r in df.iterrows():
                             cur.execute("""
                                 INSERT INTO past_perf(project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes)
-                                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?,?);
+                                VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?);
                             """, (
                                 str(r.get("project_title",""))[:200],
                                 str(r.get("customer",""))[:200],
@@ -15049,7 +15049,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
                 with closing(conn.cursor()) as cur:
                     cur.execute("""
                         INSERT INTO past_perf(project_title, customer, contract_no, naics, role, pop_start, pop_end, value, scope, results, cpars_rating, contact_name, contact_email, contact_phone, keywords, notes)
-                        VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?,?);
+                        VALUES (?, ?, ?, ?, ?,?,?,?,?,?,?,?,?,?,?,?);
                     """, (project_title.strip(), customer.strip(), contract_no.strip(), naics.strip(), role.strip(), pop_start.strip(), pop_end.strip(), v, scope.strip(), results.strip(), cpars_rating.strip(), contact_name.strip(), contact_email.strip(), contact_phone.strip(), keywords.strip(), notes.strip()))
                     conn.commit()
                 st.success("Saved project.")
