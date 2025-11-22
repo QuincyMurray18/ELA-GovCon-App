@@ -8725,9 +8725,24 @@ def data_save_rfp_uploads(conn, rfp_id: int, uploads) -> int:
 
 # === Service layer: RFP Analyzer =============================================
 def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploads):
-    """Create an RFP record and ingest any uploaded files. Returns (rfp_id, saved_count)."""
+    """Create an RFP record, persist any uploaded files, and immediately run ingest/analyze.
+
+    Returns (rfp_id, saved_count). If analysis fails, the exception is logged and re-raised
+    so the caller can surface a clear error in the UI.
+    """
     new_id = data_insert_rfp(conn, title, solnum, sam_url)
     saved = data_save_rfp_uploads(conn, new_id, uploads)
+    # Kick off the same ingest/analyze pipeline used by the One-Page 'Ingest & Analyze' button
+    if saved:
+        try:
+            _one_click_analyze(conn, int(new_id), sam_url)
+        except Exception as e:
+            try:
+                logger.exception("svc_create_rfp_and_ingest: analyze step failed")
+            except Exception:
+                pass
+            # Re-raise so the UI handler can show a useful error to the user
+            raise
     return new_id, saved
 
 # === End RFP data/service helpers ============================================
