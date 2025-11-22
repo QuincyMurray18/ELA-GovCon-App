@@ -14559,6 +14559,16 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                 else:
                     st.caption("No past performance jobs logged yet.")
 
+            # Delete vendor
+            if st.button("Delete vendor", key=f"vendor_del_{vid}"):
+                try:
+                    with conn:
+                        conn.execute("DELETE FROM vendors WHERE id=?", (vid,))
+                    st.success("Vendor deleted")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Delete failed: {e}")
+
             if chk:
                 selected_ids.append(int(row["id"]))
         c1, c2 = st.columns([2, 2])
@@ -23261,6 +23271,16 @@ def render_subfinder_s1d(conn):
                 web = st.text_input("Website", key=f"{k}_web", value=str(r.get('website') or ""))
                 if any([em != str(r.get('email') or ""), ph != str(r.get('phone') or ""), web != str(r.get('website') or "")]):
                     changed.append((em, ph, web, int(r["id"])))
+
+                # Delete vendor from quick edit
+                if st.button("Delete", key=f"{k}_del"):
+                    try:
+                        with conn:
+                            conn.execute(f"DELETE FROM {write_tbl} WHERE id=?", (int(r["id"]),))
+                        st.success("Vendor deleted")
+                        st.rerun()
+                    except Exception as e:
+                        st.warning(f"Delete failed: {e}")
         if st.button("Save changes", key="s1d_vendor_cards_save"):
             if not changed:
                 st.info("No changes detected")
