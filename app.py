@@ -14600,17 +14600,26 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
     msg["From"] = f"{cfg.get('from_name') or ''} <{cfg['from_email']}>"
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(html_body, "sig_html"))
+    # Send as proper HTML body
+    msg.attach(MIMEText(html_body or "", "html", "utf-8"))
+
+    # Allow only common, generally safe attachment types
+    safe_exts = {".pdf", ".doc", ".docx", ".txt", ".rtf", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".gif"}
 
     for path in attachments or []:
         try:
+            ext = (os.path.splitext(path)[1] or "").lower()
+            if ext and ext not in safe_exts:
+                # Skip potentially unsafe attachment types to reduce provider virus flags
+                continue
             with open(path, "rb") as f:
                 part = MIMEBase('application', 'octet-stream')
                 part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(path)}"')
-                msg.attach(part)
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(path)}"')
+            msg.attach(part)
         except Exception:
+            # Ignore per-file issues so one bad attachment does not block the entire send
             pass
 
     try:
@@ -14623,6 +14632,7 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
         return True, "sent"
     except Exception as e:
         return False, str(e)
+
 
 def _merge_text(t: str, vendor: Dict[str, Any], notice: Dict[str, Any]) -> str:
     repl = {
@@ -21430,8 +21440,13 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                         from email import encoders as _enc
                         import os as _os
 
+                        safe_exts = {".pdf", ".doc", ".docx", ".txt", ".rtf", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".gif"}
                         for _ap in attachments:
                             try:
+                                _ext = (_os.path.splitext(_ap)[1] or "").lower()
+                                if _ext and _ext not in safe_exts:
+                                    # Skip potentially unsafe attachment types
+                                    continue
                                 with open(_ap, "rb") as _f:
                                     part = _MBase("application", "octet-stream")
                                     part.set_payload(_f.read())
