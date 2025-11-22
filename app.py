@@ -19691,6 +19691,57 @@ def run_help_docs(conn: "sqlite3.Connection") -> None:
     )
 
 
+
+def ensure_pb_templates_schema(conn):
+    """Ensure proposal_templates and proposal_template_tokens tables exist."""
+    with _closing(conn.cursor()) as cur:
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_templates (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER DEFAULT 1,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    template_type TEXT,
+                    default_section TEXT,
+                    body TEXT,
+                    owner TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_proposal_templates_tenant "
+                "ON proposal_templates(tenant_id);"
+            )
+        except Exception as e:
+            _debug_log(conn, "schema.proposal_templates", e)
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_template_tokens (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER DEFAULT 1,
+                    template_id INTEGER NOT NULL,
+                    token_name TEXT NOT NULL,
+                    source_type TEXT,
+                    source_expr TEXT,
+                    default_value TEXT,
+                    description TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(template_id) REFERENCES proposal_templates(id)
+                );
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_template_tokens_template "
+                "ON proposal_template_tokens(template_id);"
+            )
+        except Exception as e:
+            _debug_log(conn, "schema.proposal_template_tokens", e)
+
 def main() -> None:
     # Phase 1 re-init inside main
     # Bootstrap UI and sidebar
@@ -19715,6 +19766,7 @@ def main() -> None:
     _force_safe_pd_read()
     try:
         ensure_unified_schemas(conn)
+        ensure_pb_templates_schema(conn)
     except Exception as e:
         _debug_log(conn, 'main.ensure_unified_schemas', e)
     global _O4_CONN
