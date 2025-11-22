@@ -1190,14 +1190,15 @@ def _phase3_analyzer_inline(conn):
     import streamlit as st
     from datetime import datetime
 
-    # Safety: ensure Phase 3 RFP schema exists (kept light for performance)
+    # Safety: ensure required helpers exist
     try:
-        _ensure_phase3_schema(conn)  # type: ignore[name-defined]
+        _ensure_phase2_schema(conn)
     except Exception as e:
-        try:
-            st.info(f"Phase 3 schema: {e}")
-        except Exception:
-            pass
+        st.info(f"Phase 2 schema: {e}")
+    if ' _ensure_phase3_schema' not in globals():
+        pass  # defined elsewhere in this file in Phase 3 block
+    else:
+        _ensure_phase3_schema(conn)
 
     st.markdown("### 🧠 Phase 3 — One‑Page Analyzer")
     notice = st.session_state.get("rfp_selected_notice") or {}
@@ -1577,7 +1578,7 @@ def _backup_db_sql(conn, dest_dir=None):
         return None
 
 def phase2_5_bootstrap(conn):
-    """Run once per session: ensure meta table, schema, and keep checks light so the app stays fast."""
+    """Run once per session: ensure meta table, schema, and create a small backup."""
     if st.session_state.get("_p25_bootstrapped"):
         return
     try:
@@ -1587,12 +1588,9 @@ def phase2_5_bootstrap(conn):
     try:
         _ensure_phase2_schema(conn)
     except Exception as e:
-        try:
-            st.warning(f"Schema check failed (Phase 2.5): {e}")
-        except Exception:
-            pass
-    # Removed automatic full SQL backup here to avoid slowing down SAM Watch.
-    # You can still run backups explicitly from the Backup & Data page.
+        try: st.warning(f"Schema check failed (Phase 2.5): {e}")
+        except Exception: pass
+    _backup_db_sql(conn)
     st.session_state["_p25_bootstrapped"] = True
 
 def _inject_phase25_css():
@@ -16548,7 +16546,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                         with closing(conn.cursor()) as cur:
                             cur.execute("""
                                 INSERT INTO files(owner_type, owner_id, filename, path, size, mime, tags, notes, uploaded_at)
-                                VALUES (?, ?, ?, ?, ?,?,?,?,?,datetime('now'));
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));
                             """, (
                                 owner_type, int(owner_id) if owner_id else None, f.name, pth, f.size, _detect_mime(f.name),
                                 tags.strip(), notes.strip()
