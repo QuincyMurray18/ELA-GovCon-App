@@ -21975,7 +21975,7 @@ def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str 
             for _, row in steps.iterrows():
                 eta = base + __import__("datetime").timedelta(hours=int(row["delay_hours"] or 0))
                 conn.execute("""INSERT INTO outreach_schedules(seq_id, step_no, to_email, send_at, status, subject, body_html)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), row["subject"] or "", row["body_html"] or ""))
+                                VALUES (?, ?, ?, ?, ?, ?, ?)""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), "queued", row["subject"] or "", row["body_html"] or ""))
                 base = eta
                 count += 1
     return count
