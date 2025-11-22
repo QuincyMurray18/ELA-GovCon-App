@@ -4245,6 +4245,7 @@ try:
 except Exception:
     mathquests = None
 import smtplib
+import mimetypes
 import streamlit as st
 
 # --- DB helpers: ensure column exists ---
@@ -14592,6 +14593,14 @@ def _smtp_settings() -> Dict[str, Any]:
     return out
 
 def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: List[str]) -> Tuple[bool, str]:
+    """
+    Simple SMTP helper used by some outreach flows.
+
+    This version:
+    - Sends a standard text/html body.
+    - Attaches files with a guessed MIME type instead of always application/octet-stream.
+    - Skips extensions outside a conservative safelist.
+    """
     cfg = _smtp_settings()
     if not all([cfg.get("host"), cfg.get("port"), cfg.get("username"), cfg.get("password"), cfg.get("from_email")]):
         return False, "Missing SMTP settings in secrets"
@@ -14599,24 +14608,55 @@ def send_email_smtp(to_email: str, subject: str, html_body: str, attachments: Li
     msg = MIMEMultipart()
     msg["From"] = f"{cfg.get('from_name') or ''} <{cfg['from_email']}>"
     msg["To"] = to_email
-    msg["Subject"] = subject
-    # Send as proper HTML body
+    msg["Subject"] = subject or ""
+
+    # Standard HTML body
     msg.attach(MIMEText(html_body or "", "html", "utf-8"))
 
     # Allow only common, generally safe attachment types
-    safe_exts = {".pdf", ".doc", ".docx", ".txt", ".rtf", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".gif"}
+    safe_exts = {
+        ".pdf", ".doc", ".docx", ".txt", ".rtf",
+        ".xls", ".xlsx", ".csv",
+        ".png", ".jpg", ".jpeg", ".gif"
+    }
 
     for path in attachments or []:
         try:
+            if not path:
+                continue
             ext = (os.path.splitext(path)[1] or "").lower()
             if ext and ext not in safe_exts:
                 # Skip potentially unsafe attachment types to reduce provider virus flags
                 continue
+
+            ctype, encoding = mimetypes.guess_type(path)
+            if not ctype:
+                ctype = "application/octet-stream"
+            maintype, subtype = ctype.split("/", 1)
+
             with open(path, "rb") as f:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(f.read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(path)}"')
+                file_data = f.read()
+
+            # Choose a MIME class based on the maintype
+            if maintype == "text":
+                try:
+                    part = MIMEText(file_data.decode("utf-8", "ignore"), subtype or "plain", "utf-8")
+                except Exception:
+                    part = MIMEBase(maintype, subtype)
+                    part.set_payload(file_data)
+                    encoders.encode_base64(part)
+            elif maintype == "image":
+                from email.mime.image import MIMEImage
+                part = MIMEImage(file_data, _subtype=subtype or None)
+            elif maintype == "application":
+                from email.mime.application import MIMEApplication
+                part = MIMEApplication(file_data, _subtype=subtype or "octet-stream")
+            else:
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(file_data)
+                encoders.encode_base64(part)
+
+            part.add_header("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"')
             msg.attach(part)
         except Exception:
             # Ignore per-file issues so one bad attachment does not block the entire send
@@ -21433,24 +21473,57 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                 except Exception:
                     pass
 
+
                 # Attach files if provided
                 try:
                     if attachments:
+                        import mimetypes as _mt
                         from email.mime.base import MIMEBase as _MBase
+                        from email.mime.application import MIMEApplication as _MApp
+                        from email.mime.image import MIMEImage as _MImg
+                        from email.mime.text import MIMEText as _MTxt
                         from email import encoders as _enc
                         import os as _os
 
-                        safe_exts = {".pdf", ".doc", ".docx", ".txt", ".rtf", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".gif"}
+                        safe_exts = {
+                            ".pdf", ".doc", ".docx", ".txt", ".rtf",
+                            ".xls", ".xlsx", ".csv",
+                            ".png", ".jpg", ".jpeg", ".gif"
+                        }
+
                         for _ap in attachments:
                             try:
+                                if not _ap:
+                                    continue
                                 _ext = (_os.path.splitext(_ap)[1] or "").lower()
                                 if _ext and _ext not in safe_exts:
                                     # Skip potentially unsafe attachment types
                                     continue
+
+                                _ctype, _encd = _mt.guess_type(_ap)
+                                if not _ctype:
+                                    _ctype = "application/octet-stream"
+                                _maintype, _subtype = _ctype.split("/", 1)
+
                                 with open(_ap, "rb") as _f:
-                                    part = _MBase("application", "octet-stream")
-                                    part.set_payload(_f.read())
-                                _enc.encode_base64(part)
+                                    _data = _f.read()
+
+                                if _maintype == "text":
+                                    try:
+                                        part = _MTxt(_data.decode("utf-8", "ignore"), _subtype or "plain", "utf-8")
+                                    except Exception:
+                                        part = _MBase(_maintype, _subtype)
+                                        part.set_payload(_data)
+                                        _enc.encode_base64(part)
+                                elif _maintype == "image":
+                                    part = _MImg(_data, _subtype or None)
+                                elif _maintype == "application":
+                                    part = _MApp(_data, _subtype or "octet-stream")
+                                else:
+                                    part = _MBase(_maintype, _subtype)
+                                    part.set_payload(_data)
+                                    _enc.encode_base64(part)
+
                                 part.add_header(
                                     "Content-Disposition",
                                     f'attachment; filename="{_os.path.basename(_ap)}"',
@@ -21460,6 +21533,7 @@ def _o3_send_batch(conn, sender, rows, subject_tpl, html_tpl, test_only=False, m
                                 # Ignore attachment-specific issues so the rest of the batch can send.
                                 pass
                 except Exception:
+                    # Attachment issues should not block the overall send.
                     pass
 
                 smtp.sendmail(sender["email"], [to_email], msg.as_string())
