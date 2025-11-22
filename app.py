@@ -12443,7 +12443,18 @@ def run_lm_checklist(conn: "sqlite3.Connection") -> None:
             out = view.copy()
             path = str(Path(DATA_DIR) / f"compliance_matrix_rfp_{int(rfp_id)}.csv")
             out.to_csv(path, index=False)
-            st.success("Exported"); st.markdown(f"[Download CSV]({path})")
+            try:
+                with open(path, "rb") as _f:
+                    st.success("Exported")
+                    st.download_button(
+                        "Download CSV",
+                        data=_f.read(),
+                        file_name=Path(path).name,
+                        mime="text/csv",
+                        key="mx_export_download",
+                    )
+            except Exception:
+                st.info(f"CSV saved at {path}")
 
     st.subheader("Red-Flag Finder")
     ctx = _load_rfp_context_struct(conn, int(rfp_id))
@@ -17572,7 +17583,18 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
 
             z = _rfq_build_zip(conn, int(pk_sel))
             if z:
-                st.success("ZIP ready"); st.markdown(f"[Download ZIP]({z})")
+                try:
+                    with open(z, "rb") as _f:
+                        st.success("ZIP ready")
+                        st.download_button(
+                            "Download ZIP",
+                            data=_f.read(),
+                            file_name=Path(z).name,
+                            mime="application/zip",
+                            key="rfq_zip_download",
+                        )
+                except Exception:
+                    st.warning(f"ZIP created at {z} but could not prepare a download button. Check the data directory.")
                 try:
                     if job_id:
                         jobs_update_status(
@@ -17598,7 +17620,18 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 out["Body"] = _rfq_pack_by_id(conn, int(pk_sel)).get("instructions") or ""
                 path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_mailmerge.csv")
                 out.to_csv(path, index=False)
-                st.success("Exported"); st.markdown(f"[Download CSV]({path})")
+                try:
+                    with open(path, "rb") as _f:
+                        st.success("Exported")
+                        st.download_button(
+                            "Download CSV",
+                            data=_f.read(),
+                            file_name=Path(path).name,
+                            mime="text/csv",
+                            key="rfq_mail_csv_download",
+                        )
+                except Exception:
+                    st.info(f"CSV saved at {path}")
 
     with cclin:
         if st.button("Export CLINs CSV", key="rfq_clins_csv"):
@@ -17608,7 +17641,18 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
             else:
                 path = str(Path(DATA_DIR) / f"rfq_{int(pk_sel)}_CLINs.csv")
                 df.to_csv(path, index=False)
-                st.success("Exported"); st.markdown(f"[Download CSV]({path})")
+                try:
+                    with open(path, "rb") as _f:
+                        st.success("Exported")
+                        st.download_button(
+                            "Download CSV",
+                            data=_f.read(),
+                            file_name=Path(path).name,
+                            mime="text/csv",
+                            key="rfq_clins_csv_download",
+                        )
+                except Exception:
+                    st.info(f"CSV saved at {path}")
 
 def _db_path_from_conn(conn: "sqlite3.Connection") -> str:
     try:
