@@ -20030,6 +20030,16 @@ def main() -> None:
         ensure_pb_templates_schema(conn)
     except Exception as e:
         _debug_log(conn, 'main.ensure_unified_schemas', e)
+    # Auto-send any due O5 follow-ups on each app run
+    try:
+        ensure_o5_schema(conn)
+        try:
+            _o5_send_due(conn, limit=200)
+        except Exception as e2:
+            _debug_log(conn, "o5_send_due_auto", e2)
+    except Exception:
+        # If O5 schema or helpers are not available yet, skip silently
+        pass
     global _O4_CONN
 
     st.title(APP_TITLE)
