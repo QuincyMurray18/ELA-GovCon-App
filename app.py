@@ -20435,9 +20435,7 @@ def run_capability_statement(conn):
                         and not hits.empty
                         and "text" in hits.columns
                     ):
-                        ctx = "
-
-".join(hits["text"].fillna("").tolist())[:12000]
+                        ctx = "\n\n".join(hits["text"].fillna("").tolist())[:12000]
                 except Exception:
                     ctx = ""
 
