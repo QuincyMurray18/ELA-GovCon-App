@@ -15162,6 +15162,11 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
     except Exception:
         pass
     try:
+        # Default White Paper styling; kept simple and consistent with Proposal Builder
+        font_name = "Calibri"
+        font_size_pt = 11
+        line_spacing = 1.15
+
         doc = docx.Document()
         doc.add_heading(title or "Win Plan", 0)
         if subtitle:
