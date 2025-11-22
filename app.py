@@ -17534,7 +17534,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
             with vc2:
                 if st.button("Remove", key=f"rfq_vendor_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM rfq_vendors_t WHERE id=?;", (int(r["id"]),))
+                        cur.execute("DELETE FROM rfq_vendors WHERE id=?;", (int(r["id"]),))
                         conn.commit()
                     st.success("Removed"); st.rerun()
 
