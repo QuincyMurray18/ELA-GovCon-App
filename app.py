@@ -24024,7 +24024,32 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
     if hist_key not in st.session_state:
         st.session_state[hist_key] = []   # list of chat messages
 
-    # Controls
+    
+    # Track clears without mutating the uploader widget directly
+    cleared_hash_key = "chat_plus_cleared_hash"
+    if cleared_hash_key not in st.session_state:
+        st.session_state[cleared_hash_key] = None
+
+    def _chat_plus_hash_uploads(files):
+        """Compute a simple hash for the current uploader contents."""
+        if not files:
+            return None
+        import hashlib
+        h = hashlib.sha256()
+        try:
+            it = list(files)
+        except TypeError:
+            it = files
+        for f in it:
+            name = getattr(f, "name", "") or ""
+            size = getattr(f, "size", 0) or 0
+            h.update(str(name).encode("utf-8", "ignore"))
+            h.update(b"|")
+            h.update(str(size).encode("utf-8"))
+            h.update(b";")
+        return h.hexdigest()
+
+# Controls
     c0, c1, c2, c3 = st.columns([2,3,2,2])
     with c0:
         source = st.selectbox("Source", ["Attachments only","RFP context only","Both"], index=0, key="chat_plus_source")
@@ -24065,30 +24090,38 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
                     st.info("No RFP context found for that ID.")
 
 
+    
     # Ingest uploads into session
     new_rows = []
     if ups:
-        for f in ups:
-            try:
-                try:
-                    data = f.getbuffer().tobytes()
-                except Exception:
-                    data = f.read()
-                txt = _extract_any_to_text(f.name, data)
-                rec = {
-                    "name": f.name,
-                    "mime": _detect_mime_light_plus(f.name),
-                    "size": len(data),
-                    "text": txt or "",
-                }
-                new_rows.append(rec)
-            except Exception:
-                continue
-        if new_rows:
-            st.session_state[files_key].extend(new_rows)
-            st.success(f"Added {len(new_rows)} attachment(s).")
+        # Compute a stable signature for the current uploader contents.
+        # This lets us respect "Clear attachments" without touching the
+        # file_uploader widget state (which Streamlit does not allow).
+        cur_hash = _chat_plus_hash_uploads(ups)
+        cleared_hash = st.session_state.get(cleared_hash_key)
+        ingest_allowed = not (cleared_hash and cur_hash == cleared_hash)
 
-    # Attachment table
+        if ingest_allowed:
+            for f in ups:
+                try:
+                    try:
+                        data = f.getbuffer().tobytes()
+                    except Exception:
+                        data = f.read()
+                    txt = _extract_any_to_text(f.name, data)
+                    rec = {
+                        "name": f.name,
+                        "mime": _detect_mime_light_plus(f.name),
+                        "size": len(data),
+                        "text": txt or "",
+                    }
+                    new_rows.append(rec)
+                except Exception:
+                    continue
+            if new_rows:
+                st.session_state[files_key].extend(new_rows)
+                st.success(f"Added {len(new_rows)} attachment(s).")
+# Attachment table
     files = st.session_state[files_key]
     if files:
         with st.expander("Attachments in this chat", expanded=True):
@@ -24099,10 +24132,13 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
                 if st.button("Clear attachments", key="chat_plus_clear_files"):
                     # Clear the in-memory attachment list
                     st.session_state[files_key] = []
-                    # Also reset the uploader widget so previously selected files
-                    # are not re‑ingested on the next rerun
-                    if "chat_plus_uploader" in st.session_state:
-                        st.session_state["chat_plus_uploader"] = None
+                    # Remember the current uploader hash so we do not
+                    # immediately re-ingest the same files on rerun.
+                    try:
+                        cur_hash = _chat_plus_hash_uploads(ups)
+                    except Exception:
+                        cur_hash = None
+                    st.session_state[cleared_hash_key] = cur_hash
             with colB:
                 if st.button("Clear chat", key="chat_plus_clear_chat"):
                     st.session_state[hist_key] = []
