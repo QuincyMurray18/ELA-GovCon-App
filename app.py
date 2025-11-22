@@ -21974,8 +21974,8 @@ def _o5_queue_followups(conn, seq_id: int, emails: list[str], start_at_iso: str 
             base = __import__("datetime").datetime.fromisoformat(start_at_iso.replace("Z","+00:00"))
             for _, row in steps.iterrows():
                 eta = base + __import__("datetime").timedelta(hours=int(row["delay_hours"] or 0))
-                conn.execute("""INSERT INTO outreach_schedules(seq_id, step_no, to_email, send_at, subject, body_html, status)
-                                VALUES (?, ?, ?, ?, ?,?,?, 'queued')""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), row["subject"] or "", row["body_html"] or ""))
+                conn.execute("""INSERT INTO outreach_schedules(seq_id, step_no, to_email, send_at, status, subject, body_html)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)""",                             (seq_id, int(row["step_no"]), em, eta.strftime("%Y-%m-%dT%H:%M:%SZ"), row["subject"] or "", row["body_html"] or ""))
                 base = eta
                 count += 1
     return count
@@ -23530,7 +23530,7 @@ def __p_o5_ui(conn):
                     t = base
                     for _,row in steps.iterrows():
                         t = t + __import__("datetime").timedelta(hours=int(row["delay_hours"] or 0))
-                        __p_db(conn,"INSERT INTO outreach_schedules(seq_id,step_no,to_email,send_at,status,subject,body_html) VALUES (?, ?, ?, ?, ?, 'queued',?,?)",
+                        __p_db(conn,"INSERT INTO outreach_schedules(seq_id,step_no,to_email,send_at,status,subject,body_html) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                (seq_id,int(row["step_no"]),em,t.strftime("%Y-%m-%dT%H:%M:%SZ"),row["subject"] or "",row["body_html"] or "")); n+=1
                 _st.success(f"Queued {n}")
     if _st.button("Send due now", key="__p_o5_sendnow"):
