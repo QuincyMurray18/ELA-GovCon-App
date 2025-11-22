@@ -15143,7 +15143,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
 
         # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
-        _export_past_perf_docx(out_path, past_perf)
+        _export_past_perf_docx(out_path, picked)
 def _wp_load_template(conn: "sqlite3.Connection", template_id: int) -> pd.DataFrame:
     """Load sections for a given white paper template ordered by position."""
     return pd.read_sql_query(
