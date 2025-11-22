@@ -24097,7 +24097,12 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
             colA, colB, colC = st.columns(3)
             with colA:
                 if st.button("Clear attachments", key="chat_plus_clear_files"):
+                    # Clear the in-memory attachment list
                     st.session_state[files_key] = []
+                    # Also reset the uploader widget so previously selected files
+                    # are not re‑ingested on the next rerun
+                    if "chat_plus_uploader" in st.session_state:
+                        st.session_state["chat_plus_uploader"] = None
             with colB:
                 if st.button("Clear chat", key="chat_plus_clear_chat"):
                     st.session_state[hist_key] = []
