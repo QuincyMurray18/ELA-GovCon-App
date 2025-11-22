@@ -20368,20 +20368,20 @@ def run_capability_statement(conn):
     if "_orig_run_capability_statement" in globals():
         try:
             _orig_run_capability_statement(conn)
-        except NameError:
-            st.info(
-                "Legacy Capability Statement UI helpers are not available in this build. "
-                "Using the X16.1 AI helper instead."
-            )
         except Exception as e:
-            st.warning(f"Capability Statement base UI issue (non-blocking): {e}")
+            # Legacy Capability Statement UI is not available or failed.
+            # Fall back to the AI helper-only view without a noisy message.
+            st.header("Capability Statement")
+            st.caption(
+                "Use this page to generate and store tailored capability statements "
+                "for specific agencies and NAICS codes."
+            )
     else:
         st.header("Capability Statement")
         st.caption(
             "Use this page to generate and store tailored capability statements "
             "for specific agencies and NAICS codes."
         )
-        st.info("Base UI not found in this build. Showing AI helper only.")
 
     # Then render the X16.1 helper
     try:
