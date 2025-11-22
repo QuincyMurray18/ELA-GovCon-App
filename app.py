@@ -1528,7 +1528,7 @@ def _ask_rfp_analyzer_modal(notice: dict):
             key=_qkey,
             placeholder="e.g., Summarize key requirements and due dates…"
         )
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("Send", key=f"ask_rfp_send_{_qid}"):
                 st.session_state["rfp_selected_notice"] = notice or {}
@@ -13177,6 +13177,50 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             st.success("Drafted all sections.")
             st.rerun()
         content_map: Dict[str, str] = {}
+
+        # Optional: auto-fill all selected sections from matching templates.
+        if isinstance(tpl_df, pd.DataFrame) and not tpl_df.empty and selected:
+            with st.expander("Auto-fill sections from templates", expanded=False):
+                st.caption(
+                    "For each section, this will use the first active template whose default_section "
+                    "matches the section name. If no exact match is found, it will fall back to any "
+                    "active 'section' template."
+                )
+                if st.button("Apply templates to all sections", key="pb_apply_templates_all"):
+                    for sec in selected:
+                        try:
+                            _sec_label = str(sec).strip().lower()
+                            _df = tpl_df.copy()
+                            if "is_active" in _df.columns:
+                                _df = _df[_df["is_active"] == 1]
+                            if "default_section" in _df.columns:
+                                _match = _df["default_section"].fillna("").str.strip().str.lower() == _sec_label
+                                _candidates = _df[_match]
+                            else:
+                                _candidates = pd.DataFrame()
+                            if _candidates is None or _candidates.empty:
+                                # Fallback to any active section template
+                                if "template_type" in _df.columns:
+                                    _candidates = _df[_df["template_type"].fillna("section") == "section"]
+                                else:
+                                    _candidates = _df
+                            if _candidates is None or _candidates.empty:
+                                continue
+                            _tid = int(_candidates["id"].iloc[0])
+                            _rendered = x7_render_template_text(
+                                conn,
+                                _tid,
+                                rfp_id=int(rfp_id) if rfp_id is not None else None,
+                            )
+                            if _rendered:
+                                _norm = _pb_normalize_text(_rendered)
+                                st.session_state[f"pb_section_{sec}"] = _norm
+                                st.session_state[f"pb_ta_{sec}"] = _norm
+                        except Exception:
+                            # Do not break the whole loop if one section fails
+                            continue
+                    st.success("Applied templates to selected sections.")
+                    st.rerun()
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
             st.markdown(f"**{sec}**")
@@ -19691,57 +19735,6 @@ def run_help_docs(conn: "sqlite3.Connection") -> None:
     )
 
 
-
-def ensure_pb_templates_schema(conn):
-    """Ensure proposal_templates and proposal_template_tokens tables exist."""
-    with _closing(conn.cursor()) as cur:
-        try:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS proposal_templates (
-                    id INTEGER PRIMARY KEY,
-                    tenant_id INTEGER DEFAULT 1,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    template_type TEXT,
-                    default_section TEXT,
-                    body TEXT,
-                    owner TEXT,
-                    is_active INTEGER DEFAULT 1,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_proposal_templates_tenant "
-                "ON proposal_templates(tenant_id);"
-            )
-        except Exception as e:
-            _debug_log(conn, "schema.proposal_templates", e)
-        try:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS proposal_template_tokens (
-                    id INTEGER PRIMARY KEY,
-                    tenant_id INTEGER DEFAULT 1,
-                    template_id INTEGER NOT NULL,
-                    token_name TEXT NOT NULL,
-                    source_type TEXT,
-                    source_expr TEXT,
-                    default_value TEXT,
-                    description TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(template_id) REFERENCES proposal_templates(id)
-                );
-                """
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_template_tokens_template "
-                "ON proposal_template_tokens(template_id);"
-            )
-        except Exception as e:
-            _debug_log(conn, "schema.proposal_template_tokens", e)
-
 def main() -> None:
     # Phase 1 re-init inside main
     # Bootstrap UI and sidebar
@@ -19766,7 +19759,6 @@ def main() -> None:
     _force_safe_pd_read()
     try:
         ensure_unified_schemas(conn)
-        ensure_pb_templates_schema(conn)
     except Exception as e:
         _debug_log(conn, 'main.ensure_unified_schemas', e)
     global _O4_CONN
@@ -24540,6 +24532,22 @@ def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
                     st.success("Template archived.")
                     st.rerun()
 
+    
+        with c3:
+            if st.button("Delete selected", key="x7_tpl_delete", disabled=selected_id is None):
+                if selected_id is not None:
+                    with _closing(conn.cursor()) as cur:
+                        cur.execute(
+                            "DELETE FROM proposal_template_tokens WHERE template_id = ?;",
+                            (int(selected_id),),
+                        )
+                        cur.execute(
+                            "DELETE FROM proposal_templates WHERE id = ?;",
+                            (int(selected_id),),
+                        )
+                        conn.commit()
+                    st.success("Template deleted.")
+                    st.rerun()
     st.markdown("---")
     st.markdown("**New template**")
 
