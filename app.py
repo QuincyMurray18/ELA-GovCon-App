@@ -5,8 +5,8 @@ def x7_snippet_library_ui(conn):
 # ---- Global owner context guard ----
 try:
     import streamlit as _st
-    # Backwards/forwards-compatible rerun alias so older/newer Streamlit
-    # builds both expose st.rerun and st.experimental_rerun.
+    # Backwards/forwards-compatible rerun alias so older/newer
+    # Streamlit builds both expose st.rerun and st.experimental_rerun.
     try:
         if hasattr(_st, "rerun") and not hasattr(_st, "experimental_rerun"):
             _st.experimental_rerun = _st.rerun  # type: ignore[attr-defined]
@@ -9091,6 +9091,125 @@ def run_contacts(conn: "sqlite3.Connection") -> None:
             st.write("No contacts yet")
         else:
             _styled_dataframe(df, use_container_width=True, hide_index=True)
+
+        st.subheader("Edit contacts")
+        try:
+            df_edit = pd.read_sql_query(
+                "SELECT id, name, email, org, phone, title FROM contacts_t ORDER BY name;",
+                conn,
+                params=(),
+            )
+        except Exception as e:
+            st.error(f"Failed to load contacts for editing: {e}")
+            df_edit = None
+
+        if df_edit is not None and not df_edit.empty:
+            df_edit = df_edit.fillna("")
+            try:
+                edited = st.data_editor(
+                    df_edit,
+                    key="contacts_editor",
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "id": st.column_config.NumberColumn("ID", disabled=True),
+                    },
+                )
+            except Exception:
+                # Fallback without column_config if running on older Streamlit
+                edited = st.data_editor(
+                    df_edit,
+                    key="contacts_editor",
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            if st.button("Save contact edits", key="contacts_save_edits"):
+                from contextlib import closing as _closing
+                try:
+                    with _closing(conn.cursor()) as cur:
+                        for _, r in edited.iterrows():
+                            try:
+                                cid = int(r.get("id") or 0)
+                            except Exception:
+                                cid = 0
+                            name_e = str(r.get("name") or "").strip()
+                            email_e = str(r.get("email") or "").strip()
+                            org_e = str(r.get("org") or "").strip()
+                            phone_e = str(r.get("phone") or "").strip()
+                            title_e = str(r.get("title") or "").strip()
+
+                            if cid > 0:
+                                cur.execute(
+                                    "UPDATE contacts SET name=?, email=?, org=?, phone=?, title=? WHERE id=?;",
+                                    (name_e, email_e, org_e, phone_e, title_e, cid),
+                                )
+                            else:
+                                # Insert new contacts entered via the editor
+                                if not (name_e or email_e or org_e or phone_e or title_e):
+                                    continue
+                                cur.execute(
+                                    "INSERT INTO contacts(name, email, org, phone, title, public_source, owner_user, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                                    (
+                                        name_e,
+                                        email_e,
+                                        org_e,
+                                        phone_e,
+                                        title_e,
+                                        "manual_entry",
+                                        get_current_user_name(),
+                                    ),
+                                )
+                    conn.commit()
+                    st.success("Saved contact edits.")
+                    try:
+                        st.rerun()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    st.error(f"Failed to save contact edits: {e}")
+        elif df_edit is not None:
+            st.caption("No contacts available to edit yet.")
+
+        st.subheader("Delete contacts")
+        try:
+            df_del = pd.read_sql_query(
+                "SELECT id, name, email FROM contacts_t ORDER BY name;",
+                conn,
+                params=(),
+            )
+        except Exception as e:
+            st.error(f"Failed to load contacts for deletion: {e}")
+            df_del = None
+
+        if df_del is not None and not df_del.empty:
+            opts = {
+                int(r["id"]): f"#{int(r['id'])} — {str(r.get('name') or '').strip()} ({str(r.get('email') or '').strip()})"
+                for _, r in df_del.iterrows()
+            }
+            sel_del = st.multiselect(
+                "Select contacts to delete",
+                options=list(opts.keys()),
+                format_func=lambda k: opts.get(k, str(k)),
+                key="contacts_delete_sel",
+            )
+            if sel_del and st.button("Delete selected contacts", key="contacts_delete_btn"):
+                from contextlib import closing as _closing
+                try:
+                    with _closing(conn.cursor()) as cur:
+                        for cid in sel_del:
+                            cur.execute("DELETE FROM contacts WHERE id=?;", (int(cid),))
+                    conn.commit()
+                    st.success("Deleted selected contacts.")
+                    try:
+                        st.rerun()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    st.error(f"Failed to delete contacts: {e}")
+        elif df_del is not None:
+            st.caption("No contacts available to delete.")
 
         st.subheader("Contact detail")
         try:
