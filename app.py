@@ -16208,6 +16208,10 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         pass
                                     conn.commit()
                                 st.success("Pipeline updated")
+                                try:
+                                    st.rerun()
+                                except Exception:
+                                    pass
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
                 except Exception as e:
