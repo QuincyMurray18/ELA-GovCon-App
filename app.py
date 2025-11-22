@@ -15322,7 +15322,6 @@ def _export_capability_docx(path: str, profile: Dict[str, str]) -> Optional[str]
                 doc.add_paragraph(re.sub(r"^[-*•]\s+", "", _line).strip(), style="List Bullet")
             else:
                 doc.add_paragraph(_line.strip())
-            paragraph(line, style="List Bullet")
 
     # Content blocks
     add_bullets("Core Competencies", "core_competencies")
