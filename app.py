@@ -16695,7 +16695,19 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
                     manifest += "\nIncluded files:\n" + "\n".join(f"- {fname}" for fname, _ in rows)
                     z.writestr("MANIFEST.txt", manifest)
                 st.success("Submission kit created")
-                st.markdown(f"[Download ZIP]({zip_path})")
+
+                try:
+                    with open(zip_path, "rb") as _zf:
+                        _zbytes = _zf.read()
+                    st.download_button(
+                        "Download ZIP",
+                        data=_zbytes,
+                        file_name=os.path.basename(zip_path),
+                        mime="application/zip",
+                        key=f"fm_zip_dl_{int(kit_rfp)}",
+                    )
+                except Exception as _e:
+                    st.warning(f"ZIP file ready at {zip_path} but could not open for download: {_e}")
             except Exception as e:
                 st.error(f"ZIP failed: {e}")
 
