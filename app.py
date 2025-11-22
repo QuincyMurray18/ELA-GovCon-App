@@ -16832,7 +16832,7 @@ def _rfq_vendors(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["id","vendor_id","name","email","phone"])
 
 def _rfq_attachments(conn: "sqlite3.Connection", pid: int) -> pd.DataFrame:
-    return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach_t WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
+    return pd.read_sql_query("SELECT id, file_id, name, path FROM rfq_attach WHERE pack_id=? ORDER BY id ASC;", conn, params=(pid,))
 
 def _rfq_build_zip(conn: "sqlite3.Connection", pack_id: int) -> Optional[str]:
     pack = _rfq_pack_by_id(conn, pack_id)
@@ -17497,7 +17497,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
             with dc2:
                 if st.button("Remove", key=f"rfq_att_del_{int(r['id'])}"):
                     with closing(conn.cursor()) as cur:
-                        cur.execute("DELETE FROM rfq_attach_t WHERE id=?;", (int(r["id"]),))
+                        cur.execute("DELETE FROM rfq_attach WHERE id=?;", (int(r["id"]),))
                         conn.commit()
                     st.success("Removed"); st.rerun()
 
@@ -26353,6 +26353,5 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
-
 
 
