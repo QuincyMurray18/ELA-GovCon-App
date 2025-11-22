@@ -345,6 +345,72 @@ def _pb_normalize_text(text: str) -> str:
     text = _one_idea_per_paragraph(text)
     return text.strip()
 
+
+def _pb__write_md(doc, text: str, font_name: str = "Calibri", font_size_pt: int = 11, line_spacing: float | int | str = 1.15) -> None:
+    """
+    Very small markdown-to-DOCX bridge for headings, bullet lists, and paragraphs.
+    This is intentionally light so it can be reused by White Paper and Proposal exports.
+    """
+    if not text:
+        return
+    try:
+        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT  # type: ignore
+        from docx.shared import Pt  # type: ignore
+    except Exception:
+        WD_PARAGRAPH_ALIGNMENT = None
+        Pt = None
+
+    lines = str(text).split("\n")
+    for raw in lines:
+        line = raw.rstrip()
+        if not line:
+            doc.add_paragraph("")
+            continue
+
+        style = None
+        bullet = False
+
+        # Very light markdown handling: headings and bullets
+        if line.startswith("### "):
+            style = "Heading 3"
+            line = line[4:]
+        elif line.startswith("## "):
+            style = "Heading 2"
+            line = line[3:]
+        elif line.startswith("# "):
+            style = "Heading 1"
+            line = line[2:]
+        elif line.lstrip().startswith(("-", "*")):
+            bullet = True
+            # Strip leading bullet char
+            stripped = line.lstrip()
+            line = stripped[1:].lstrip()
+
+        if bullet:
+            p = doc.add_paragraph(line, style="List Bullet")
+        elif style:
+            p = doc.add_paragraph(line, style=style)
+        else:
+            p = doc.add_paragraph(line)
+
+        # Apply font overrides if available
+        try:
+            if Pt is not None:
+                for run in p.runs:
+                    if font_name:
+                        run.font.name = font_name
+                    if font_size_pt:
+                        run.font.size = Pt(font_size_pt)
+            # Line spacing
+            if hasattr(p, "paragraph_format"):
+                pf = p.paragraph_format
+                if isinstance(line_spacing, (int, float)):
+                    pf.line_spacing = line_spacing
+        except Exception:
+            # Styling issues should not break exports
+            pass
+
+
 # ==== Draft Finalization Guards (top-of-file) ====
 try:
     _strip_citations
