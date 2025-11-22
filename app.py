@@ -15138,7 +15138,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
         st.write(final_md)
 
         # Push to Proposal Builder section
-        st.session_state["pb_section_Past Performance Summary"] = final_md
+        st.session_state["pb_section_Past Performance"] = final_md
         st.success("Pushed to Proposal Builder → Past Performance Summary")
 
         # Export DOCX
