@@ -1052,6 +1052,57 @@ def ensure_unified_schemas(conn):
         except Exception as e: _debug_log(conn, "quotes", e)
     conn.commit()
 
+def ensure_pb_templates_schema(conn):
+    """Ensure proposal_templates and proposal_template_tokens tables exist."""
+    with _closing(conn.cursor()) as cur:
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_templates (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER DEFAULT 1,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    template_type TEXT,
+                    default_section TEXT,
+                    body TEXT,
+                    owner TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_proposal_templates_tenant "
+                "ON proposal_templates(tenant_id);"
+            )
+        except Exception as e:
+            _debug_log(conn, "schema.proposal_templates", e)
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS proposal_template_tokens (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER DEFAULT 1,
+                    template_id INTEGER NOT NULL,
+                    token_name TEXT NOT NULL,
+                    source_type TEXT,
+                    source_expr TEXT,
+                    default_value TEXT,
+                    description TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(template_id) REFERENCES proposal_templates(id)
+                );
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_template_tokens_template "
+                "ON proposal_template_tokens(template_id);"
+            )
+        except Exception as e:
+            _debug_log(conn, "schema.proposal_template_tokens", e)
+
+
 def safe_read_sql(conn, sql: str, params: tuple = ()):
     """Bypass pandas for simple SELECT to avoid recursion from monkey-patching."""
     try:
@@ -1528,7 +1579,7 @@ def _ask_rfp_analyzer_modal(notice: dict):
             key=_qkey,
             placeholder="e.g., Summarize key requirements and due dates…"
         )
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1:
             if st.button("Send", key=f"ask_rfp_send_{_qid}"):
                 st.session_state["rfp_selected_notice"] = notice or {}
@@ -13176,8 +13227,6 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
-        content_map: Dict[str, str] = {}
-
         # Optional: auto-fill all selected sections from matching templates.
         if isinstance(tpl_df, pd.DataFrame) and not tpl_df.empty and selected:
             with st.expander("Auto-fill sections from templates", expanded=False):
@@ -13197,7 +13246,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                                 _match = _df["default_section"].fillna("").str.strip().str.lower() == _sec_label
                                 _candidates = _df[_match]
                             else:
-                                _candidates = pd.DataFrame()
+                                _candidates = _df
                             if _candidates is None or _candidates.empty:
                                 # Fallback to any active section template
                                 if "template_type" in _df.columns:
@@ -13221,6 +13270,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                             continue
                     st.success("Applied templates to selected sections.")
                     st.rerun()
+        content_map: Dict[str, str] = {}
         for sec in selected:
             default_val = st.session_state.get(f"pb_section_{sec}", "")
             st.markdown(f"**{sec}**")
@@ -19759,6 +19809,7 @@ def main() -> None:
     _force_safe_pd_read()
     try:
         ensure_unified_schemas(conn)
+        ensure_pb_templates_schema(conn)
     except Exception as e:
         _debug_log(conn, 'main.ensure_unified_schemas', e)
     global _O4_CONN
@@ -22592,7 +22643,7 @@ def render_subfinder_s1d(conn):
             st.text_input("Place of performance address", key="s1d_addr")
             st.number_input("Radius (miles)", 1, 200, key="s1d_radius")
         else:
-            c1, c2, c3 = st.columns(3)
+            c1, c2 = st.columns(2)
             with c1:
                 st.number_input("Latitude", key="s1d_lat")
             with c2:
@@ -22862,7 +22913,7 @@ def render_subfinder_s1d(conn):
                     selected_ids.append(k)
                 edited_rows.append(edited)
         # Actions
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1:
             if st.button("Add selected to Vendors", key="s1d_cards_add_sel"):
                 rows = [row for row in edited_rows if st.session_state.get(f"s1d_card_{row.get('place_id') or edited_rows.index(row)}_sel")]
@@ -24531,8 +24582,6 @@ def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
                         conn.commit()
                     st.success("Template archived.")
                     st.rerun()
-
-    
         with c3:
             if st.button("Delete selected", key="x7_tpl_delete", disabled=selected_id is None):
                 if selected_id is not None:
@@ -24548,6 +24597,7 @@ def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
                         conn.commit()
                     st.success("Template deleted.")
                     st.rerun()
+
     st.markdown("---")
     st.markdown("**New template**")
 
