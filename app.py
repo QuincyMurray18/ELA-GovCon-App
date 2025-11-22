@@ -14857,7 +14857,18 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
         out["Best Vendor"] = best_vendor_by_clin["Best Vendor"]
         out.to_csv(path)
         st.success("Exported.")
-        st.markdown(f"[Download comparison CSV]({path})")
+        try:
+            with open(path, "rb") as _f:
+                _data = _f.read()
+            st.download_button(
+                "Download comparison CSV",
+                data=_data,
+                file_name=os.path.basename(path),
+                mime="text/csv",
+                key="dl_quote_comparison_csv",
+            )
+        except Exception as _e:
+            st.error(f"Download unavailable: {_e}")
 
 # ---------- Pricing Calculator (Phase E) ----------
 def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str, float]:
@@ -15077,7 +15088,18 @@ def run_win_probability(conn: "sqlite3.Connection") -> None:
         out.loc[len(out)] = ["Weighted Result", win_prob]
         out.to_csv(path, index=False)
         st.success("Exported.")
-        st.markdown(f"[Download assessment CSV]({path})")
+        try:
+            with open(path, "rb") as _f:
+                _data = _f.read()
+            st.download_button(
+                "Download assessment CSV",
+                data=_data,
+                file_name=os.path.basename(path),
+                mime="text/csv",
+                key="dl_win_assessment_csv",
+            )
+        except Exception as _e:
+            st.error(f"Download unavailable: {_e}")
 
 # ---------- Phase F: Chat Assistant (rules-based over DB) ----------
 def _kb_search(conn: "sqlite3.Connection", rfp_id: Optional[int], query: str) -> Dict[str, Any]:
@@ -24271,7 +24293,18 @@ def run_chat_assistant(conn: "sqlite3.Connection") -> None:
                     try:
                         with open(outp, "w", encoding="utf-8") as fh:
                             fh.write(merged)
-                        st.markdown(f"[Download context]({outp})")
+                        try:
+                            with open(outp, "rb") as _f:
+                                _data = _f.read()
+                            st.download_button(
+                                "Download context",
+                                data=_data,
+                                file_name=os.path.basename(outp),
+                                mime="text/plain",
+                                key="dl_ai_context",
+                            )
+                        except Exception as _e:
+                            st.warning(f"Export failed: {_e}")
                     except Exception as e:
                         st.warning(f"Export failed: {e}")
     else:
