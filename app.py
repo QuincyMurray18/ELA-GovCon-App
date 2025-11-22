@@ -1190,15 +1190,14 @@ def _phase3_analyzer_inline(conn):
     import streamlit as st
     from datetime import datetime
 
-    # Safety: ensure required helpers exist
+    # Safety: ensure Phase 3 RFP schema exists (kept light for performance)
     try:
-        _ensure_phase2_schema(conn)
+        _ensure_phase3_schema(conn)  # type: ignore[name-defined]
     except Exception as e:
-        st.info(f"Phase 2 schema: {e}")
-    if ' _ensure_phase3_schema' not in globals():
-        pass  # defined elsewhere in this file in Phase 3 block
-    else:
-        _ensure_phase3_schema(conn)
+        try:
+            st.info(f"Phase 3 schema: {e}")
+        except Exception:
+            pass
 
     st.markdown("### 🧠 Phase 3 — One‑Page Analyzer")
     notice = st.session_state.get("rfp_selected_notice") or {}
@@ -1578,7 +1577,7 @@ def _backup_db_sql(conn, dest_dir=None):
         return None
 
 def phase2_5_bootstrap(conn):
-    """Run once per session: ensure meta table, schema, and create a small backup."""
+    """Run once per session: ensure meta table, schema, and keep checks light so the app stays fast."""
     if st.session_state.get("_p25_bootstrapped"):
         return
     try:
@@ -1588,9 +1587,12 @@ def phase2_5_bootstrap(conn):
     try:
         _ensure_phase2_schema(conn)
     except Exception as e:
-        try: st.warning(f"Schema check failed (Phase 2.5): {e}")
-        except Exception: pass
-    _backup_db_sql(conn)
+        try:
+            st.warning(f"Schema check failed (Phase 2.5): {e}")
+        except Exception:
+            pass
+    # Removed automatic full SQL backup here to avoid slowing down SAM Watch.
+    # You can still run backups explicitly from the Backup & Data page.
     st.session_state["_p25_bootstrapped"] = True
 
 def _inject_phase25_css():
@@ -10147,34 +10149,31 @@ def run_sam_watch(conn) -> None:
                                 except Exception as _e:
                                     st.warning(f"Attachment download/linking error: {_e}")
 
-                                # Hand off into the main RFP Analyzer page with this notice as context
+                                # Hand off into RFP Analyzer with this notice as context
                                 st.session_state["current_rfp_id"] = int(rfp_id)
                                 st.session_state["rfp_selected_notice"] = notice
                                 st.session_state["nav_target"] = "RFP Analyzer"
-                                st.session_state["_force_rfp_analyzer"] = True
                                 if linked:
                                     st.success(f"RFP #{rfp_id} ready. Linked {linked} attachment(s) from SAM.gov.")
                                 else:
                                     st.info(f"RFP #{rfp_id} ready. No attachments were linked from SAM.gov.")
                                 try:
-                                    st.rerun()
+                                    router("RFP Analyzer", conn); st.stop()
                                 except Exception:
                                     try:
-                                        st.info("Sent to RFP Analyzer. Use the sidebar to open that page if it did not switch automatically.")
+                                        st.rerun()
                                     except Exception:
-                                        pass
+                                        st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                             else:
                                 # Could not create RFP; still try to route to Analyzer so user can work manually
                                 st.info("Opening RFP Analyzer…")
-                                st.session_state["nav_target"] = "RFP Analyzer"
-                                st.session_state["_force_rfp_analyzer"] = True
                                 try:
-                                    st.rerun()
+                                    router("RFP Analyzer", conn); st.stop()
                                 except Exception:
                                     try:
-                                        st.info("Switch to RFP Analyzer page using the sidebar if it did not change automatically.")
+                                        st.rerun()
                                     except Exception:
-                                        pass
+                                        st.info("Switch to RFP Analyzer tab to continue.")
 
             # Selected details panel
 
@@ -16242,15 +16241,13 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     _linked_rfp_id = None
                 if _linked_rfp_id:
                     if st.button("Open in RFP Analyzer", key=f"deal_open_rfp_{int(sel_id)}"):
-                        # Hand off to the main RFP Analyzer page, not an inline view
                         st.session_state["current_rfp_id"] = int(_linked_rfp_id)
                         st.session_state["nav_target"] = "RFP Analyzer"
-                        st.session_state["_force_rfp_analyzer"] = True
                         try:
-                            st.rerun()
+                            router("RFP Analyzer", conn); st.stop()
                         except Exception:
                             try:
-                                st.info("Sent to RFP Analyzer. Use the sidebar to open that page if it did not switch automatically.")
+                                st.rerun()
                             except Exception:
                                 pass
                 # Suggested subs / matching vendors for this deal
