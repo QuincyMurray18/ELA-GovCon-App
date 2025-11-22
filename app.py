@@ -15279,22 +15279,31 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
             with x1:
                 if st.button("Export DOCX", key="wp_export"):
                     out_path = str(Path(DATA_DIR) / f"White_Paper_{int(p_sel)}.docx")
-                    exp = _wp_export_docx(out_path,
-                                          df_p.loc[df_p["id"]==p_sel, "title"].values[0],
-                                          df_p.loc[df_p["id"]==p_sel, "subtitle"].values[0] if "subtitle" in df_p.columns else "",
-                                          _wp_load_paper(conn, int(p_sel)))
+                    exp = _wp_export_docx(
+                        out_path,
+                        df_p.loc[df_p["id"] == p_sel, "title"].values[0],
+                        df_p.loc[df_p["id"] == p_sel, "subtitle"].values[0] if "subtitle" in df_p.columns else "",
+                        _wp_load_paper(conn, int(p_sel)),
+                    )
                     if exp:
-                        st.success("Exported");
-                try:
-                    from pathlib import Path as _Path
-                    with open(exp, "rb") as _f:
-                        _data = _f.read()
-                    _fname = _Path(exp).name or "export.docx"
-                    st.download_button("Download DOCX", data=_data, file_name=_fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                except Exception as _e:
-                    st.error(f"Download failed: {_e}")
+                        st.success("Exported")
+                        try:
+                            from pathlib import Path as _Path
+                            with open(exp, "rb") as _f:
+                                _data = _f.read()
+                            _fname = _Path(exp).name or "export.docx"
+                            st.download_button(
+                                "Download DOCX",
+                                data=_data,
+                                file_name=_fname,
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key="wp_export_dl",
+                            )
+                        except Exception as _e:
+                            st.error(f"Download failed: {_e}")
 
             with x2:
+
                 if st.button("Push narrative to Proposal Builder", key="wp_push"):
                     # Concatenate sections to markdown
                     secs = _wp_load_paper(conn, int(p_sel))
