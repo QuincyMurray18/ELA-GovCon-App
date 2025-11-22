@@ -22032,7 +22032,7 @@ def render_outreach_o5_followups(conn):
             if steps is not None and not steps.empty: _styled_dataframe(steps, use_container_width=True, hide_index=True)
             st.markdown("**Add step**"); s1,s2,s3 = st.columns(3)
             with s1: step_no = st.number_input("Step #", 1, 20, value=(int(steps["step_no"].max())+1 if steps is not None and not steps.empty else 1))
-            with s2: delay = st.number_input("Delay hours", 1, 720, value=72)
+            with s2: delay = st.number_input("Delay hours", 0, 720, value=0)
             with s3: subj = st.text_input("Subject", key="o5_step_subj")
             body = st.text_area("HTML body", height=180, key="o5_step_body")
             if st.button("Add step", key="o5_step_add"): _o5_add_step(conn, seq_id, int(step_no), int(delay), subj, body); st.success("Step added"); st.rerun()
