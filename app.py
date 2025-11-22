@@ -22592,7 +22592,7 @@ def render_subfinder_s1d(conn):
             st.text_input("Place of performance address", key="s1d_addr")
             st.number_input("Radius (miles)", 1, 200, key="s1d_radius")
         else:
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             with c1:
                 st.number_input("Latitude", key="s1d_lat")
             with c2:
@@ -22862,7 +22862,7 @@ def render_subfinder_s1d(conn):
                     selected_ids.append(k)
                 edited_rows.append(edited)
         # Actions
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("Add selected to Vendors", key="s1d_cards_add_sel"):
                 rows = [row for row in edited_rows if st.session_state.get(f"s1d_card_{row.get('place_id') or edited_rows.index(row)}_sel")]
@@ -24494,7 +24494,7 @@ def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
             key="x7_tpl_edit_select",
         )
 
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("Clone selected", key="x7_tpl_clone", disabled=selected_id is None):
                 if selected_id is not None:
