@@ -2681,7 +2681,7 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
     # 2) Fallback: build a minimal analysis directly from rfp_files
     try:
         df = _pd.read_sql_query(
-            "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            "SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
             conn,
             params=(int(rfp_id),),
         )
@@ -2793,6 +2793,59 @@ def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
         y1_index_rfp(conn, int(rfp_id), rebuild=False)  # type: ignore[name-defined]
     except Exception:
         pass
+
+    # Ensure there is at least a minimal rfp_chunks footprint so the
+    # AI attachments summarizer can work even if Y1 indexing is unavailable.
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM rfp_chunks WHERE rfp_id=?;", (int(rfp_id),))
+        row = cur.fetchone()
+        cur.close()
+        have_chunks = bool(row and row[0] and int(row[0]) > 0)
+    except Exception:
+        have_chunks = False
+
+    if not have_chunks:
+        try:
+            # Insert simple page-level chunks for each file with no embeddings.
+            with conn:
+                for _, row in (df.iterrows() if df is not None else []):
+                    b2 = row.get("bytes")
+                    if b2 is None:
+                        continue
+                    try:
+                        data2 = bytes(b2)
+                    except Exception:
+                        data2 = b2
+                    mime2 = str(row.get("mime") or "")
+                    try:
+                        pages2 = extract_text_pages(data2, mime2)  # type: ignore[name-defined]
+                    except Exception:
+                        try:
+                            pages2 = [data2.decode("utf-8", errors="ignore")]
+                        except Exception:
+                            pages2 = []
+                    if not pages2:
+                        continue
+                    fid = row.get("id")
+                    fname = str(row.get("filename") or "")
+                    for pi, page_txt in enumerate(pages2[:50], start=1):
+                        conn.execute(
+                            "INSERT OR REPLACE INTO rfp_chunks(rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb) "
+                            "VALUES (?,?,?,?,?,?,?);",
+                            (
+                                int(rfp_id),
+                                int(fid) if fid is not None else None,
+                                fname,
+                                int(pi),
+                                0,
+                                str(page_txt or "")[:4000],
+                                "[]",
+                            ),
+                        )
+        except Exception:
+            # rfp_chunks is a best-effort feature; ignore failures.
+            pass
 
 
 def _enqueue(fn, *args, **kwargs) -> str:
