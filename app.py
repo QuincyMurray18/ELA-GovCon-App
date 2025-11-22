@@ -512,6 +512,7 @@ from html import escape as _esc
 
 
 import logging
+from zipfile import ZipFile, ZIP_DEFLATED
 
 # === Architecture layers ======================================================
 # Data layer: database connections and raw SQL helpers.
