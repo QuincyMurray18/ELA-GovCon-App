@@ -20340,19 +20340,26 @@ def run_capability_statement(conn):
     same OpenAI backend used elsewhere in the app and save results into
     org_profile.
     """
-    # First, try to call the original implementation if it exists
-    try:
-        if "_orig_run_capability_statement" in globals():
+    # First, try to call the original implementation if it exists.
+    # If the legacy UI is broken (e.g., NameError: 'paragraph'), we fall back
+    # quietly to the AI helper so the page still works.
+    if "_orig_run_capability_statement" in globals():
+        try:
             _orig_run_capability_statement(conn)
-        else:
-            st.header("Capability Statement")
-            st.caption(
-                "Use this page to generate and store tailored capability statements "
-                "for specific agencies and NAICS codes."
+        except NameError:
+            st.info(
+                "Legacy Capability Statement UI helpers are not available in this build. "
+                "Using the X16.1 AI helper instead."
             )
-            st.info("Base UI not found in this build. Showing AI helper only.")
-    except Exception as e:
-        st.error(f"Capability Statement base UI error: {e}")
+        except Exception as e:
+            st.warning(f"Capability Statement base UI issue (non-blocking): {e}")
+    else:
+        st.header("Capability Statement")
+        st.caption(
+            "Use this page to generate and store tailored capability statements "
+            "for specific agencies and NAICS codes."
+        )
+        st.info("Base UI not found in this build. Showing AI helper only.")
 
     # Then render the X16.1 helper
     try:
@@ -20499,20 +20506,25 @@ RFP context (may be empty):
                             "Differentiators bullets"
                         )
 
+            # Initialize session-backed fields for the AI outputs
+            if "x161_tagline" not in st.session_state:
+                st.session_state["x161_tagline"] = tagline0
+            if "x161_core" not in st.session_state:
+                st.session_state["x161_core"] = core0
+            if "x161_diff" not in st.session_state:
+                st.session_state["x161_diff"] = diff0
+
             st.text_input(
                 "Tagline (AI)",
-                value=st.session_state.get("x161_tagline", tagline0),
                 key="x161_tagline",
             )
             st.text_area(
                 "Core Competencies (AI)",
-                value=st.session_state.get("x161_core", core0),
                 height=160,
                 key="x161_core",
             )
             st.text_area(
                 "Differentiators (AI)",
-                value=st.session_state.get("x161_diff", diff0),
                 height=160,
                 key="x161_diff",
             )
