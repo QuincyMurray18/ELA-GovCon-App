@@ -15228,7 +15228,7 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                 img_path = save_uploaded_file(ns_img, subdir="whitepapers")
             pos = int((df_sec["position"].max() if not df_sec.empty else 0) + 1)
             with closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body, image_path) VALUES (?, ?, ?, ?, ?,?);",
+                cur.execute("INSERT INTO white_paper_sections(paper_id, position, title, body, image_path) VALUES (?, ?, ?, ?, ?);",
                             (int(p_sel), pos, ns_title.strip(), ns_body.strip(), img_path))
                 cur.execute("UPDATE white_papers SET updated_at=datetime('now') WHERE id=?;", (int(p_sel),))
                 conn.commit()
