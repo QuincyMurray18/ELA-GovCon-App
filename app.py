@@ -3906,7 +3906,7 @@ def sam_snapshot(conn: "sqlite3.Connection", rfp_id: int, url: str, ttl_hours: i
     out["facts"] = facts
     now = _now_iso()
     with closing(conn.cursor()) as cur:
-        cur.execute("INSERT INTO sam_versions(rfp_id, url, sha256, extracted_json, created_at) VALUES (?, ?, ?, ?, ?,?);",
+        cur.execute("INSERT INTO sam_versions(rfp_id, url, sha256, extracted_json, created_at) VALUES (?, ?, ?, ?, ?);",
                     (int(rfp_id), url, sha, json.dumps(facts), now))
         vid = cur.lastrowid
         for k, v in facts.items():
@@ -11580,7 +11580,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
                                             (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
                             for pc in pocs:
-                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);",
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
 
                             # X3: store POP / ordering period in meta and key_dates
@@ -11666,7 +11666,7 @@ def _run_rfp_analyzer_phase3(conn):
                                 cur.execute("INSERT INTO key_dates(rfp_id, label, date_text, date_iso) VALUES (?,?,?,?);",
                                             (rfp_id, d.get('label'), d.get('date_text'), d.get('date_iso')))
                             for pc in pocs:
-                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);",
+                                cur.execute("INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?);",
                                             (rfp_id, pc.get('name'), pc.get('role'), pc.get('email'), pc.get('phone')))
                             conn.commit()
                         last_rfp_id = rfp_id
@@ -12256,7 +12256,7 @@ def _run_rfp_analyzer_phase3(conn):
                         for _, r in ed_p.fillna('').iterrows():
                             if not any(str(r.get(col,'')).strip() for col in ['name','role','email','phone']):
                                 continue
-                            cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?,?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
+                            cur.execute('INSERT INTO pocs(rfp_id, name, role, email, phone) VALUES (?, ?, ?, ?, ?);', (int(_ensure_selected_rfp_id(conn)), str(r.get('name','')), str(r.get('role','')), str(r.get('email','')), str(r.get('phone',''))))
                         conn.commit()
                     st.success('POCs saved.')
             with tab_meta:
@@ -14629,7 +14629,7 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     if add_lab:
         with closing(conn.cursor()) as cur:
             cur.execute("""
-                INSERT INTO pricing_labor(scenario_id, labor_cat, hours, rate, fringe_pct) VALUES (?, ?, ?, ?, ?,?);
+                INSERT INTO pricing_labor(scenario_id, labor_cat, hours, rate, fringe_pct) VALUES (?, ?, ?, ?, ?);
             """, (int(scenario_id), cat.strip(), float(hrs), float(rate), float(fringe)))
             conn.commit()
         st.success("Added.")
