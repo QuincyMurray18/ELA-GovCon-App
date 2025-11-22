@@ -1052,6 +1052,7 @@ def ensure_unified_schemas(conn):
         except Exception as e: _debug_log(conn, "quotes", e)
     conn.commit()
 
+
 def ensure_pb_templates_schema(conn):
     """Ensure proposal_templates and proposal_template_tokens tables exist."""
     with _closing(conn.cursor()) as cur:
@@ -13227,7 +13228,8 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                     st.session_state[f"pb_ta_{sec}"] = norm
             st.success("Drafted all sections.")
             st.rerun()
-        # Optional: auto-fill all selected sections from matching templates.
+
+        # Optional: auto-fill all selected sections from templates.
         if isinstance(tpl_df, pd.DataFrame) and not tpl_df.empty and selected:
             with st.expander("Auto-fill sections from templates", expanded=False):
                 st.caption(
@@ -13248,7 +13250,6 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                             else:
                                 _candidates = _df
                             if _candidates is None or _candidates.empty:
-                                # Fallback to any active section template
                                 if "template_type" in _df.columns:
                                     _candidates = _df[_df["template_type"].fillna("section") == "section"]
                                 else:
@@ -24582,6 +24583,7 @@ def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
                         conn.commit()
                     st.success("Template archived.")
                     st.rerun()
+
         with c3:
             if st.button("Delete selected", key="x7_tpl_delete", disabled=selected_id is None):
                 if selected_id is not None:
