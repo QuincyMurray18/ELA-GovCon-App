@@ -20334,53 +20334,126 @@ def test_seed_cases():
 
 # === X16.1: Capability Statement — AI drafting helper ===
 def run_capability_statement(conn):
+    """
+    Wrap the original capability statement page (if present) and add the X16.1
+    AI drafting helper panel. This makes the Draft buttons actually call the
+    same OpenAI backend used elsewhere in the app and save results into
+    org_profile.
+    """
+    # First, try to call the original implementation if it exists
     try:
-        if '_orig_run_capability_statement' in globals():
+        if "_orig_run_capability_statement" in globals():
             _orig_run_capability_statement(conn)
         else:
             st.header("Capability Statement")
-            st.caption("Use this page to generate and store tailored capability statements for specific agencies and NAICS codes.")
+            st.caption(
+                "Use this page to generate and store tailored capability statements "
+                "for specific agencies and NAICS codes."
+            )
             st.info("Base UI not found in this build. Showing AI helper only.")
     except Exception as e:
         st.error(f"Capability Statement base UI error: {e}")
+
+    # Then render the X16.1 helper
     try:
         with st.expander("X16.1 — AI drafting helper (OpenAI)", expanded=False):
-            st.caption("Draft tagline, core competencies, and differentiators using your org profile and recent RFP context.")
-            # Load org profile
+            st.caption(
+                "Draft tagline, core competencies, and differentiators using your "
+                "org profile and recent RFP context."
+            )
+
+            # Load org profile seed values
             try:
                 dfp = pd.read_sql_query("SELECT * FROM org_profile WHERE id=1;", conn)
             except Exception:
                 dfp = None
-            profile = (dfp.iloc[0].to_dict() if isinstance(dfp, pd.DataFrame) and not dfp.empty else {})
-            company = profile.get("company_name","").strip() or "Your Company"
-            tagline0 = profile.get("tagline","") or ""
-            core0 = profile.get("core_competencies","") or ""
-            diff0 = profile.get("differentiators","") or ""
+            profile = (
+                dfp.iloc[0].to_dict()
+                if isinstance(dfp, pd.DataFrame) and not dfp.empty
+                else {}
+            )
+            company = (profile.get("company_name") or "").strip() or "Your Company"
+            tagline0 = profile.get("tagline") or ""
+            core0 = profile.get("core_competencies") or ""
+            diff0 = profile.get("differentiators") or ""
+
             st.write(f"**Company:** {company}")
-            audience = st.text_input("Audience focus (e.g., BOP Facilities, USAF MXG, VA VISN)", key="x161_aud")
-            tone = st.selectbox("Tone", ["Crisp federal", "Technical", "Plain language"], index=0, key="x161_tone")
-            include_past_perf = st.checkbox("Incorporate past performance bullets if available", value=True, key="x161_pp")
+            audience = st.text_input(
+                "Audience focus (e.g., BOP Facilities, USAF MXG, VA VISN)",
+                key="x161_aud",
+            )
+            tone = st.selectbox(
+                "Tone",
+                ["Crisp federal", "Technical", "Plain language"],
+                index=0,
+                key="x161_tone",
+            )
+            include_past_perf = st.checkbox(
+                "Incorporate past performance bullets if available",
+                value=True,
+                key="x161_pp",
+            )
+
             # Optional RFP context
+            ctx = ""
             try:
-                dfr = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn)
-                rfp_sel = st.selectbox("Optional RFP context", options=[None] + dfr["id"].tolist(),
-                                       format_func=lambda i: "None" if i is None else f"#{i} — {dfr.loc[dfr['id']==i,'title'].values[0]}",
-                                       key="x161_rfp")
+                dfr = pd.read_sql_query(
+                    "SELECT id, title FROM rfps ORDER BY id DESC;", conn
+                )
+                if isinstance(dfr, pd.DataFrame) and not dfr.empty:
+                    options = [None] + dfr["id"].tolist()
+
+                    def _fmt_rfp(i):
+                        if i is None:
+                            return "No additional context"
+                        try:
+                            title = dfr.loc[dfr["id"] == i, "title"].values[0]
+                        except Exception:
+                            title = ""
+                        return f"#{i} — {title}"
+
+                    rfp_sel = st.selectbox(
+                        "Optional RFP context",
+                        options=options,
+                        format_func=_fmt_rfp,
+                        key="x161_rfp",
+                    )
+                else:
+                    rfp_sel = None
             except Exception:
                 rfp_sel = None
-            ctx = ""
+
             if rfp_sel:
                 try:
-                    # Pull a compact context from chunks
-                    hits = pd.read_sql_query("SELECT text FROM rfp_chunks WHERE rfp_id=? LIMIT 40;", conn, params=(int(rfp_sel),))
-                    ctx = "\n".join((hits["text"].fillna("").tolist() if hits is not None else []))[:12000]
+                    hits = pd.read_sql_query(
+                        "SELECT text FROM rfp_chunks WHERE rfp_id=? ORDER BY id LIMIT 40;",
+                        conn,
+                        params=(int(rfp_sel),),
+                    )
+                    if (
+                        isinstance(hits, pd.DataFrame)
+                        and not hits.empty
+                        and "text" in hits.columns
+                    ):
+                        ctx = "
+
+".join(hits["text"].fillna("").tolist())[:12000]
                 except Exception:
                     ctx = ""
-            # Compose prompt
-            def _ask_x161(kind: str):
-                sys = "You are a senior federal capture writer. Use short, precise bullets. Avoid marketing fluff. No emojis."
-                req = f"""Company: {company}
-Audience: {audience or '(general federal)'}
+
+            def _ask_x161(kind: str) -> str:
+                """
+                Use the shared ask_ai() helper to draft one piece of the
+                capability statement and return the full text.
+                """
+                base_sys = (
+                    "You are a senior U.S. federal capture and proposal writer. "
+                    "Write concise, concrete bullets suitable for a one-page capability "
+                    "statement. Avoid hype, avoid first person, and favor contracting "
+                    "language."
+                )
+                user_prompt = f"""Company: {company}
+Audience: {audience or "(general federal)"}
 Tone: {tone}
 Existing tagline: {tagline0[:200]}
 Existing core competencies: {core0[:800]}
@@ -20388,43 +20461,80 @@ Existing differentiators: {diff0[:800]}
 Include past performance: {bool(include_past_perf)}
 Task: Draft {kind} for a one-page capability statement.
 Constraints:
-- 4–7 bullets for lists. 12–18 words each.
-- Use federal terms. No hyperbole. No first person.
-- If RFP context provided, align content.
-RFP Context (optional, may be empty):
-{ctx if ctx else '(none)'}"""
+- For lists, use 4–7 bullets, 12–18 words each.
+- Use federal terms where appropriate.
+- If RFP context is provided, align language and priorities to it.
+
+RFP context (may be empty):
+{ctx or "(none)"}"""
+                acc = []
                 try:
-                    client = get_ai()
-                    model = (globals().get('_resolve_model') or (lambda: 'gpt-4o-mini'))()
-                    resp = client.chat.completions.create(
-                        model=model,
-                        messages=[{"role":"system","content": sys}, {"role":"user","content": req}],
-                        temperature=0.2
-                    )
-                    return (resp.choices[0].message.content or "").strip()
+                    for tok in ask_ai(
+                        [
+                            {"role": "system", "content": base_sys},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=0.2,
+                    ):
+                        acc.append(tok)
                 except Exception as e:
                     return f"AI error: {e}"
-            c1, c2, c3 = st.columns([1,1,1])
+                return "".join(acc).strip()
+
+            c1, c2, c3 = st.columns(3)
             with c1:
                 if st.button("Draft Tagline", key="x161_tl"):
-                    st.session_state["x161_tagline"] = _ask_x161("a concise 8–14 word tagline")
+                    with st.spinner("Drafting tagline..."):
+                        st.session_state["x161_tagline"] = _ask_x161(
+                            "a concise 8–14 word tagline"
+                        )
             with c2:
                 if st.button("Draft Core Competencies", key="x161_cc"):
-                    st.session_state["x161_core"] = _ask_x161("Core Competencies bullets")
+                    with st.spinner("Drafting core competencies..."):
+                        st.session_state["x161_core"] = _ask_x161(
+                            "Core Competencies bullets"
+                        )
             with c3:
                 if st.button("Draft Differentiators", key="x161_df"):
-                    st.session_state["x161_diff"] = _ask_x161("Differentiators bullets")
-            st.text_input("Tagline (AI)", value=st.session_state.get("x161_tagline",""), key="x161_tagline_box")
-            st.text_area("Core Competencies (AI)", value=st.session_state.get("x161_core",""), height=160, key="x161_core_box")
-            st.text_area("Differentiators (AI)", value=st.session_state.get("x161_diff",""), height=160, key="x161_diff_box")
-            save = st.button("Save AI fields into org_profile", key="x161_save")
-            if save:
+                    with st.spinner("Drafting differentiators..."):
+                        st.session_state["x161_diff"] = _ask_x161(
+                            "Differentiators bullets"
+                        )
+
+            st.text_input(
+                "Tagline (AI)",
+                value=st.session_state.get("x161_tagline", tagline0),
+                key="x161_tagline_box",
+            )
+            st.text_area(
+                "Core Competencies (AI)",
+                value=st.session_state.get("x161_core", core0),
+                height=160,
+                key="x161_core_box",
+            )
+            st.text_area(
+                "Differentiators (AI)",
+                value=st.session_state.get("x161_diff", diff0),
+                height=160,
+                key="x161_diff_box",
+            )
+
+            if st.button("Save AI fields into org_profile", key="x161_save"):
                 try:
                     with closing(conn.cursor()) as cur:
                         # ensure profile row exists
-                        cur.execute("INSERT OR IGNORE INTO org_profile(id, company_name) VALUES(1, ?);", (company,))
-                        cur.execute("UPDATE org_profile SET tagline=?, core_competencies=?, differentiators=? WHERE id=1;",
-                                    (st.session_state.get("x161_tagline",""), st.session_state.get("x161_core",""), st.session_state.get("x161_diff","")))
+                        cur.execute(
+                            "INSERT OR IGNORE INTO org_profile(id, company_name) VALUES(1, ?);",
+                            (company,),
+                        )
+                        cur.execute(
+                            "UPDATE org_profile SET tagline=?, core_competencies=?, differentiators=? WHERE id=1;",
+                            (
+                                (st.session_state.get("x161_tagline_box", "") or "").strip(),
+                                (st.session_state.get("x161_core_box", "") or "").strip(),
+                                (st.session_state.get("x161_diff_box", "") or "").strip(),
+                            ),
+                        )
                         conn.commit()
                     st.success("Saved to org_profile")
                 except Exception as e:
@@ -20432,6 +20542,7 @@ RFP Context (optional, may be empty):
     except Exception as e:
         st.error(f"X16.1 panel error: {e}")
 # === end X16.1 ===
+
 
 # === S1 Subcontractor Finder: Google Places ====================================
 def ensure_subfinder_s1_schema(conn):
