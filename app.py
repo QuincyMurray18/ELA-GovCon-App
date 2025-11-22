@@ -20502,19 +20502,19 @@ RFP context (may be empty):
             st.text_input(
                 "Tagline (AI)",
                 value=st.session_state.get("x161_tagline", tagline0),
-                key="x161_tagline_box",
+                key="x161_tagline",
             )
             st.text_area(
                 "Core Competencies (AI)",
                 value=st.session_state.get("x161_core", core0),
                 height=160,
-                key="x161_core_box",
+                key="x161_core",
             )
             st.text_area(
                 "Differentiators (AI)",
                 value=st.session_state.get("x161_diff", diff0),
                 height=160,
-                key="x161_diff_box",
+                key="x161_diff",
             )
 
             if st.button("Save AI fields into org_profile", key="x161_save"):
@@ -20528,9 +20528,9 @@ RFP context (may be empty):
                         cur.execute(
                             "UPDATE org_profile SET tagline=?, core_competencies=?, differentiators=? WHERE id=1;",
                             (
-                                (st.session_state.get("x161_tagline_box", "") or "").strip(),
-                                (st.session_state.get("x161_core_box", "") or "").strip(),
-                                (st.session_state.get("x161_diff_box", "") or "").strip(),
+                                (st.session_state.get("x161_tagline", "") or "").strip(),
+                                (st.session_state.get("x161_core", "") or "").strip(),
+                                (st.session_state.get("x161_diff", "") or "").strip(),
                             ),
                         )
                         conn.commit()
