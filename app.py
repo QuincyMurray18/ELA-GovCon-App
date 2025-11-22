@@ -2650,6 +2650,151 @@ except Exception:
 # ---- job store for background tasks (in-memory) ----
 _jobs: dict[str, dict] = {}
 
+
+# === Safe wrapper for _one_click_analyze ======================================
+# Wrap the original implementation so the main RFP Analyzer tab is more robust.
+try:
+    _orig_one_click_analyze = _one_click_analyze  # type: ignore[name-defined]
+except Exception:  # pragma: no cover
+    _orig_one_click_analyze = None  # type: ignore[assignment]
+
+def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
+    """Robust ingest/analyze helper used by the main RFP Analyzer tab.
+
+    It tries the original implementation first (which may pull from SAM.gov,
+    rebuild the semantic index, etc.). If that fails for any reason, it falls
+    back to a lightweight local analyzer that works only from rfp_files bytes.
+    """
+    import re as _re
+    import pandas as _pd
+
+    # 1) Try the original pipeline if present
+    if _orig_one_click_analyze is not None:
+        try:
+            return _orig_one_click_analyze(conn, rfp_id, sam_url)  # type: ignore[misc]
+        except Exception as e:  # pragma: no cover
+            try:
+                logger.exception("_one_click_analyze (orig) failed; falling back to local analyzer: %s", e)
+            except Exception:
+                pass
+
+    # 2) Fallback: build a minimal analysis directly from rfp_files
+    try:
+        df = _pd.read_sql_query(
+            "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+            conn,
+            params=(int(rfp_id),),
+        )
+    except Exception:
+        df = None
+
+    if df is None or getattr(df, "empty", True):
+        # Nothing to analyze
+        return
+
+    # Collect raw text from each file
+    texts: list[str] = []
+    for _, row in df.iterrows():
+        b = row.get("bytes")
+        if b is None:
+            continue
+        try:
+            data = bytes(b)
+        except Exception:
+            data = b
+        mime = str(row.get("mime") or "")
+        try:
+            pages = extract_text_pages(data, mime)  # type: ignore[name-defined]
+        except Exception:
+            try:
+                pages = [data.decode("utf-8", errors="ignore")]
+            except Exception:
+                pages = []
+        if not pages:
+            continue
+        texts.append("\n".join([str(p or "") for p in pages]))
+
+    full_text = "\n\n".join(texts).strip()
+    if not full_text:
+        return
+
+    # Derive L/M sections and checklist items
+    try:
+        secs = extract_sections_L_M(full_text)  # type: ignore[name-defined]
+    except Exception:
+        secs = {}
+    lm_items: list[str] = []
+    try:
+        _L = secs.get("L", "") or ""
+        _M = secs.get("M", "") or ""
+        try:
+            lm_items.extend(derive_lm_items(_L))  # type: ignore[name-defined]
+        except Exception:
+            pass
+        try:
+            lm_items.extend(derive_lm_items(_M))  # type: ignore[name-defined]
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Persist lm_items in a simple, idempotent way
+    if lm_items:
+        try:
+            with conn:
+                # Clear old items for this RFP so we do not duplicate rows
+                try:
+                    conn.execute("DELETE FROM lm_items WHERE rfp_id=?;", (int(rfp_id),))
+                except Exception:
+                    pass
+                for it in lm_items[:300]:
+                    it = (it or "").strip()
+                    if not it:
+                        continue
+                    is_must = 1 if _re.search(r"\b(shall|must|required|no later than|shall not|will)\b", it, _re.I) else 0
+                    conn.execute(
+                        "INSERT INTO lm_items (rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
+                        (int(rfp_id), it, is_must, "Open"),
+                    )
+        except Exception:
+            # If lm_items fails we still try RTM below
+            pass
+
+    # Build RTM requirements from lm_items using the existing helper, if available
+    try:
+        rtm_build_requirements(conn, int(rfp_id))  # type: ignore[name-defined]
+    except Exception:
+        # If rtm_build_requirements is not available, fall back to a direct insert
+        try:
+            now = _now_iso()  # type: ignore[name-defined]
+        except Exception:
+            now = None
+        try:
+            with conn:
+                try:
+                    conn.execute("DELETE FROM rtm_requirements WHERE rfp_id=?;", (int(rfp_id),))
+                except Exception:
+                    pass
+                for idx, it in enumerate(lm_items[:300], start=1):
+                    it = (it or "").strip()
+                    if not it:
+                        continue
+                    key = f"LM-{idx}"
+                    conn.execute(
+                        "INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at) "
+                        "VALUES (?,?,?,?,?,?,?,?,?);",
+                        (int(rfp_id), key, "L/M", None, None, it, "Open", now, now),
+                    )
+        except Exception:
+            pass
+
+    # Best-effort index rebuild so search and Proposal Builder can see the new text
+    try:
+        y1_index_rfp(conn, int(rfp_id), rebuild=False)  # type: ignore[name-defined]
+    except Exception:
+        pass
+
+
 def _enqueue(fn, *args, **kwargs) -> str:
     jid = str(uuid.uuid4())
     _jobs[jid] = {"status":"queued"}
@@ -27006,153 +27151,4 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
-
-
-
-# === Safe wrapper for _one_click_analyze ======================================
-# In some builds the original _one_click_analyze may abort early or fail
-# depending on which helper functions are available (SAM integration, indexer, etc.).
-# To make the RFP Analyzer more robust, wrap the original implementation with a
-# local-only fallback that at minimum populates lm_items and RTM requirements
-# from the uploaded RFP files.
-try:
-    _orig_one_click_analyze = _one_click_analyze  # type: ignore[name-defined]
-except Exception:  # pragma: no cover
-    _orig_one_click_analyze = None  # type: ignore[assignment]
-
-def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
-    """Robust ingest/analyze helper used by the main RFP Analyzer tab.
-
-    It tries the original implementation first (which may pull from SAM.gov,
-    rebuild the semantic index, etc.). If that fails for any reason, it falls
-    back to a lightweight local analyzer that works only from rfp_files bytes.
-    """
-    import re as _re
-    import pandas as _pd
-
-    # 1) Try the original pipeline if present
-    if _orig_one_click_analyze is not None:
-        try:
-            return _orig_one_click_analyze(conn, rfp_id, sam_url)  # type: ignore[misc]
-        except Exception as e:  # pragma: no cover
-            try:
-                logger.exception("_one_click_analyze (orig) failed; falling back to local analyzer: %s", e)
-            except Exception:
-                pass
-
-    # 2) Fallback: build a minimal analysis directly from rfp_files
-    try:
-        df = _pd.read_sql_query(
-            "SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-            conn,
-            params=(int(rfp_id),),
-        )
-    except Exception:
-        df = None
-
-    if df is None or getattr(df, "empty", True):
-        # Nothing to analyze
-        return
-
-    # Collect raw text from each file
-    texts: list[str] = []
-    for _, row in df.iterrows():
-        b = row.get("bytes")
-        if b is None:
-            continue
-        try:
-            data = bytes(b)
-        except Exception:
-            data = b
-        mime = str(row.get("mime") or "")
-        try:
-            pages = extract_text_pages(data, mime)  # type: ignore[name-defined]
-        except Exception:
-            try:
-                pages = [data.decode("utf-8", errors="ignore")]
-            except Exception:
-                pages = []
-        if not pages:
-            continue
-        texts.append("\n".join([str(p or "") for p in pages]))
-
-    full_text = "\n\n".join(texts).strip()
-    if not full_text:
-        return
-
-    # Derive L/M sections and checklist items
-    try:
-        secs = extract_sections_L_M(full_text)  # type: ignore[name-defined]
-    except Exception:
-        secs = {}
-    lm_items: list[str] = []
-    try:
-        _L = secs.get("L", "") or ""
-        _M = secs.get("M", "") or ""
-        try:
-            lm_items.extend(derive_lm_items(_L))  # type: ignore[name-defined]
-        except Exception:
-            pass
-        try:
-            lm_items.extend(derive_lm_items(_M))  # type: ignore[name-defined]
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-    # Persist lm_items in a simple, idempotent way
-    if lm_items:
-        try:
-            with conn:
-                # Clear old items for this RFP so we do not duplicate rows
-                try:
-                    conn.execute("DELETE FROM lm_items WHERE rfp_id=?;", (int(rfp_id),))
-                except Exception:
-                    pass
-                for it in lm_items[:300]:
-                    it = (it or "").strip()
-                    if not it:
-                        continue
-                    is_must = 1 if _re.search(r"\b(shall|must|required|no later than|shall not|will)\b", it, _re.I) else 0
-                    conn.execute(
-                        "INSERT INTO lm_items (rfp_id, item_text, is_must, status) VALUES (?,?,?,?);",
-                        (int(rfp_id), it, is_must, "Open"),
-                    )
-        except Exception:
-            # If lm_items fails we still try RTM below
-            pass
-
-    # Build RTM requirements from lm_items using the existing helper, if available
-    try:
-        rtm_build_requirements(conn, int(rfp_id))  # type: ignore[name-defined]
-    except Exception:
-        # If rtm_build_requirements is not available, fall back to a direct insert
-        try:
-            now = _now_iso()  # type: ignore[name-defined]
-        except Exception:
-            now = None
-        try:
-            with conn:
-                try:
-                    conn.execute("DELETE FROM rtm_requirements WHERE rfp_id=?;", (int(rfp_id),))
-                except Exception:
-                    pass
-                for idx, it in enumerate(lm_items[:300], start=1):
-                    it = (it or "").strip()
-                    if not it:
-                        continue
-                    key = f"LM-{idx}"
-                    conn.execute(
-                        "INSERT INTO rtm_requirements(rfp_id, req_key, source_type, source_file, page, text, status, created_at, updated_at) "
-                        "VALUES (?,?,?,?,?,?,?,?,?);",
-                        (int(rfp_id), key, "L/M", None, None, it, "Open", now, now),
-                    )
-        except Exception:
-            pass
-
-    # Best-effort index rebuild so search and Proposal Builder can see the new text
-    try:
-        y1_index_rfp(conn, int(rfp_id), rebuild=False)  # type: ignore[name-defined]
-    except Exception:
-        pass
 
