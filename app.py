@@ -15066,6 +15066,13 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
         # Export DOCX
         out_path = str(Path(DATA_DIR) / "Past_Performance_Writeups.docx")
         _export_past_perf_docx(out_path, past_perf)
+def _wp_load_template(conn: "sqlite3.Connection", template_id: int) -> pd.DataFrame:
+    """Load sections for a given white paper template ordered by position."""
+    return pd.read_sql_query(
+        "SELECT id, position, title, body FROM white_template_sections WHERE template_id=? ORDER BY position ASC;",
+        conn, params=(template_id,)
+    )
+
 def _wp_load_paper(conn: "sqlite3.Connection", paper_id: int) -> pd.DataFrame:
     return pd.read_sql_query(
         "SELECT id, position, title, body, image_path FROM white_paper_sections WHERE paper_id=? ORDER BY position ASC;",
@@ -15095,8 +15102,8 @@ def _wp_export_docx(path: str, title: str, subtitle: str, sections: pd.DataFrame
             doc.add_paragraph(subtitle)
         if isinstance(sections, pd.DataFrame) and not sections.empty:
             for _, row in sections.iterrows():
-                sec = str(row.get('Section') or row.get('section') or row.get('name') or "Section")
-                body = str(row.get('Content') or row.get('content') or row.get('text') or "")
+                sec = str(row.get('Section') or row.get('section') or row.get('name') or row.get('title') or "Section")
+                body = str(row.get('Content') or row.get('content') or row.get('text') or row.get('body') or "")
                 doc.add_heading(sec, level=2)
                 body = _pb_normalize_text(body or "")
                 _pb__write_md(doc, body, font_name, font_size_pt, line_spacing)
