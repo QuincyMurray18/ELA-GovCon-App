@@ -15196,8 +15196,8 @@ def run_white_paper_builder(conn: "sqlite3.Connection") -> None:
                 st.error("Title required")
             else:
                 with closing(conn.cursor()) as cur:
-                    cur.execute("INSERT INTO white_papers(title, subtitle, rfp_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?,datetime('now'));",
-                                (d_title.strip(), d_sub.strip(), None, datetime.utcnow().isoformat()))
+                    cur.execute("INSERT INTO white_papers(title, subtitle, rfp_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?);",
+                                (d_title.strip(), d_sub.strip(), None, datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
                     pid = cur.lastrowid
                     if t_sel2:
                         df_ts2 = _wp_load_template(conn, int(t_sel2))
