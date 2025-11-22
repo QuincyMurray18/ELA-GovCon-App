@@ -14665,11 +14665,13 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     df_sum = pd.DataFrame(list(s.items()), columns=["Component", "Amount"])
     _styled_dataframe(df_sum.style.format({"Amount": "{:,.2f}"}), use_container_width=True, hide_index=True)
 
-    if st.button("Export pricing CSV"):
-        path = os.path.join(DATA_DIR, f"pricing_scenario_{int(scenario_id)}.csv")
-        df_sum.to_csv(path, index=False)
-        st.success("Exported.")
-        st.markdown(f"[Download pricing CSV]({path})")
+    csv_bytes = df_sum.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download pricing CSV",
+        data=csv_bytes,
+        file_name=f"pricing_scenario_{int(scenario_id)}.csv",
+        mime="text/csv",
+    )
 
 # ---------- Win Probability (Phase E) ----------
 def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
