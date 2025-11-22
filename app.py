@@ -3862,8 +3862,13 @@ def render_rtm_ui(conn: "sqlite3.Connection", rfp_id: int) -> None:
         tg = (row.get('add_link_target') or "").strip()
         if lt and tg:
             with closing(conn.cursor()) as cur:
-                cur.execute("INSERT INTO rtm_links(rtm_id, link_type, target, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?,?,?);",
-                            (rid, lt, tg, "", now, now))
+                cur.execute(
+                    """
+                    INSERT INTO rtm_links (rtm_id, link_type, target, note, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?);
+                    """
+                    , (rid, lt, tg, "", now, now),
+                )
     conn.commit()
 
 def _parse_sam_text_to_facts(txt: str) -> dict:
@@ -14428,8 +14433,25 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
                                 upx = float(r.get("unit_price", 0) or 0)
                                 ext = _calc_extended(qty, upx) or 0.0
                                 cur.execute(
-                                    "INSERT INTO quote_lines(quote_id, clin, description, qty, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?);",
-                                    (qid, str(r.get("clin",""))[:50], str(r.get("description",""))[:300], qty, upx, ext)
+                                    """
+                                    INSERT INTO quote_lines(
+                                        quote_id,
+                                        clin,
+                                        description,
+                                        qty,
+                                        unit_price,
+                                        extended_price
+                                    )
+                                    VALUES (?, ?, ?, ?, ?, ?);
+                                    """
+                                    , (
+                                        qid,
+                                        str(r.get("clin", ""))[:50],
+                                        str(r.get("description", ""))[:300],
+                                        qty,
+                                        upx,
+                                        ext,
+                                    ),
                                 )
                                 total_rows += 1
                         conn.commit()
@@ -14471,8 +14493,18 @@ def run_quote_comparison(conn: "sqlite3.Connection") -> None:
             ext = _calc_extended(qty, price) or 0.0
             with closing(conn.cursor()) as cur:
                 cur.execute(
-                    "INSERT INTO quote_lines(quote_id, clin, description, qty, unit_price, extended_price) VALUES (?, ?, ?, ?, ?,?,?);",
-                    (qid, clin.strip(), desc.strip(), float(qty), float(price), float(ext))
+                    """
+                    INSERT INTO quote_lines(
+                        quote_id,
+                        clin,
+                        description,
+                        qty,
+                        unit_price,
+                        extended_price
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?);
+                    """
+                    , (qid, clin.strip(), desc.strip(), float(qty), float(price), float(ext)),
                 )
                 conn.commit()
             _recompute_quote_totals(conn, int(rfp_id))
@@ -26487,5 +26519,4 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
-
 
