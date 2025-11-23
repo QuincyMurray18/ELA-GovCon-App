@@ -10570,6 +10570,14 @@ def run_sam_watch(conn) -> None:
                                                 continue
                                 except Exception as _e:
                                     st.warning(f"Attachment download/linking error: {_e}")
+                                # Run ingest/analyze so the One-Page view is ready when Analyzer opens.
+                                try:
+                                    _one_click_analyze(conn, int(rfp_id), (notice or {}).get("sam_url") or (notice or {}).get("url") or None)
+                                except Exception as _e2:
+                                    try:
+                                        st.warning(f"Auto analyze skipped: {_e2}")
+                                    except Exception:
+                                        pass
 
                                 # Hand off into RFP Analyzer with this notice as context
                                 st.session_state["current_rfp_id"] = int(rfp_id)
