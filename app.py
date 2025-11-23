@@ -5514,7 +5514,13 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
             continue
         mime = row.get("mime") or _guess_mime_from_name(str(name).lower())
         try:
-            pages = extract_text_pages(b, mime) or []
+            index_bytes = b
+            try:
+                if b is not None and len(b) > MAX_RFP_INDEX_BYTES:
+                    index_bytes = b[:MAX_RFP_INDEX_BYTES]
+            except Exception:
+                index_bytes = b
+            pages = extract_text_pages(index_bytes, mime) or []
         except Exception:
             pages = []
         if pages:
@@ -8528,6 +8534,8 @@ def _tesseract_ok() -> bool:
     except Exception:
         return False
 
+MAX_RFP_INDEX_BYTES = 10 * 1024 * 1024  # cap bytes used for text extraction/indexing per file
+
 def extract_text_pages(file_bytes: bytes, mime: str) -> list:
     """Return a list of page texts. Best-effort. Up to 100 pages to keep fast."""
     out = []
@@ -8673,9 +8681,15 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                         pass
             return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
         # New insert
-        pages_text = extract_text_pages(file_bytes, mime)
+        index_bytes = file_bytes
+        try:
+            if file_bytes is not None and len(file_bytes) > MAX_RFP_INDEX_BYTES:
+                index_bytes = file_bytes[:MAX_RFP_INDEX_BYTES]
+        except Exception:
+            index_bytes = file_bytes
+        pages_text = extract_text_pages(index_bytes, mime)
         pages_before = len(pages_text)
-        pages_text, ocr_count = ocr_pages_if_empty(file_bytes, mime, pages_text)
+        pages_text, ocr_count = ocr_pages_if_empty(index_bytes, mime, pages_text)
         pages = len(pages_text) if pages_text else None
         cur.execute(
             "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
@@ -19305,7 +19319,7 @@ def run_rfp_analyzer(conn) -> None:
             key="onepage_uploads_alt",
         )
         if uploads:
-            # Avoid endless reruns: only process a new selection once.
+            # Avoid endless reruns by hashing the current selection and only processing changes.
             try:
                 cur_hash = _chat_plus_hash_uploads(uploads)
             except Exception:
@@ -19330,7 +19344,6 @@ def run_rfp_analyzer(conn) -> None:
                     except Exception:
                         pass
                     st.rerun()
-
     # Build pages and render One-Page
     try:
         df_files = _pd.__p_read_sql_query(
