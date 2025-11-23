@@ -8473,6 +8473,19 @@ def _fetch_sam_attachments(notice, api_key: str | None, target_dir: str, cookie:
     return pulled_paths, errors
 
 
+
+# Phase X1 PDF extractor imports (safe/optional)
+try:
+    import pypdf as _pypdf  # modern fork of PyPDF2
+except Exception:  # pragma: no cover - environment may not have pypdf
+    _pypdf = None
+
+try:
+    import pdfplumber as _pdfplumber
+except Exception:  # pragma: no cover - environment may not have pdfplumber
+    _pdfplumber = None
+
+
 def _safe_import_pdf_extractors():
     if _pypdf is not None:
         return ('pypdf', _pypdf)
