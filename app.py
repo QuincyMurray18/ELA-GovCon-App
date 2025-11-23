@@ -7637,22 +7637,27 @@ def get_db() -> sqlite3.Connection:
             pass
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date, status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_user);")
-        cur.execute("DROP VIEW IF EXISTS tasks_t;")
-        cur.execute("""
-            CREATE VIEW IF NOT EXISTS tasks_t AS
-            SELECT
-                id,
-                title,
-                due_date,
-                status,
-                priority,
-                deal_id,
-                contact_id,
-                created_at,
-                completed_at,
-                COALESCE(owner_user, '') AS owner_user
-            FROM tasks;
-        """)
+        try:
+            cur.execute("DROP VIEW IF EXISTS tasks_t;")
+            cur.execute("""
+                CREATE VIEW IF NOT EXISTS tasks_t AS
+                SELECT
+                    id,
+                    title,
+                    due_date,
+                    status,
+                    priority,
+                    deal_id,
+                    contact_id,
+                    created_at,
+                    completed_at,
+                    COALESCE(owner_user, '') AS owner_user
+                FROM tasks;
+            """)
+        except Exception:
+            # If the database is locked or view recreation fails, do not block app startup.
+            pass
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS deal_stage_log(
                 id INTEGER PRIMARY KEY,
