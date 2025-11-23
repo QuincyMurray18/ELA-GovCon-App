@@ -8610,6 +8610,17 @@ def ocr_pages_if_empty(file_bytes: bytes, mime: str, pages_text: list) -> tuple:
     except Exception:
         return pages_text, 0
 
+
+def compute_sha256(data: bytes) -> str:
+    """Return hex sha256 of bytes. Small dedicated helper so we can reuse hashing consistently."""
+    import hashlib
+    try:
+        return hashlib.sha256(data or b"" ).hexdigest()
+    except Exception:
+        # Avoid hard failures on weird blobs; fall back to empty hash
+        return hashlib.sha256(b"" ).hexdigest()
+
+
 def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
     """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
     mime = _detect_mime_light(name)
