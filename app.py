@@ -5485,14 +5485,23 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
     Build or rebuild the semantic index for an RFP's files.
     """
     _ensure_y1_schema(conn)
-    try:
-        df_bytes = pd.read_sql_query(
-            "SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
-            conn,
-            params=(int(rfp_id),),
-        )
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    import sqlite3 as _sqlite3, time as _time
+    df_bytes = None
+    for _attempt in range(5):
+        try:
+            df_bytes = pd.read_sql_query(
+                "SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                conn,
+                params=(int(rfp_id),),
+            )
+            break
+        except _sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower() and _attempt < 4:
+                _time.sleep(0.2)
+                continue
+            return {"ok": False, "error": str(e)}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
     if df_bytes is None or df_bytes.empty:
         return {"ok": False, "error": "No linked files"}
     added = 0
@@ -5549,16 +5558,25 @@ def y1_index_rfp(conn: "sqlite3.Connection", rfp_id: int, max_pages: int = 100, 
                     except Exception:
                         pass
                 emb = _embed_texts([ch])[0]
-                with closing(conn.cursor()) as cur:
-                    cur.execute(
-                        """
-                        INSERT OR REPLACE INTO rfp_chunks(
-                            rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?);
-                        """,
-                        (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)),
-                    )
+                import sqlite3 as _sqlite3, time as _time
+                for _attempt in range(5):
+                    try:
+                        with closing(conn.cursor()) as cur:
+                            cur.execute(
+                                """
+                                INSERT OR REPLACE INTO rfp_chunks(
+                                    rfp_id, rfp_file_id, file_name, page, chunk_idx, text, emb
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?);
+                                """,
+                                (int(rfp_id), fid, name, int(pi), int(ci), ch, json.dumps(emb)),
+                            )
+                        break
+                    except _sqlite3.OperationalError as e:
+                        if "database is locked" in str(e).lower() and _attempt < 4:
+                            _time.sleep(0.2)
+                            continue
+                        raise
                 added += 1
     try:
         _fts_index_rfp(conn, int(rfp_id))
@@ -19344,6 +19362,7 @@ def run_rfp_analyzer(conn) -> None:
                     except Exception:
                         pass
                     st.rerun()
+
     # Build pages and render One-Page
     try:
         df_files = _pd.__p_read_sql_query(
