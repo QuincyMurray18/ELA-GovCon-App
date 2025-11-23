@@ -19298,24 +19298,38 @@ def run_rfp_analyzer(conn) -> None:
 
     with st.container(border=True):
         st.subheader("➕ Add files to this RFP")
-        uploads = st.file_uploader("Upload RFP documents (PDF/DOCX/TXT/ZIP/XLSX)", type=["pdf","doc","docx","txt","rtf","zip","xlsx","xls"],
-                                   accept_multiple_files=True, key="onepage_uploads_alt")
+        uploads = st.file_uploader(
+            "Upload RFP documents (PDF/DOCX/TXT/ZIP/XLSX)",
+            type=["pdf","doc","docx","txt","rtf","zip","xlsx","xls"],
+            accept_multiple_files=True,
+            key="onepage_uploads_alt",
+        )
         if uploads:
-            saved = 0
-            for f in uploads:
-                try:
-                    b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                    save_rfp_file_db(conn, int(_ensure_selected_rfp_id(conn)), getattr(f, "name", "upload"), b)
-                    saved += 1
-                except Exception:
-                    pass
-            if saved > 0:
-                st.success(f"Saved {saved} file(s).")
-                try:
-                    y1_index_rfp(conn, int(_ensure_selected_rfp_id(conn)), rebuild=False)
-                except Exception:
-                    pass
-                st.rerun()
+            # Avoid endless reruns: only process a new selection once.
+            try:
+                cur_hash = _chat_plus_hash_uploads(uploads)
+            except Exception:
+                cur_hash = None
+            hash_key = "onepage_uploads_alt_hash"
+            last_hash = st.session_state.get(hash_key)
+            should_process = (cur_hash is None) or (cur_hash != last_hash)
+            if should_process:
+                saved = 0
+                for f in uploads:
+                    try:
+                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+                        save_rfp_file_db(conn, int(_ensure_selected_rfp_id(conn)), getattr(f, "name", "upload"), b)
+                        saved += 1
+                    except Exception:
+                        pass
+                if saved > 0:
+                    st.session_state[hash_key] = cur_hash
+                    st.success(f"Saved {saved} file(s).")
+                    try:
+                        y1_index_rfp(conn, int(_ensure_selected_rfp_id(conn)), rebuild=False)
+                    except Exception:
+                        pass
+                    st.rerun()
 
     # Build pages and render One-Page
     try:
