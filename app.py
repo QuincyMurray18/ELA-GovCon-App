@@ -5322,9 +5322,18 @@ def y0_ai_panel():
 
 # --- key namespacing helper (Phase U) ---
 DATA_DIR = "data"
-DB_PATH = os.path.join(DATA_DIR, "govcon.db")
+DEFAULT_SQLITE_PATH = os.path.join(DATA_DIR, "govcon.db")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 SAM_ENDPOINT = "https://api.sam.gov/opportunities/v2/search"
+
+# Central database URL so we can point the app at SQLite or Postgres.
+# If DATABASE_URL is not set, default to a local SQLite file.
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH}").strip() or f"sqlite:///{DEFAULT_SQLITE_PATH}"
+
+# For legacy helpers that still expect a filesystem path, keep DB_PATH pointing
+# at the SQLite file. When DATABASE_URL points at Postgres we will ignore
+# DB_PATH and connect directly with psycopg2 in get_db().
+DB_PATH = DEFAULT_SQLITE_PATH
 
 # -------------------- setup --------------------
 def ensure_dirs() -> None:
@@ -7145,6 +7154,33 @@ def render_status_and_gaps(conn: "sqlite3.Connection") -> None:
             st.download_button("Export CLIN CSV", data=csvb, file_name=f"rfp_{int(rid)}_clins.csv", mime="text/csv", key=f"p2_clin_csv_{rid}")
 
 def get_db() -> sqlite3.Connection:
+    # Central database connector: prefers Postgres when DATABASE_URL is set,
+    # otherwise falls back to the local SQLite file. The heavy SQLite schema
+    # bootstrap and PRAGMAs only run for SQLite connections.
+    import os as _os
+    db_url = (_os.getenv("DATABASE_URL", "") or "").strip()
+
+    # Normalise sqlite URLs to a filesystem path for the rest of the app.
+    if db_url.startswith("sqlite://"):
+        path = db_url.split("sqlite:///", 1)[1] if "///" in db_url else db_url.replace("sqlite://", "", 1)
+        if path:
+            global DB_PATH
+            DB_PATH = path
+        db_url = ""  # fall through to the SQLite branch below
+
+    # Postgres path: connect and return immediately without running SQLite-only
+    # PRAGMAs, FTS helpers, or schema migrations.
+    if db_url.startswith("postgres://") or db_url.startswith("postgresql://"):
+        try:
+            import psycopg2  # type: ignore
+        except Exception as e:  # pragma: no cover - defensive
+            raise RuntimeError("DATABASE_URL points at Postgres, but psycopg2 is not installed.") from e
+        conn = psycopg2.connect(db_url)
+        # Most of the app assumes implicit commits; autocommit keeps behaviour
+        # close to sqlite3's default.
+        conn.autocommit = True
+        return conn
+
     ensure_dirs()
     conn = _db_connect(DB_PATH, check_same_thread=False)
     with closing(conn.cursor()) as cur:
@@ -10436,9 +10472,10 @@ def run_sam_watch(conn) -> None:
                                 _db = globals().get('conn')
                                 _owned = False
                                 if _db is None:
-                                    import sqlite3 as _sqlite3
+                                    # Fall back to the central connector so Postgres / DATABASE_URL
+                                    # configurations are respected.
                                     _owned = True
-                                    _db = _sqlite3.connect(DB_PATH, check_same_thread=False)
+                                    _db = get_db()
                                 with _closing(_db.cursor()) as cur:
                                     cur.execute(
                                         """
@@ -24810,19 +24847,28 @@ def jobs_update_status(
 # === Background jobs worker helpers (single-file worker mode) ===
 
 def _jobs_worker_connect_db():
-    """Open a new SQLite connection to the same DB as the app.
+    """Open a connection for the background worker.
 
-    This is used by the background worker loop when the file is run
-    in "worker" mode, for example:
-
-        python app.py --worker
-
-    The same DB_PATH, schema and helpers are reused so the worker
-    stays in sync with the main application.
+    Reuses the same DATABASE_URL / DB_PATH logic as the main app so the worker
+    stays in sync whether you are on SQLite or Postgres.
     """
+    import os as _os
     import sqlite3 as _sqlite3
     from pathlib import Path as _Path
 
+    db_url = (_os.getenv("DATABASE_URL", "") or "").strip()
+
+    if db_url.startswith("postgres://") or db_url.startswith("postgresql://"):
+        try:
+            import psycopg2  # type: ignore
+        except Exception as e:  # pragma: no cover - defensive
+            raise RuntimeError("DATABASE_URL points at Postgres, but psycopg2 is not installed for the worker.") from e
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        ensure_jobs_schema(conn)
+        return conn
+
+    # SQLite path (default)
     db_path = _Path(DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -24830,6 +24876,7 @@ def _jobs_worker_connect_db():
     conn.row_factory = _sqlite3.Row  # convenient dict-like rows
     ensure_jobs_schema(conn)
     return conn
+
 
 
 def _jobs_worker_fetch_next_queued_job(conn):
