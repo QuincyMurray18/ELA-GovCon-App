@@ -8831,13 +8831,30 @@ def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploa
     saved = data_save_rfp_uploads(conn, new_id, uploads)
     # Immediately run the same ingest/analyze pipeline used by the toolbar button
     try:
-        _one_click_analyze(conn, int(new_id), sam_url or None)
+        ensure_jobs_schema(conn)
+        try:
+            _user_name = get_current_user_name()
+        except Exception:
+            _user_name = ""
+        payload = {
+            "scope": "rfp_ingest_analyze",
+            "rfp_id": int(new_id),
+        }
+        if sam_url:
+            payload["sam_url"] = sam_url
+        jobs_enqueue(
+            conn,
+            job_type="rfp_ingest_analyze",
+            payload=payload,
+            created_by=_user_name or None,
+        )
     except Exception as e:
         try:
-            logger.exception("svc_create_rfp_and_ingest: analyze failed")
+            logger.exception("svc_create_rfp_and_ingest: enqueue analyze job failed")
         except Exception:
             pass
     return new_id, saved
+
 
 # === End RFP data/service helpers ============================================
 
@@ -11478,7 +11495,7 @@ def _run_rfp_analyzer_phase3(conn):
                         current_user = ""
                     job_id = jobs_enqueue(
                         conn_jobs,
-                        job_type="rfp_ingest_analyze",
+                        job_type="rfp_ingest_onepage",
                         payload=payload,
                         created_by=current_user or None,
                     )
@@ -19381,51 +19398,15 @@ def run_rfp_analyzer(conn) -> None:
                     payload=payload,
                     created_by=_user_name or None,
                 )
-            except Exception:
-                job_id = None
-
-            try:
-                if job_id:
-                    try:
-                        jobs_update_status(
-                            conn,
-                            job_id,
-                            status="running",
-                            mark_started=True,
-                            progress=0.0,
-                        )
-                    except Exception:
-                        pass
-
-                _one_click_analyze(conn, int(_ensure_selected_rfp_id(conn)))
-
-                if job_id:
-                    try:
-                        jobs_update_status(
-                            conn,
-                            job_id,
-                            status="done",
-                            mark_finished=True,
-                            progress=1.0,
-                            result={"rfp_id": int(_ensure_selected_rfp_id(conn))},
-                        )
-                    except Exception:
-                        pass
-                st.rerun()
+                st.success(
+                    "RFP ingest & analyze job queued. "
+                    "The analyzer will update after the background job finishes."
+                )
             except Exception as e:
-                if job_id:
-                    try:
-                        jobs_update_status(
-                            conn,
-                            job_id,
-                            status="failed",
-                            error_message=str(e),
-                            mark_finished=True,
-                        )
-                    except Exception:
-                        pass
-                logger.exception("RFP ingest/analyze failed")
-                ui_error("Could not ingest and analyze the RFP.", str(e))
+                job_id = None
+                logger.exception("Failed to enqueue RFP ingest/analyze job")
+                ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
+
 
     # Add files
 
@@ -25087,6 +25068,71 @@ def _jobs_worker_handle_sam_live_search(conn, job_id: int, payload: dict):
 
 
 
+
+def _jobs_worker_handle_rfp_ingest_analyze(conn, job_id: int, payload: dict):
+    """Worker handler for job_type='rfp_ingest_analyze'.
+
+    Runs the One-Click RFP analyze pipeline in the background based on rfp_id.
+    """
+    rfp_id = 0
+    sam_url = None
+    try:
+        if isinstance(payload, dict):
+            rfp_id = int(payload.get("rfp_id") or 0)
+            sam_url = payload.get("sam_url") or None
+    except Exception:
+        rfp_id = 0
+        sam_url = None
+    if not rfp_id:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message="Missing rfp_id in job payload.",
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        jobs_update_status(
+            conn,
+            job_id,
+            status="running",
+            mark_started=True,
+            progress=0.0,
+        )
+    except Exception:
+        pass
+
+    try:
+        _one_click_analyze(conn, int(rfp_id), sam_url)
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="done",
+                mark_finished=True,
+                progress=1.0,
+                result={"rfp_id": int(rfp_id)},
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=str(exc),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+
+
 def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict):
     """Fallback handler for job types the worker does not yet implement."""
     jobs_update_status(
@@ -25109,6 +25155,8 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             _jobs_worker_handle_restore_from_backup(conn, job_id, payload)
         elif job_type == "sam_live_search":
             _jobs_worker_handle_sam_live_search(conn, job_id, payload)
+        elif job_type == "rfp_ingest_analyze":
+            _jobs_worker_handle_rfp_ingest_analyze(conn, job_id, payload)
         else:
             _jobs_worker_handle_unknown(conn, job_id, job_type, payload)
     except Exception as _exc:
