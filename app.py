@@ -19573,29 +19573,29 @@ def run_rfp_analyzer(conn) -> None:
                         else:
                             ph = st.empty()
                             acc = []
-                        prompt = (
-                            f"Attachment filename: {sel_file}\n\n"
-                            f"Source text (truncated):\n{ctx}\n\n"
-                            "Summarize the key requirements, deliverables, performance standards, and any dates or quantities. "
-                            "Use short bullet points suitable for a proposal writer."
-                        )
-                        try:
-                            for tok in ask_ai(
-                                [
-                                    {
-                                        "role": "system",
-                                        "content": (
-                                            "You are a federal contracting officer reviewing a single RFP attachment. "
-                                            "Write concise, factual bullets with no marketing language or fluff."
-                                        ),
-                                    },
-                                    {"role": "user", "content": prompt},
-                                ]
-                            ):
-                                acc.append(tok)
-                                ph.markdown("".join(acc))
-                        except Exception as e:
-                            st.error(f"AI summary failed: {e}")
+                            prompt = (
+                                f"Attachment filename: {sel_file}\n\n"
+                                f"Source text (truncated):\n{ctx}\n\n"
+                                "Summarize the key requirements, del...iverables, performance standards, and any dates or quantities. "
+                                "Use short bullet points suitable for a proposal writer."
+                            )
+                            try:
+                                for tok in ask_ai(
+                                    [
+                                        {
+                                            "role": "system",
+                                            "content": (
+                                                "You are a federal contracting officer reviewing a single RFP attachment. "
+                                                "Write concise, factual bullets with no marketing language or fluff."
+                                            ),
+                                        },
+                                        {"role": "user", "content": prompt},
+                                    ]
+                                ):
+                                    acc.append(tok)
+                                    ph.markdown("".join(acc))
+                            except Exception as e:
+                                st.error(f"AI summary failed: {e}")
 
                 # Q&A on attachment
                 q_key = f"rfp_att_q_{rid_int}"
