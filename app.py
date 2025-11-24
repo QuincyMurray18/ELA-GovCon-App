@@ -10477,6 +10477,14 @@ def run_sam_watch(conn) -> None:
                 except Exception:
                     pass
 
+                # Force a rerun so the SAM results table updates immediately
+                try:
+                    st.rerun()
+                except Exception:
+                    # If rerun is not available, the results will still appear
+                    # on the next interaction.
+                    pass
+
         # --- Always show the search body, even with no results yet ---
         if results_df is None or (hasattr(results_df, "empty") and results_df.empty):
             st.info("No results yet. Enter filters above and click **Run Search**.")
