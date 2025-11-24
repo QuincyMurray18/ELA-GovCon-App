@@ -8124,14 +8124,27 @@ def get_db() -> sqlite3.Connection:
             );
         """)
 # Schema version for migrations
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS schema_version(
-                id INTEGER PRIMARY KEY CHECK(id=1),
-                ver INTEGER
-            );
-        """)
-        cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
-        conn.commit()
+        try:
+            # If an old view named 'schema_version' exists from a previous build, drop it
+            # so we can create the real schema_version table. This avoids errors like
+            # "cannot modify schema_version because it is a view".
+            cur.execute("SELECT type FROM sqlite_master WHERE name='schema_version';")
+            _sv_row = cur.fetchone()
+            if _sv_row and _sv_row[0] != 'table':
+                cur.execute("DROP VIEW IF EXISTS schema_version;")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schema_version(
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    ver INTEGER
+                );
+            """)
+            cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
+            conn.commit()
+        except Exception:
+            try:
+                logger.exception("Schema version bootstrap failed")
+            except Exception:
+                pass
     try:
         ensure_y5_tables(conn)
     except Exception:
