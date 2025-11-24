@@ -13629,7 +13629,14 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         pass
     st.header("Proposal Builder")
     st.caption("Use this page to draft compliant proposals and assemble the major sections you need for submission.")
-    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
+    try:
+        db_path = _db_path_from_conn(conn)
+    except Exception:
+        try:
+            db_path = DB_PATH  # type: ignore[name-defined]
+        except Exception:
+            db_path = "./data/app.db"
+    df_rf = _cached_read_sql(db_path, "SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", ())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
