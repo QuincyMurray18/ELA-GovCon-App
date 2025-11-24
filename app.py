@@ -10129,19 +10129,89 @@ def _sam_run_live_search_job(conn_jobs, job_id: int, params: dict):
     df = flatten_records(recs) if recs else _pd.DataFrame()
 
     # Mark as done with a small summary in result_json
+    # Serialize a lightweight view of the results into the job row so the UI can reload
     try:
+        try:
+            rows = df.to_dict(orient="records")
+        except Exception:
+            rows = []
         jobs_update_status(
             conn_jobs,
             job_id,
             status="done",
             mark_finished=True,
             progress=1.0,
-            result={"records_fetched": int(len(df))},
+            result={
+                "records_fetched": int(len(df)),
+                "rows": rows,
+            },
         )
     except Exception:
         pass
 
     return df
+
+
+def _sam_refresh_results_from_job(conn) -> None:
+    """If a SAM search job finished in the background, load its results into session_state.
+
+    This keeps the Streamlit thread lightweight while the heavy SAM.gov call runs
+    in the background jobs worker.
+    """
+    import pandas as _pd
+    import json as _json
+
+    try:
+        job_id = int(st.session_state.get("sam_last_job_id") or 0)
+    except Exception:
+        job_id = 0
+    if not job_id:
+        return
+
+    try:
+        ensure_jobs_schema(conn)
+    except Exception:
+        # Best-effort only; do not break the page if jobs schema is unavailable
+        return
+
+    try:
+        df = _pd.read_sql_query(
+            "SELECT id, status, result_json, error_message FROM jobs WHERE id = ?;",
+            conn,
+            params=(job_id,),
+        )
+    except Exception:
+        return
+    if df is None or df.empty:
+        return
+
+    row = df.iloc[0]
+    status = str(row.get("status") or "").lower()
+    err = row.get("error_message") or ""
+    result_json = row.get("result_json") or ""
+    data = {}
+    if result_json:
+        try:
+            data = _json.loads(result_json)
+        except Exception:
+            data = {}
+
+    if status == "done":
+        rows = data.get("rows") or []
+        if rows:
+            try:
+                st.session_state["sam_results_df"] = _pd.DataFrame(rows)
+                st.session_state["sam_page"] = 1
+                st.session_state.pop("sam_selected_idx", None)
+            except Exception:
+                # Do not hard fail if session state is not available
+                pass
+    elif status in ("failed", "error"):
+        if err:
+            try:
+                st.error(f"SAM search job failed: {err}")
+            except Exception:
+                pass
 
 def run_sam_watch(conn) -> None:
     """
@@ -10302,6 +10372,12 @@ def run_sam_watch(conn) -> None:
 
         # Run search (tracked as a job so heavy queries do not block the UI)
         results_df = st.session_state.get("sam_results_df")
+        # If a background SAM search job finished, pull its results into session state
+        try:
+            _sam_refresh_results_from_job(conn)
+            results_df = st.session_state.get("sam_results_df")
+        except Exception:
+            pass
         if _get_flag("clicked_run_search"):
             if not api_key:
                 st.error("Missing SAM API key. Add SAM_API_KEY to your Streamlit secrets.")
@@ -10357,17 +10433,8 @@ def run_sam_watch(conn) -> None:
             )
             st.session_state["sam_last_job_id"] = job_id
 
-            # Synchronous execution for now, but status is tracked in the jobs table
-            with st.spinner("Searching SAM.gov…"):
-                try:
-                    results_df = _sam_run_live_search_job(conn_jobs, job_id, params)
-                except Exception as exc:
-                    st.error(f"SAM search failed: {exc!s}")
-                else:
-                    st.session_state["sam_results_df"] = results_df
-                    st.session_state["sam_page"] = 1
-                    st.session_state.pop("sam_selected_idx", None)
-                    st.success(f"Fetched {len(results_df)} notices")
+            # Background search: worker will execute the job and update the jobs table
+            st.info(f"SAM search job #{job_id} queued. Results will appear below after the background worker finishes.")
 
         # --- Always show the search body, even with no results yet ---
         if results_df is None or (hasattr(results_df, "empty") and results_df.empty):
@@ -25003,6 +25070,22 @@ def _jobs_worker_handle_restore_from_backup(conn, job_id: int, payload: dict):
         mark_finished=True,
     )
 
+def _jobs_worker_handle_sam_live_search(conn, job_id: int, payload: dict):
+    """Worker handler for job_type='sam_live_search'.
+
+    Delegates to _sam_run_live_search_job so heavy SAM.gov calls happen
+    outside the Streamlit UI process.
+    """
+    params = {}
+    try:
+        raw = payload.get("params") or {}
+        if isinstance(raw, dict):
+            params = dict(raw)
+    except Exception:
+        params = {}
+    _sam_run_live_search_job(conn, job_id, params)
+
+
 
 def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict):
     """Fallback handler for job types the worker does not yet implement."""
@@ -25024,6 +25107,8 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             _jobs_worker_handle_backup_full(conn, job_id, payload)
         elif job_type == "restore_from_backup":
             _jobs_worker_handle_restore_from_backup(conn, job_id, payload)
+        elif job_type == "sam_live_search":
+            _jobs_worker_handle_sam_live_search(conn, job_id, payload)
         else:
             _jobs_worker_handle_unknown(conn, job_id, job_type, payload)
     except Exception as _exc:
