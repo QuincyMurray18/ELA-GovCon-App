@@ -3627,37 +3627,6 @@ def get_o4_conn():
 
     conn = get_db()
     _O4_CONN = conn
-
-    # Ensure a lightweight background jobs worker is running so queued jobs
-    # (for example SAM live search and RFP ingest jobs) actually execute when
-    # you use the Streamlit UI without starting a separate `--worker` process.
-    try:
-        import threading as _threading
-        _thr = getattr(get_o4_conn, "_jobs_worker_thread", None)
-        _alive = getattr(_thr, "is_alive", lambda: False)() if _thr is not None else False
-        if not _alive:
-            def _jobs_bg_worker():
-                try:
-                    jobs_worker_loop()
-                except Exception:
-                    # jobs_worker_loop already logs and backs off on errors.
-                    pass
-
-            _thr = _threading.Thread(
-                target=_jobs_bg_worker,
-                name="ela-jobs-worker",
-                daemon=True,
-            )
-            _thr.start()
-            try:
-                setattr(get_o4_conn, "_jobs_worker_thread", _thr)
-            except Exception:
-                pass
-    except Exception:
-        # If the worker thread cannot be started, the rest of the app still works;
-        # jobs will just remain queued as before.
-        pass
-
     try:
         st.session_state["conn"] = conn
     except Exception:
@@ -24840,8 +24809,71 @@ def ensure_jobs_schema(conn: "sqlite3.Connection") -> None:
         pass
 
 
+
+# ---------------------------------------------------------------------------
+# Lightweight in-process jobs worker for Streamlit
+# ---------------------------------------------------------------------------
+
+_JOBS_WORKER_THREAD = globals().get("_JOBS_WORKER_THREAD", None)
+
+
+def _ensure_jobs_worker_started() -> None:
+    """Start the background jobs worker loop in a daemon thread once.
+
+    This is used when the app is run under Streamlit (where the
+    "python app.py --worker" CLI entry point is not used). It ensures
+    that queued jobs such as SAM live search and RFP ingest/analyze
+    actually progress from 'queued' to 'running' to 'done'.
+    """
+    import threading as _threading
+
+    global _JOBS_WORKER_THREAD
+
+    try:
+        thr = _JOBS_WORKER_THREAD
+    except NameError:  # pragma: no cover - defensive
+        thr = None
+
+    try:
+        if thr is not None and getattr(thr, "is_alive", lambda: False)():
+            return
+    except Exception:
+        # If we cannot check liveness, fall through and try to start a new one
+        pass
+
+    def _bg_worker() -> None:
+        try:
+            jobs_worker_loop()
+        except Exception:
+            # jobs_worker_loop already logs and sleeps on errors.
+            # We intentionally swallow exceptions here so the UI keeps working.
+            pass
+
+    try:
+        thr = _threading.Thread(
+            target=_bg_worker,
+            name="ela-jobs-worker",
+            daemon=True,
+        )
+        thr.start()
+        _JOBS_WORKER_THREAD = thr
+    except Exception:
+        # If the worker cannot be started, the rest of the app still works;
+        # jobs will simply remain in 'queued' status as before.
+        _JOBS_WORKER_THREAD = None
+
+
+
 def jobs_enqueue(conn: "sqlite3.Connection", job_type: str, payload: dict | None = None, created_by: str | None = None) -> int:
     """Insert a new queued job row and return its id.
+
+    # Ensure the in-process background worker is running so this job
+    # will actually be picked up when running under Streamlit.
+    try:
+        _ensure_jobs_worker_started()
+    except Exception:
+        # Best-effort only; if this fails the job will simply stay queued.
+        pass
 
     Actual background processing is handled elsewhere; this is just
     the shared persistence layer other features can call.
