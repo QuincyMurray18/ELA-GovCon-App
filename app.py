@@ -19509,8 +19509,8 @@ def run_rfp_analyzer(conn) -> None:
                 ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
-            # Track RFP ingest/analyze as a job, and also run it in-process
-            # so the analyzer updates immediately even without a separate worker.
+            # Enqueue RFP ingest/analyze as a background job; the worker will run
+            # the full pipeline so the analyzer can update without blocking the UI.
             try:
                 ensure_jobs_schema(conn)
             except Exception:
@@ -19531,25 +19531,19 @@ def run_rfp_analyzer(conn) -> None:
                     payload=payload,
                     created_by=_user_name or None,
                 )
-
-                # Run the ingest/analyze pipeline synchronously, reusing the worker handler.
+                # Remember the last job id for this session so we can show its status elsewhere.
                 try:
-                    with st.spinner("Ingesting, indexing, and analyzing this RFP…"):
-                        _jobs_worker_handle_rfp_ingest_analyze(conn, int(job_id), payload)
-                    st.success("RFP ingest & analyze complete. Analyzer has been updated.")
-                    try:
-                        st.rerun()
-                    except Exception:
-                        # If rerun is not available, the analyzer will reflect changes
-                        # on the next interaction.
-                        pass
-                except Exception as e_exec:
-                    logger.exception("RFP ingest/analyze execution failed")
-                    ui_error("RFP ingest/analyze job failed.", str(e_exec))
+                    st.session_state["rfp_ingest_analyze_last_job_id"] = job_id
+                except Exception:
+                    pass
+                st.info(
+                    f"RFP ingest & analyze job #{job_id} has been queued. "
+                    "The analyzer will update after the background worker finishes."
+                )
             except Exception as e:
-                job_id = None
                 logger.exception("Failed to enqueue RFP ingest/analyze job")
                 ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
+
 
 
     # Add files
