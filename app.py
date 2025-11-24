@@ -19470,32 +19470,28 @@ def run_rfp_analyzer(conn) -> None:
             accept_multiple_files=True,
             key="onepage_uploads_alt",
         )
-        if uploads:
-            # Avoid endless reruns by hashing the current selection and only processing changes.
-            try:
-                cur_hash = _chat_plus_hash_uploads(uploads)
-            except Exception:
-                cur_hash = None
-            hash_key = "onepage_uploads_alt_hash"
-            last_hash = st.session_state.get(hash_key)
-            should_process = (cur_hash is None) or (cur_hash != last_hash)
-            if should_process:
-                saved = 0
+        save_clicked = st.button("Save files to this RFP", key="onepage_uploads_alt_save")
+        if uploads and save_clicked:
+            saved = 0
+            with st.spinner("Saving files and refreshing the Analyzer…"):
                 for f in uploads:
                     try:
                         b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                        save_rfp_file_db(conn, int(_ensure_selected_rfp_id(conn)), getattr(f, "name", "upload"), b)
+                        save_rfp_file_db(
+                            conn,
+                            int(_ensure_selected_rfp_id(conn)),
+                            getattr(f, "name", "upload"),
+                            b,
+                        )
                         saved += 1
                     except Exception:
                         pass
-                if saved > 0:
-                    st.session_state[hash_key] = cur_hash
-                    st.success(f"Saved {saved} file(s).")
-                    try:
-                        y1_index_rfp(conn, int(_ensure_selected_rfp_id(conn)), rebuild=False)
-                    except Exception:
-                        pass
-                    st.rerun()
+            if saved > 0:
+                st.success(f"Saved {saved} file(s).")
+                try:
+                    y1_index_rfp(conn, int(_ensure_selected_rfp_id(conn)), rebuild=False)
+                except Exception:
+                    pass
 
     # Build pages and render One-Page
     try:
