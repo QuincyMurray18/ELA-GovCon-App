@@ -14512,7 +14512,14 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
         params.extend([f"%{f_capability}%", f"%{f_capability}%", f"%{f_capability}%"])
 
     try:
-        df_v = pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
+        try:
+            db_path = _db_path_from_conn(conn)
+        except Exception:
+            try:
+                db_path = DB_PATH  # type: ignore[name-defined]
+            except Exception:
+                db_path = "./data/app.db"
+        df_v = _cached_read_sql(db_path, q + " ORDER BY name ASC;", tuple(params))
     except Exception as e:
         st.error(f"Query failed: {e}")
         df_v = pd.DataFrame()
