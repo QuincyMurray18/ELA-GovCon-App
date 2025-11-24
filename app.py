@@ -7914,44 +7914,39 @@ def get_db() -> sqlite3.Connection:
         
 
         # Ensure tenants and current pointer exist
-        # If an old view named 'tenants' exists from a previous version, drop it so we can
-        # create the real tenants table. This avoids sqlite3.OperationalError like
-        # "cannot modify tenants because it is a view" at startup.
-        cur.execute("SELECT type FROM sqlite_master WHERE name='tenants';")
-        row = cur.fetchone()
-        if row and row[0] != 'table':
-            cur.execute("DROP VIEW IF EXISTS tenants;")
+        try:
+            # If an old view named 'tenants' exists from a previous version, drop it so we can
+            # create the real tenants table. This avoids sqlite3.OperationalError like
+            # "cannot modify tenants because it is a view" at startup.
+            cur.execute("SELECT type FROM sqlite_master WHERE name='tenants';")
+            row = cur.fetchone()
+            if row and row[0] != 'table':
+                cur.execute("DROP VIEW IF EXISTS tenants;")
 
-        cur.execute("""
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tenants(
+                    id INTEGER PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
 
-            CREATE TABLE IF NOT EXISTS tenants(
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS current_tenant(
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    ctid INTEGER
+                );
+            """)
 
-                id INTEGER PRIMARY KEY,
+            cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'ELA');")
+            cur.execute("UPDATE tenants SET name='ELA' WHERE id=1 AND (name IS NULL OR name='Default');")
+            cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
+        except Exception:
+            try:
+                logger.exception("Tenant bootstrap failed")
+            except Exception:
+                pass
 
-                name TEXT UNIQUE NOT NULL,
-
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-
-            );
-
-        """)
-
-        cur.execute("""
-
-            CREATE TABLE IF NOT EXISTS current_tenant(
-
-                id INTEGER PRIMARY KEY CHECK(id=1),
-
-                ctid INTEGER
-
-            );
-
-        """)
-
-        cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'ELA');")
-        cur.execute("UPDATE tenants SET name='ELA' WHERE id=1 AND (name IS NULL OR name='Default');")
-
-        cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
 
         
 
