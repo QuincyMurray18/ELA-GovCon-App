@@ -3627,6 +3627,37 @@ def get_o4_conn():
 
     conn = get_db()
     _O4_CONN = conn
+
+    # Ensure a lightweight background jobs worker is running so queued jobs
+    # (for example SAM live search and RFP ingest jobs) actually execute when
+    # you use the Streamlit UI without starting a separate `--worker` process.
+    try:
+        import threading as _threading
+        _thr = getattr(get_o4_conn, "_jobs_worker_thread", None)
+        _alive = getattr(_thr, "is_alive", lambda: False)() if _thr is not None else False
+        if not _alive:
+            def _jobs_bg_worker():
+                try:
+                    jobs_worker_loop()
+                except Exception:
+                    # jobs_worker_loop already logs and backs off on errors.
+                    pass
+
+            _thr = _threading.Thread(
+                target=_jobs_bg_worker,
+                name="ela-jobs-worker",
+                daemon=True,
+            )
+            _thr.start()
+            try:
+                setattr(get_o4_conn, "_jobs_worker_thread", _thr)
+            except Exception:
+                pass
+    except Exception:
+        # If the worker thread cannot be started, the rest of the app still works;
+        # jobs will just remain queued as before.
+        pass
+
     try:
         st.session_state["conn"] = conn
     except Exception:
