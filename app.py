@@ -10180,21 +10180,12 @@ def _sam_run_live_search_job(conn_jobs, job_id: int, params: dict):
 def _sam_refresh_results_from_job(conn) -> None:
     """If a SAM search job finished in the background, load its results into session_state.
 
-    Primary path:
-        - A background jobs worker (jobs_worker_loop) executes the job and writes
-          rows into jobs.result_json.
-        - This helper simply reloads those rows into st.session_state["sam_results_df"].
-
-    Fallback path (no worker running):
-        - If the job is still in status='queued' and type='sam_live_search',
-          this function will execute the SAM search inline via _sam_run_live_search_job
-          using the payload stored in jobs.payload_json so the page still works
-          even without a separate worker process.
+    This keeps the Streamlit thread lightweight while the heavy SAM.gov call runs
+    in the background jobs worker.
     """
     import pandas as _pd
     import json as _json
 
-    # Load last job id from session
     try:
         job_id = int(st.session_state.get("sam_last_job_id") or 0)
     except Exception:
@@ -10202,18 +10193,15 @@ def _sam_refresh_results_from_job(conn) -> None:
     if not job_id:
         return
 
-    # Ensure jobs schema exists
     try:
         ensure_jobs_schema(conn)
     except Exception:
         # Best-effort only; do not break the page if jobs schema is unavailable
         return
 
-    # Load the job row including payload_json so we can fall back to inline execution
     try:
         df = _pd.read_sql_query(
-            "SELECT id, type, status, result_json, error_message, payload_json "
-            "FROM jobs WHERE id = ?;",
+            "SELECT id, status, result_json, error_message FROM jobs WHERE id = ?;",
             conn,
             params=(job_id,),
         )
@@ -10223,12 +10211,9 @@ def _sam_refresh_results_from_job(conn) -> None:
         return
 
     row = df.iloc[0]
-    job_type = str(row.get("type") or "")
     status = str(row.get("status") or "").lower()
     err = row.get("error_message") or ""
     result_json = row.get("result_json") or ""
-    payload_json = row.get("payload_json") or ""
-
     data = {}
     if result_json:
         try:
@@ -10236,7 +10221,6 @@ def _sam_refresh_results_from_job(conn) -> None:
         except Exception:
             data = {}
 
-    # Normal case: background worker already finished and stored rows
     if status == "done":
         rows = data.get("rows") or []
         if rows:
@@ -10247,47 +10231,12 @@ def _sam_refresh_results_from_job(conn) -> None:
             except Exception:
                 # Do not hard fail if session state is not available
                 pass
-        return
-
-    # Fallback: no worker processed it yet; run SAM search inline for this job
-    if status == "queued" and job_type == "sam_live_search":
-        try:
-            params = {}
-            payload = {}
-            if payload_json:
-                try:
-                    payload = _json.loads(payload_json) or {}
-                except Exception:
-                    payload = {}
-            raw = payload.get("params") if isinstance(payload, dict) else None
-            if isinstance(raw, dict):
-                params = dict(raw)
-
-            # Execute the SAM search inline; this will update the jobs row to done/failed
-            df_res = _sam_run_live_search_job(conn, job_id, params)
-            if df_res is not None:
-                try:
-                    st.session_state["sam_results_df"] = df_res
-                    st.session_state["sam_page"] = 1
-                    st.session_state.pop("sam_selected_idx", None)
-                except Exception:
-                    pass
-        except Exception as _exc:
-            # Surface inline failure as a user-facing error
+    elif status in ("failed", "error"):
+        if err:
             try:
-                st.error(f"SAM search job failed inline: {_exc}")
+                st.error(f"SAM search job failed: {err}")
             except Exception:
                 pass
-        return
-
-    # Error case: worker or inline execution failed
-    if status in ("failed", "error") and err:
-        try:
-            st.error(f"SAM search job failed: {err}")
-        except Exception:
-            pass
-
-
 
 def run_sam_watch(conn) -> None:
     """
@@ -10509,8 +10458,24 @@ def run_sam_watch(conn) -> None:
             )
             st.session_state["sam_last_job_id"] = job_id
 
-            # Background search: worker will execute the job and update the jobs table
-            st.info(f"SAM search job #{job_id} queued. Results will appear below after the background worker finishes.")
+            # Execute the SAM search synchronously so results always appear,
+            # even if no separate jobs worker process is running.
+            try:
+                df_res = _sam_run_live_search_job(conn_jobs, job_id, params)
+            except Exception as _exc:
+                try:
+                    st.error(f"SAM search failed: {_exc}")
+                except Exception:
+                    pass
+                df_res = None
+
+            if df_res is not None:
+                try:
+                    st.session_state["sam_results_df"] = df_res
+                    st.session_state["sam_page"] = 1
+                    st.session_state.pop("sam_selected_idx", None)
+                except Exception:
+                    pass
 
         # --- Always show the search body, even with no results yet ---
         if results_df is None or (hasattr(results_df, "empty") and results_df.empty):
