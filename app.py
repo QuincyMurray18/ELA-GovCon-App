@@ -10180,12 +10180,21 @@ def _sam_run_live_search_job(conn_jobs, job_id: int, params: dict):
 def _sam_refresh_results_from_job(conn) -> None:
     """If a SAM search job finished in the background, load its results into session_state.
 
-    This keeps the Streamlit thread lightweight while the heavy SAM.gov call runs
-    in the background jobs worker.
+    Primary path:
+        - A background jobs worker (jobs_worker_loop) executes the job and writes
+          rows into jobs.result_json.
+        - This helper simply reloads those rows into st.session_state["sam_results_df"].
+
+    Fallback path (no worker running):
+        - If the job is still in status='queued' and type='sam_live_search',
+          this function will execute the SAM search inline via _sam_run_live_search_job
+          using the payload stored in jobs.payload_json so the page still works
+          even without a separate worker process.
     """
     import pandas as _pd
     import json as _json
 
+    # Load last job id from session
     try:
         job_id = int(st.session_state.get("sam_last_job_id") or 0)
     except Exception:
@@ -10193,15 +10202,18 @@ def _sam_refresh_results_from_job(conn) -> None:
     if not job_id:
         return
 
+    # Ensure jobs schema exists
     try:
         ensure_jobs_schema(conn)
     except Exception:
         # Best-effort only; do not break the page if jobs schema is unavailable
         return
 
+    # Load the job row including payload_json so we can fall back to inline execution
     try:
         df = _pd.read_sql_query(
-            "SELECT id, status, result_json, error_message FROM jobs WHERE id = ?;",
+            "SELECT id, type, status, result_json, error_message, payload_json "
+            "FROM jobs WHERE id = ?;",
             conn,
             params=(job_id,),
         )
@@ -10211,9 +10223,12 @@ def _sam_refresh_results_from_job(conn) -> None:
         return
 
     row = df.iloc[0]
+    job_type = str(row.get("type") or "")
     status = str(row.get("status") or "").lower()
     err = row.get("error_message") or ""
     result_json = row.get("result_json") or ""
+    payload_json = row.get("payload_json") or ""
+
     data = {}
     if result_json:
         try:
@@ -10221,6 +10236,7 @@ def _sam_refresh_results_from_job(conn) -> None:
         except Exception:
             data = {}
 
+    # Normal case: background worker already finished and stored rows
     if status == "done":
         rows = data.get("rows") or []
         if rows:
@@ -10231,12 +10247,47 @@ def _sam_refresh_results_from_job(conn) -> None:
             except Exception:
                 # Do not hard fail if session state is not available
                 pass
-    elif status in ("failed", "error"):
-        if err:
+        return
+
+    # Fallback: no worker processed it yet; run SAM search inline for this job
+    if status == "queued" and job_type == "sam_live_search":
+        try:
+            params = {}
+            payload = {}
+            if payload_json:
+                try:
+                    payload = _json.loads(payload_json) or {}
+                except Exception:
+                    payload = {}
+            raw = payload.get("params") if isinstance(payload, dict) else None
+            if isinstance(raw, dict):
+                params = dict(raw)
+
+            # Execute the SAM search inline; this will update the jobs row to done/failed
+            df_res = _sam_run_live_search_job(conn, job_id, params)
+            if df_res is not None:
+                try:
+                    st.session_state["sam_results_df"] = df_res
+                    st.session_state["sam_page"] = 1
+                    st.session_state.pop("sam_selected_idx", None)
+                except Exception:
+                    pass
+        except Exception as _exc:
+            # Surface inline failure as a user-facing error
             try:
-                st.error(f"SAM search job failed: {err}")
+                st.error(f"SAM search job failed inline: {_exc}")
             except Exception:
                 pass
+        return
+
+    # Error case: worker or inline execution failed
+    if status in ("failed", "error") and err:
+        try:
+            st.error(f"SAM search job failed: {err}")
+        except Exception:
+            pass
+
+
 
 def run_sam_watch(conn) -> None:
     """
@@ -24809,71 +24860,8 @@ def ensure_jobs_schema(conn: "sqlite3.Connection") -> None:
         pass
 
 
-
-# ---------------------------------------------------------------------------
-# Lightweight in-process jobs worker for Streamlit
-# ---------------------------------------------------------------------------
-
-_JOBS_WORKER_THREAD = globals().get("_JOBS_WORKER_THREAD", None)
-
-
-def _ensure_jobs_worker_started() -> None:
-    """Start the background jobs worker loop in a daemon thread once.
-
-    This is used when the app is run under Streamlit (where the
-    "python app.py --worker" CLI entry point is not used). It ensures
-    that queued jobs such as SAM live search and RFP ingest/analyze
-    actually progress from 'queued' to 'running' to 'done'.
-    """
-    import threading as _threading
-
-    global _JOBS_WORKER_THREAD
-
-    try:
-        thr = _JOBS_WORKER_THREAD
-    except NameError:  # pragma: no cover - defensive
-        thr = None
-
-    try:
-        if thr is not None and getattr(thr, "is_alive", lambda: False)():
-            return
-    except Exception:
-        # If we cannot check liveness, fall through and try to start a new one
-        pass
-
-    def _bg_worker() -> None:
-        try:
-            jobs_worker_loop()
-        except Exception:
-            # jobs_worker_loop already logs and sleeps on errors.
-            # We intentionally swallow exceptions here so the UI keeps working.
-            pass
-
-    try:
-        thr = _threading.Thread(
-            target=_bg_worker,
-            name="ela-jobs-worker",
-            daemon=True,
-        )
-        thr.start()
-        _JOBS_WORKER_THREAD = thr
-    except Exception:
-        # If the worker cannot be started, the rest of the app still works;
-        # jobs will simply remain in 'queued' status as before.
-        _JOBS_WORKER_THREAD = None
-
-
-
 def jobs_enqueue(conn: "sqlite3.Connection", job_type: str, payload: dict | None = None, created_by: str | None = None) -> int:
     """Insert a new queued job row and return its id.
-
-    # Ensure the in-process background worker is running so this job
-    # will actually be picked up when running under Streamlit.
-    try:
-        _ensure_jobs_worker_started()
-    except Exception:
-        # Best-effort only; if this fails the job will simply stay queued.
-        pass
 
     Actual background processing is handled elsewhere; this is just
     the shared persistence layer other features can call.
