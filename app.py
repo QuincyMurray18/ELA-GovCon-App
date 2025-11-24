@@ -19473,19 +19473,18 @@ def run_rfp_analyzer(conn) -> None:
         save_clicked = st.button("Save files to this RFP", key="onepage_uploads_alt_save")
         if uploads and save_clicked:
             saved = 0
-            with st.spinner("Saving files and refreshing the Analyzer…"):
-                for f in uploads:
-                    try:
-                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                        save_rfp_file_db(
-                            conn,
-                            int(_ensure_selected_rfp_id(conn)),
-                            getattr(f, "name", "upload"),
-                            b,
-                        )
-                        saved += 1
-                    except Exception:
-                        pass
+            for f in uploads:
+                try:
+                    b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+                    save_rfp_file_db(
+                        conn,
+                        int(_ensure_selected_rfp_id(conn)),
+                        getattr(f, "name", "upload"),
+                        b,
+                    )
+                    saved += 1
+                except Exception:
+                    pass
             if saved > 0:
                 st.success(f"Saved {saved} file(s).")
                 try:
@@ -19554,10 +19553,26 @@ def run_rfp_analyzer(conn) -> None:
                             except Exception:
                                 ctx = ""
                     if not ctx:
-                        st.warning("No extracted text found for this attachment yet. Try running One‑Click Analyze first.")
-                    else:
-                        ph = st.empty()
-                        acc = []
+                        # Fallback: try raw text from rfp_files in case the index has not been built yet
+                        if sel_file:
+                            try:
+                                df_ctx2 = _pd.read_sql_query(
+                                    "SELECT COALESCE(text,'') AS text FROM rfp_files WHERE rfp_id = ? AND filename = ? LIMIT 1;",
+                                    conn,
+                                    params=(int(rid_int), sel_file),
+                                )
+                            except Exception:
+                                df_ctx2 = _pd.DataFrame()
+                            if df_ctx2 is not None and not df_ctx2.empty:
+                                try:
+                                    ctx = str(df_ctx2["text"].iloc[0] or "")[:12000]
+                                except Exception:
+                                    ctx = ctx
+                        if not ctx:
+                            st.warning("No extracted text found for this attachment yet. Try running One‑Click Analyze first.")
+                        else:
+                            ph = st.empty()
+                            acc = []
                         prompt = (
                             f"Attachment filename: {sel_file}\n\n"
                             f"Source text (truncated):\n{ctx}\n\n"
@@ -19617,11 +19632,27 @@ def run_rfp_analyzer(conn) -> None:
                                 except Exception:
                                     ctx = ""
                         if not ctx:
-                            st.warning("No extracted text found for this attachment yet. Try running One‑Click Analyze first.")
-                        else:
-                            ph = st.empty()
-                            acc = []
-                            prompt = (
+                            # Fallback: try raw text from rfp_files in case the index has not been built yet
+                            if sel_file:
+                                try:
+                                    df_ctx2 = _pd.read_sql_query(
+                                        "SELECT COALESCE(text,'') AS text FROM rfp_files WHERE rfp_id = ? AND filename = ? LIMIT 1;",
+                                        conn,
+                                        params=(int(rid_int), sel_file),
+                                    )
+                                except Exception:
+                                    df_ctx2 = _pd.DataFrame()
+                                if df_ctx2 is not None and not df_ctx2.empty:
+                                    try:
+                                        ctx = str(df_ctx2["text"].iloc[0] or "")[:12000]
+                                    except Exception:
+                                        ctx = ctx
+                            if not ctx:
+                                st.warning("No extracted text found for this attachment yet. Try running One‑Click Analyze first.")
+                            else:
+                                ph = st.empty()
+                                acc = []
+                                prompt = (
                                 f"Attachment filename: {sel_file}\n\n"
                                 f"Relevant text (truncated):\n{ctx}\n\n"
                                 f"Question: {q_clean}\n\n"
