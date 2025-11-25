@@ -19497,7 +19497,7 @@ def run_rfp_analyzer(conn) -> None:
                 ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
         
-if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
+        if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
             # Enqueue RFP ingest/analyze; if no separate worker is running,
             # fall back to running the pipeline inline so the Analyzer still updates.
             try:
