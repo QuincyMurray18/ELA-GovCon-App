@@ -252,34 +252,57 @@ except NameError:
 
 
 def _ensure_selected_rfp_id(conn):
-    """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError."""
+    """Resolve the active RFP id from UI session, then fallback to global or DB.
+
+    Priority:
+    1. Streamlit session_state["current_rfp_id"] (what the user has selected now)
+    2. Global selected_rfp_id (legacy fallback)
+    3. Most recent RFP id in rfps
+    """
     try:
-        import streamlit as st, pandas as pd
+        import streamlit as st, pandas as pd  # type: ignore
     except Exception:
-        st = None; pd = None
+        st = None
+        pd = None
+
     rid = None
-    try:
-        # existing global wins if set
-        if "selected_rfp_id" in globals() and globals().get("selected_rfp_id"):
-            rid = int(globals().get("selected_rfp_id"))
-    except Exception:
-        rid = None
-    if rid is None and st is not None:
+
+    # 1. Current UI selection wins
+    if st is not None:
         try:
-            rid = st.session_state.get("current_rfp_id")
+            cur = st.session_state.get("current_rfp_id")
+            if cur not in (None, "", 0):
+                rid = int(cur)
         except Exception:
             rid = None
+
+    # 2. Legacy global fallback (only if session not set)
+    if rid is None:
+        try:
+            if "selected_rfp_id" in globals() and globals().get("selected_rfp_id"):
+                rid = int(globals().get("selected_rfp_id"))
+        except Exception:
+            rid = None
+
+    # 3. DB fallback to latest RFP
     if rid is None and pd is not None:
         try:
-            df = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn, params=())
+            df = pd.read_sql_query(
+                "SELECT id FROM rfps ORDER BY id DESC LIMIT 1;",
+                conn,
+                params=(),
+            )
             if df is not None and not df.empty:
                 rid = int(df.iloc[0]["id"])
         except Exception:
             rid = None
+
+    # Keep legacy global in sync
     try:
         globals()["selected_rfp_id"] = rid
     except Exception:
         pass
+
     return rid
 
 # ---- UI style guide and helpers ----
