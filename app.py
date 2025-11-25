@@ -5677,98 +5677,69 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     """
     Streams an answer grounded in top page hits from the One Page Analyzer.
     No citations are included in the output.
+
+    This implementation avoids heavy PDF parsing / OCR work in the main
+    Streamlit request by reusing the Y1 semantic index (rfp_chunks). If the
+    index is missing, a short advisory message is streamed instead of blocking.
     """
     import re as _re
-    import pandas as _pd
 
-    # Gather pages from rfp_files using extract_text_pages
-    pages = []
-    try:
-        df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
-    except Exception:
-        df = _pd.DataFrame(columns=["filename","mime","bytes"])
-
-    if not df.empty:
-        for _, r in df.iterrows():
-            try:
-                b = bytes(r.get("bytes") or b"")
-                mime = str(r.get("mime") or "")
-                texts = extract_text_pages(b, mime) or []
-                for i, t in enumerate(texts[:100], start=1):
-                    pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
-            except Exception:
-                continue
-
-    # Score pages by keyword overlap
     q = (question or "").strip()
-    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
-    terms = [w for w in norm_q.split() if len(w) > 1]
-    # Domain boosts for aircraft wash
-    domain_kw = [
-        "wash","washing","clean","cleaning","rinse","rinsing","underfloor","lubrication","lube",
-        "wheel","wheel wells","landing gear","flight control","thrust reverser","flap","spoiler",
-        "bogie","strut","cargo","ramp","de-panel","depanel","mil-prf-87937","type iv","eesoh",
-        "hazardous","hangar","water","nozzle","degrees","hours","maximum","elapsed","time","pws","1.2"
-    ]
-    scored = []
-    for pg in pages:
-        txt = (pg.get("text") or "")
-        norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
-        score = 0
-        # Weight query terms and domain keywords
-        for w in terms + domain_kw:
-            try:
-                score += norm_t.count(" " + w + " ")
-            except Exception:
-                pass
-        if score > 0:
-            scored.append((score, pg))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    hits = [pg for _, pg in scored[: max(1, int(k))]]
+    if not q:
+        yield "Enter a question first."
+        return
+
+    # Use existing Y1 index (rfp_chunks) instead of re-extracting PDF bytes
+    try:
+        hits = _safe_y1_search(conn, int(rfp_id), q, k=int(k) if k else 6)
+    except Exception:
+        hits = []
+
+    pages: list[dict] = []
+    for h in hits or []:
+        try:
+            fname = str(h.get("file") or h.get("file_name") or "")
+            page_no = int(h.get("page") or 0)
+            txt = str(h.get("text") or "")
+        except Exception:
+            continue
+        if not txt.strip():
+            continue
+        pages.append({"file": fname, "page": page_no, "text": txt})
+
+    if not pages:
+        # Index missing or empty – avoid doing heavy PDF parsing here.
+        yield "[system] No One Page Analyzer index found for this RFP yet. Run 'Ingest & Analyze' or 'Rebuild index' on the Y1 tab, then retry."
+        return
 
     # Build a clean context block without tags or citations
-    snippets = []
-    for h in hits:
-        snip = (h.get("text") or "").strip().replace("\n", " ")
-        snippets.append(snip[:800])
-    context_text = context_text
+    snippets: list[str] = []
+    for pg in pages:
+        snip = (pg.get("text") or "").strip().replace("\n", " ")
+        if snip:
+            snippets.append(snip[:800])
 
-    # Structured system prompt for wash/cleaning
-    _intent_wash = bool(_re.search(r"\b(wash|clean|cleaning|rinse|rinsing)\b", (q or ""), _re.I))
-    _sys = (
+    context_text = "\n\n".join(snippets)[:24000]
+
+    # Structured system prompt with optional wash / mode specializations
+    _intent_wash = bool(_re.search(r"\b(wash|clean|cleaning|rinse|rinsing)\b", q, _re.I))
+
+    base_sys = (
         "You are a federal Contracting Officer technical reviewer. "
         "Answer only from the provided CONTEXT. No citations. "
         "Use short, direct sentences. "
         "Enumerate required services with PWS subsection numbers when present. "
         "If a data point is not found in CONTEXT, write 'Not specified in PWS'. "
-        "Output sections in this exact order:\n"
-        "1) Required services\n"
-        "2) Time standards\n"
-        "3) Methods and constraints\n"
-        "4) Materials and documents\n"
-        "5) Environmental and housekeeping\n"
-        "6) Acceptance notes\n"
     )
 
-    # Expand fmt_rules for wash
-    if _intent_wash:
-        fmt_rules = (
-            "List services as numbered items. For each, include: PWS ref, title, and a one-line requirement. "
-            "Then list time standards, methods, materials, environmental controls, and acceptance exactly as bullets."
-        )
-        # Increase recall depth when washing intent detected
-        try:
-            k = max(int(k), 12)
-        except Exception:
-            k = 12
-    
+    # Mode-specific formatting rules
     mname = (mode or "Auto").lower()
     if mname.startswith("checklist"):
         fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
     elif mname.startswith("phone"):
         fmt_rules = "Output a short phone call script with an opener, 6 to 10 targeted questions, and a closing commitment line."
     elif mname.startswith("email"):
-        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
+        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 2-3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
     elif mname.startswith("action"):
         fmt_rules = "Provide a step by step action plan with owners and due dates if present in context."
     elif mname.startswith("table"):
@@ -5776,7 +5747,14 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     else:
         fmt_rules = "Choose the most efficient format to answer. Prefer lists for tasks. Use tables for verifications."
 
-    # Optional metadata
+    # Expand formatting rules for wash / cleaning solicitations
+    if _intent_wash:
+        fmt_rules = (
+            "List services as numbered items. For each, include: PWS ref, title, and a one-line requirement. "
+            "Then list time standards, methods, materials, environmental controls, and acceptance exactly as bullets."
+        )
+
+    # Optional metadata derived from context
     try:
         due = _extract_due_date(context_text[:4000]) or ""
     except Exception:
@@ -5786,25 +5764,35 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     except Exception:
         naics = ""
 
-    # Build user prompt without any citation instructions
-    ctx = "CONTEXT\\n" + (context_text if context_text else "[no high confidence matches]") + "\\n\\n"
+    meta_lines = []
+    if due:
+        meta_lines.append(f"Due date: {due}")
+    if naics:
+        meta_lines.append(f"NAICS: {naics}")
+    meta_block = "\n".join(meta_lines)
 
-    user = (
-        "QUESTION\\n" + q + "\\n\\n" + ctx +
-        "INSTRUCTIONS\\n"
-        f"- {fmt_rules}\\n"
-        "- Use the CONTEXT when possible.\\n"
-        "- Do not include citations or bracketed tags.\\n"
-        "- If the answer is not in context, state what is missing and proceed with best practice guidance.\\n"
-        "- If drafting outreach, use placeholders when unknown: {Solicitation}, {Due Date}, {NAICS}.\\n"
-        f"- If known, include NAICS {naics} and Due Date {due}.\\n"
-    )
+    sys_prompt = base_sys + fmt_rules
+    if meta_block:
+        sys_prompt += "\nUse this metadata if relevant:\n" + meta_block
 
-    for tok in ask_ai([
-        {"role":"system","content": _sys},
-        {"role":"user","content": user}
-    ], temperature=temperature):
-        yield tok
+    ctx_block = "CONTEXT\n" + (context_text or "[no context available]")
+    user_prompt = q.strip()
+
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "system", "content": ctx_block},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        ans = _chat_plus_call_openai(messages, temperature=temperature)
+    except Exception as e:
+        yield f"[AI error] {e}"
+        return
+
+    # Stream answer one character at a time for responsive UI
+    for ch in ans:
+        yield ch
 
 def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
@@ -25281,6 +25269,71 @@ def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict)
     )
 
 
+def _jobs_worker_handle_fts_index_rebuild(conn, job_id: int, payload: dict):
+    """Worker handler for job_type='fts_index_rebuild'.
+
+    Rebuilds the Y1 semantic index for a single RFP in the background using
+    y1_index_rfp, so heavy PDF parsing and OCR work does not block the main UI.
+    """
+    rfp_id = 0
+    try:
+        if isinstance(payload, dict):
+            rfp_id = int(payload.get("rfp_id") or 0)
+    except Exception:
+        rfp_id = 0
+    if not rfp_id:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message="Missing rfp_id in job payload.",
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        jobs_update_status(
+            conn,
+            job_id,
+            status="running",
+            mark_started=True,
+            progress=0.0,
+        )
+    except Exception:
+        pass
+
+    try:
+        out = y1_index_rfp(conn, int(rfp_id), rebuild=True)
+        added = 0
+        if isinstance(out, dict):
+            try:
+                added = int(out.get("added", 0) or 0)
+            except Exception:
+                added = 0
+        jobs_update_status(
+            conn,
+            job_id,
+            status="done",
+            progress=1.0,
+            mark_finished=True,
+            result={"ok": True, "added": added},
+        )
+    except Exception as exc:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=str(exc),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+
+
 def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
     """Dispatch a single job by type and handle errors uniformly."""
     import traceback as _traceback
@@ -25294,6 +25347,8 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             _jobs_worker_handle_sam_live_search(conn, job_id, payload)
         elif job_type == "rfp_ingest_analyze":
             _jobs_worker_handle_rfp_ingest_analyze(conn, job_id, payload)
+        elif job_type == "fts_index_rebuild":
+            _jobs_worker_handle_fts_index_rebuild(conn, job_id, payload)
         else:
             _jobs_worker_handle_unknown(conn, job_id, job_type, payload)
     except Exception as _exc:
@@ -27403,4 +27458,3 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
-
