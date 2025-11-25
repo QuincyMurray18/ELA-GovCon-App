@@ -12506,7 +12506,7 @@ def _run_rfp_analyzer_phase3(conn):
         # X2: Files for this RFP
         with st.expander("Files for this RFP (X2)", expanded=False):
             try:
-                df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(_ensure_selected_rfp_id(conn)),))
+                df_files = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(_ensure_selected_rfp_id(conn)),))
             except Exception as e:
                 df_files = pd.DataFrame()
             st.caption("Linked files")
@@ -12620,7 +12620,7 @@ def _run_rfp_analyzer_phase3(conn):
                         st.error(f"Unlink failed: {e}")
             st.caption("Attach from library")
             try:
-                df_bytes = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(_ensure_selected_rfp_id(conn)),))
+                df_pool = pd.read_sql_query("SELECT id, filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(_ensure_selected_rfp_id(conn)),))
             except Exception:
                 df_pool = pd.DataFrame()
             if df_pool is None or df_pool.empty:
@@ -12628,7 +12628,7 @@ def _run_rfp_analyzer_phase3(conn):
             else:
                 bio = _io.BytesIO()
                 with _zipfile.ZipFile(bio, 'w', _zipfile.ZIP_DEFLATED) as zf:
-                    for _, r in df_bytes.iterrows():
+                    for _, r in df_pool.iterrows():
                         fn = r.get('filename') or f"rfp_file_{int(r.get('id', 0))}"
                         zf.writestr(fn, r.get('bytes'))
                 st.download_button(
