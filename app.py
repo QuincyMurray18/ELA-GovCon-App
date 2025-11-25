@@ -251,6 +251,7 @@ except NameError:
         return ""
 
 
+
 def _ensure_selected_rfp_id(conn):
     """Resolve the active RFP id from UI session, then fallback to global or DB.
 
