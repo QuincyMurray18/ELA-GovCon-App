@@ -8205,27 +8205,20 @@ def get_sam_api_key() -> Optional[str]:
     return os.getenv("SAM_API_KEY")
 
 @st.cache_data(show_spinner=False, ttl=300)
-
-def _sam_http_search_uncached(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Low-level SAM.gov HTTP search without any caching.
-
-    This function is pure with respect to its input dictionary (it copies
-    before mutating) so that higher-level caches can safely key on params.
-    """
-    p = dict(params) if isinstance(params, dict) else {}
-    api_key = p.get("api_key")
+def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
+    api_key = params.get("api_key")
     if not api_key:
         return {"totalRecords": 0, "records": [], "error": "Missing API key"}
 
-    limit = int(p.get("limit", 100))
-    max_pages = int(p.pop("_max_pages", 3))
-    p["limit"] = min(max(1, limit), 1000)
+    limit = int(params.get("limit", 100))
+    max_pages = int(params.pop("_max_pages", 3))
+    params["limit"] = min(max(1, limit), 1000)
 
     all_records: List[Dict[str, Any]] = []
-    offset = int(p.get("offset", 0))
+    offset = int(params.get("offset", 0))
 
     for _ in range(max_pages):
-        q = {**p, "offset": offset}
+        q = {**params, "offset": offset}
         try:
             resp = requests.get(SAM_ENDPOINT, params=q, headers={"X-Api-Key": api_key}, timeout=30)
         except Exception as ex:
@@ -8233,17 +8226,13 @@ def _sam_http_search_uncached(params: Dict[str, Any]) -> Dict[str, Any]:
 
         if resp.status_code != 200:
             try:
-                j = resp.json() or {}
+                j = resp.json()
                 msg = j.get("message") or j.get("error") or str(j)
             except Exception:
-                msg = resp.text or f"HTTP {resp.status_code}"
-            return {"totalRecords": 0, "records": [], "error": msg}
+                msg = resp.text
+            return {"totalRecords": 0, "records": [], "error": f"HTTP {resp.status_code}: {msg}", "status": resp.status_code, "body": msg}
 
-        try:
-            data = resp.json() or {}
-        except Exception as ex:
-            return {"totalRecords": 0, "records": [], "error": f"JSON decode error: {ex}"}
-
+        data = resp.json() or {}
         records = data.get("opportunitiesData", data.get("data", []))
         if not isinstance(records, list):
             records = []
@@ -8252,32 +8241,11 @@ def _sam_http_search_uncached(params: Dict[str, Any]) -> Dict[str, Any]:
         total = data.get("totalRecords", len(all_records))
         if len(all_records) >= total:
             break
-        offset += p["limit"]
+        offset += params["limit"]
 
     return {"totalRecords": len(all_records), "records": all_records, "error": None}
 
 
-# Streamlit-aware caching wrapper so repeated SAM searches with the same parameters
-# (API key, date range, NAICS, keywords, pages, etc.) reuse the same HTTP results
-# within a short TTL. When Streamlit is unavailable (e.g., worker-only context),
-# this falls back to the uncached HTTP helper.
-try:
-    import streamlit as _st_sam_cache  # type: ignore
-
-    @_st_sam_cache.cache_data(show_spinner=False, ttl=600)
-    def _sam_http_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
-        return _sam_http_search_uncached(params)
-except Exception:
-    def _sam_http_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
-        return _sam_http_search_uncached(params)
-
-
-def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
-    """High-level SAM search entry point used by jobs.
-
-    Keeps the existing public name but delegates to the cached HTTP helper.
-    """
-    return _sam_http_search_cached(dict(params) if isinstance(params, dict) else {})
 def sam_persist_notices(conn: "sqlite3.Connection", records: List[Dict[str, Any]]) -> None:
     """
     Best-effort upsert of SAM notices into the local `notices` table.
@@ -10941,46 +10909,6 @@ def run_sam_watch(conn) -> None:
     # ---------- ALERTS TAB ----------
 
 
-
-# === Cached SQL helpers for read-heavy analytics ===
-try:
-    import streamlit as _st_cache_sql  # type: ignore
-    @_st_cache_sql.cache_data(show_spinner=False, ttl=600)
-    def _cached_read_sql(db_path: str, sql: str, params: tuple):
-        """Cached wrapper around pd.read_sql_query for read-heavy, read-only pages.
-
-        This keeps the analytics pages (Top Buyers / Top Vendors / Knowledge Hub)
-        responsive by reusing results for identical queries within a short window.
-        """
-        import sqlite3 as _sql3  # type: ignore
-        import pandas as _pd3    # type: ignore
-        try:
-            conn2 = _sql3.connect(db_path, check_same_thread=False)
-        except Exception:
-            conn2 = _sql3.connect(db_path)
-        try:
-            return _pd3.read_sql_query(sql, conn2, params=params)
-        finally:
-            try:
-                conn2.close()
-            except Exception:
-                pass
-except Exception:
-    def _cached_read_sql(db_path: str, sql: str, params: tuple):
-        import sqlite3 as _sql3  # type: ignore
-        import pandas as _pd3    # type: ignore
-        try:
-            conn2 = _sql3.connect(db_path, check_same_thread=False)
-        except Exception:
-            conn2 = _sql3.connect(db_path)
-        try:
-            return _pd3.read_sql_query(sql, conn2, params=params)
-        finally:
-            try:
-                conn2.close()
-            except Exception:
-                pass
-
 def run_top_buyers(conn: "sqlite3.Connection") -> None:
     """Public data analytics: Top buyers by agency and NAICS based on awards."""
     import pandas as pd
@@ -11050,14 +10978,7 @@ def run_top_buyers(conn: "sqlite3.Connection") -> None:
     else:
         base_sql += " ORDER BY total_value DESC"
 
-    try:
-        db_path = _db_path_from_conn(conn)
-    except Exception:
-        try:
-            db_path = DB_PATH  # type: ignore[name-defined]
-        except Exception:
-            db_path = "./data/app.db"
-    df = _cached_read_sql(db_path, base_sql, tuple(params))
+    df = pd.read_sql_query(base_sql, conn, params=tuple(params))
 
     if df.empty:
         st.info("No awards found yet for this tenant. Try syncing SAM notices and ensuring award data is populated.")
@@ -11166,14 +11087,7 @@ def run_top_vendors(conn: "sqlite3.Connection") -> None:
     else:
         base_sql += " ORDER BY total_value DESC"
 
-    try:
-        db_path = _db_path_from_conn(conn)
-    except Exception:
-        try:
-            db_path = DB_PATH  # type: ignore[name-defined]
-        except Exception:
-            db_path = "./data/app.db"
-    df = _cached_read_sql(db_path, base_sql, tuple(params))
+    df = pd.read_sql_query(base_sql, conn, params=tuple(params))
 
     if df is None or df.empty:
         st.info("No awarded vendors found yet for this tenant. Try syncing SAM notices and ensuring award data is populated.")
@@ -13629,14 +13543,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         pass
     st.header("Proposal Builder")
     st.caption("Use this page to draft compliant proposals and assemble the major sections you need for submission.")
-    try:
-        db_path = _db_path_from_conn(conn)
-    except Exception:
-        try:
-            db_path = DB_PATH  # type: ignore[name-defined]
-        except Exception:
-            db_path = "./data/app.db"
-    df_rf = _cached_read_sql(db_path, "SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", ())
+    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
@@ -14519,14 +14426,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
         params.extend([f"%{f_capability}%", f"%{f_capability}%", f"%{f_capability}%"])
 
     try:
-        try:
-            db_path = _db_path_from_conn(conn)
-        except Exception:
-            try:
-                db_path = DB_PATH  # type: ignore[name-defined]
-            except Exception:
-                db_path = "./data/app.db"
-        df_v = _cached_read_sql(db_path, q + " ORDER BY name ASC;", tuple(params))
+        df_v = pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
     except Exception as e:
         st.error(f"Query failed: {e}")
         df_v = pd.DataFrame()
@@ -19509,8 +19409,8 @@ def run_rfp_analyzer(conn) -> None:
                 ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
-            # Enqueue RFP ingest/analyze as a background job; the worker will run
-            # the full pipeline so the analyzer can update without blocking the UI.
+            # Track RFP ingest/analyze as a job, and also run it in-process
+            # so the analyzer updates immediately even without a separate worker.
             try:
                 ensure_jobs_schema(conn)
             except Exception:
@@ -19531,19 +19431,25 @@ def run_rfp_analyzer(conn) -> None:
                     payload=payload,
                     created_by=_user_name or None,
                 )
-                # Remember the last job id for this session so we can show its status elsewhere.
+
+                # Run the ingest/analyze pipeline synchronously, reusing the worker handler.
                 try:
-                    st.session_state["rfp_ingest_analyze_last_job_id"] = job_id
-                except Exception:
-                    pass
-                st.info(
-                    f"RFP ingest & analyze job #{job_id} has been queued. "
-                    "The analyzer will update after the background worker finishes."
-                )
+                    with st.spinner("Ingesting, indexing, and analyzing this RFP…"):
+                        _jobs_worker_handle_rfp_ingest_analyze(conn, int(job_id), payload)
+                    st.success("RFP ingest & analyze complete. Analyzer has been updated.")
+                    try:
+                        st.rerun()
+                    except Exception:
+                        # If rerun is not available, the analyzer will reflect changes
+                        # on the next interaction.
+                        pass
+                except Exception as e_exec:
+                    logger.exception("RFP ingest/analyze execution failed")
+                    ui_error("RFP ingest/analyze job failed.", str(e_exec))
             except Exception as e:
+                job_id = None
                 logger.exception("Failed to enqueue RFP ingest/analyze job")
                 ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
-
 
 
     # Add files
