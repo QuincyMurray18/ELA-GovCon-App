@@ -7935,9 +7935,14 @@ def get_db() -> sqlite3.Connection:
                 # If the database is locked, skip without treating as startup failure.
                 if "database is locked" not in str(_ex).lower():
                     raise
-        except Exception:
+        except Exception as _ex2:
             try:
-                logger.exception("Tenant bootstrap failed")
+                _msg = str(_ex2).lower()
+                if "database is locked" in _msg:
+                    # Skip noisy stacktrace when another writer holds the DB.
+                    logger.warning("Tenant bootstrap skipped because database is locked; will retry later")
+                else:
+                    logger.exception("Tenant bootstrap failed")
             except Exception:
                 pass
 
@@ -8139,9 +8144,13 @@ def get_db() -> sqlite3.Connection:
             except Exception as _ex:
                 if "database is locked" not in str(_ex).lower():
                     raise
-        except Exception:
+        except Exception as _ex2:
             try:
-                logger.exception("Schema version bootstrap failed")
+                _msg = str(_ex2).lower()
+                if "database is locked" in _msg:
+                    logger.warning("Schema version bootstrap skipped because database is locked; will retry later")
+                else:
+                    logger.exception("Schema version bootstrap failed")
             except Exception:
                 pass
     try:
