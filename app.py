@@ -5677,98 +5677,69 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     """
     Streams an answer grounded in top page hits from the One Page Analyzer.
     No citations are included in the output.
+
+    This implementation avoids heavy PDF parsing / OCR work in the main
+    Streamlit request by reusing the Y1 semantic index (rfp_chunks). If the
+    index is missing, a short advisory message is streamed instead of blocking.
     """
     import re as _re
-    import pandas as _pd
 
-    # Gather pages from rfp_files using extract_text_pages
-    pages = []
-    try:
-        df = _pd.read_sql_query("SELECT filename, mime, bytes FROM rfp_files WHERE rfp_id=?;", conn, params=(int(rfp_id),))
-    except Exception:
-        df = _pd.DataFrame(columns=["filename","mime","bytes"])
-
-    if not df.empty:
-        for _, r in df.iterrows():
-            try:
-                b = bytes(r.get("bytes") or b"")
-                mime = str(r.get("mime") or "")
-                texts = extract_text_pages(b, mime) or []
-                for i, t in enumerate(texts[:100], start=1):
-                    pages.append({"file": r.get("filename") or "", "page": i, "text": t or ""})
-            except Exception:
-                continue
-
-    # Score pages by keyword overlap
     q = (question or "").strip()
-    norm_q = _re.sub(r"[^A-Za-z0-9 ]+", " ", q).lower()
-    terms = [w for w in norm_q.split() if len(w) > 1]
-    # Domain boosts for aircraft wash
-    domain_kw = [
-        "wash","washing","clean","cleaning","rinse","rinsing","underfloor","lubrication","lube",
-        "wheel","wheel wells","landing gear","flight control","thrust reverser","flap","spoiler",
-        "bogie","strut","cargo","ramp","de-panel","depanel","mil-prf-87937","type iv","eesoh",
-        "hazardous","hangar","water","nozzle","degrees","hours","maximum","elapsed","time","pws","1.2"
-    ]
-    scored = []
-    for pg in pages:
-        txt = (pg.get("text") or "")
-        norm_t = _re.sub(r"[^A-Za-z0-9 ]+", " ", txt).lower()
-        score = 0
-        # Weight query terms and domain keywords
-        for w in terms + domain_kw:
-            try:
-                score += norm_t.count(" " + w + " ")
-            except Exception:
-                pass
-        if score > 0:
-            scored.append((score, pg))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    hits = [pg for _, pg in scored[: max(1, int(k))]]
+    if not q:
+        yield "Enter a question first."
+        return
+
+    # Use existing Y1 index (rfp_chunks) instead of re-extracting PDF bytes
+    try:
+        hits = _safe_y1_search(conn, int(rfp_id), q, k=int(k) if k else 6)
+    except Exception:
+        hits = []
+
+    pages: list[dict] = []
+    for h in hits or []:
+        try:
+            fname = str(h.get("file") or h.get("file_name") or "")
+            page_no = int(h.get("page") or 0)
+            txt = str(h.get("text") or "")
+        except Exception:
+            continue
+        if not txt.strip():
+            continue
+        pages.append({"file": fname, "page": page_no, "text": txt})
+
+    if not pages:
+        # Index missing or empty – avoid doing heavy PDF parsing here.
+        yield "[system] No One Page Analyzer index found for this RFP yet. Run 'Ingest & Analyze' or 'Rebuild index' on the Y1 tab, then retry."
+        return
 
     # Build a clean context block without tags or citations
-    snippets = []
-    for h in hits:
-        snip = (h.get("text") or "").strip().replace("\n", " ")
-        snippets.append(snip[:800])
-    context_text = context_text
+    snippets: list[str] = []
+    for pg in pages:
+        snip = (pg.get("text") or "").strip().replace("\n", " ")
+        if snip:
+            snippets.append(snip[:800])
 
-    # Structured system prompt for wash/cleaning
-    _intent_wash = bool(_re.search(r"\b(wash|clean|cleaning|rinse|rinsing)\b", (q or ""), _re.I))
-    _sys = (
+    context_text = "\n\n".join(snippets)[:24000]
+
+    # Structured system prompt with optional wash / mode specializations
+    _intent_wash = bool(_re.search(r"\b(wash|clean|cleaning|rinse|rinsing)\b", q, _re.I))
+
+    base_sys = (
         "You are a federal Contracting Officer technical reviewer. "
         "Answer only from the provided CONTEXT. No citations. "
         "Use short, direct sentences. "
         "Enumerate required services with PWS subsection numbers when present. "
         "If a data point is not found in CONTEXT, write 'Not specified in PWS'. "
-        "Output sections in this exact order:\n"
-        "1) Required services\n"
-        "2) Time standards\n"
-        "3) Methods and constraints\n"
-        "4) Materials and documents\n"
-        "5) Environmental and housekeeping\n"
-        "6) Acceptance notes\n"
     )
 
-    # Expand fmt_rules for wash
-    if _intent_wash:
-        fmt_rules = (
-            "List services as numbered items. For each, include: PWS ref, title, and a one-line requirement. "
-            "Then list time standards, methods, materials, environmental controls, and acceptance exactly as bullets."
-        )
-        # Increase recall depth when washing intent detected
-        try:
-            k = max(int(k), 12)
-        except Exception:
-            k = 12
-    
+    # Mode-specific formatting rules
     mname = (mode or "Auto").lower()
     if mname.startswith("checklist"):
         fmt_rules = "Output a concise checklist with imperative items and sub bullets where needed."
     elif mname.startswith("phone"):
         fmt_rules = "Output a short phone call script with an opener, 6 to 10 targeted questions, and a closing commitment line."
     elif mname.startswith("email"):
-        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
+        fmt_rules = "Draft a concise vendor email. Include Subject, Greeting, 2-3 short paragraphs, a numbered list of required attachments, and a clear ask with a date."
     elif mname.startswith("action"):
         fmt_rules = "Provide a step by step action plan with owners and due dates if present in context."
     elif mname.startswith("table"):
@@ -5776,7 +5747,14 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     else:
         fmt_rules = "Choose the most efficient format to answer. Prefer lists for tasks. Use tables for verifications."
 
-    # Optional metadata
+    # Expand formatting rules for wash / cleaning solicitations
+    if _intent_wash:
+        fmt_rules = (
+            "List services as numbered items. For each, include: PWS ref, title, and a one-line requirement. "
+            "Then list time standards, methods, materials, environmental controls, and acceptance exactly as bullets."
+        )
+
+    # Optional metadata derived from context
     try:
         due = _extract_due_date(context_text[:4000]) or ""
     except Exception:
@@ -5786,25 +5764,35 @@ def ask_ai_with_citations(conn: "sqlite3.Connection", rfp_id: int, question: str
     except Exception:
         naics = ""
 
-    # Build user prompt without any citation instructions
-    ctx = "CONTEXT\\n" + (context_text if context_text else "[no high confidence matches]") + "\\n\\n"
+    meta_lines = []
+    if due:
+        meta_lines.append(f"Due date: {due}")
+    if naics:
+        meta_lines.append(f"NAICS: {naics}")
+    meta_block = "\n".join(meta_lines)
 
-    user = (
-        "QUESTION\\n" + q + "\\n\\n" + ctx +
-        "INSTRUCTIONS\\n"
-        f"- {fmt_rules}\\n"
-        "- Use the CONTEXT when possible.\\n"
-        "- Do not include citations or bracketed tags.\\n"
-        "- If the answer is not in context, state what is missing and proceed with best practice guidance.\\n"
-        "- If drafting outreach, use placeholders when unknown: {Solicitation}, {Due Date}, {NAICS}.\\n"
-        f"- If known, include NAICS {naics} and Due Date {due}.\\n"
-    )
+    sys_prompt = base_sys + fmt_rules
+    if meta_block:
+        sys_prompt += "\nUse this metadata if relevant:\n" + meta_block
 
-    for tok in ask_ai([
-        {"role":"system","content": _sys},
-        {"role":"user","content": user}
-    ], temperature=temperature):
-        yield tok
+    ctx_block = "CONTEXT\n" + (context_text or "[no context available]")
+    user_prompt = q.strip()
+
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "system", "content": ctx_block},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        ans = _chat_plus_call_openai(messages, temperature=temperature)
+    except Exception as e:
+        yield f"[AI error] {e}"
+        return
+
+    # Stream answer one character at a time for responsive UI
+    for ch in ans:
+        yield ch
 
 def _y2_build_messages(conn: "sqlite3.Connection", rfp_id: int, thread_id: int, user_q: str, k: int = 6):
     """
@@ -8205,20 +8193,27 @@ def get_sam_api_key() -> Optional[str]:
     return os.getenv("SAM_API_KEY")
 
 @st.cache_data(show_spinner=False, ttl=300)
-def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
-    api_key = params.get("api_key")
+
+def _sam_http_search_uncached(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Low-level SAM.gov HTTP search without any caching.
+
+    This function is pure with respect to its input dictionary (it copies
+    before mutating) so that higher-level caches can safely key on params.
+    """
+    p = dict(params) if isinstance(params, dict) else {}
+    api_key = p.get("api_key")
     if not api_key:
         return {"totalRecords": 0, "records": [], "error": "Missing API key"}
 
-    limit = int(params.get("limit", 100))
-    max_pages = int(params.pop("_max_pages", 3))
-    params["limit"] = min(max(1, limit), 1000)
+    limit = int(p.get("limit", 100))
+    max_pages = int(p.pop("_max_pages", 3))
+    p["limit"] = min(max(1, limit), 1000)
 
     all_records: List[Dict[str, Any]] = []
-    offset = int(params.get("offset", 0))
+    offset = int(p.get("offset", 0))
 
     for _ in range(max_pages):
-        q = {**params, "offset": offset}
+        q = {**p, "offset": offset}
         try:
             resp = requests.get(SAM_ENDPOINT, params=q, headers={"X-Api-Key": api_key}, timeout=30)
         except Exception as ex:
@@ -8226,13 +8221,17 @@ def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
 
         if resp.status_code != 200:
             try:
-                j = resp.json()
+                j = resp.json() or {}
                 msg = j.get("message") or j.get("error") or str(j)
             except Exception:
-                msg = resp.text
-            return {"totalRecords": 0, "records": [], "error": f"HTTP {resp.status_code}: {msg}", "status": resp.status_code, "body": msg}
+                msg = resp.text or f"HTTP {resp.status_code}"
+            return {"totalRecords": 0, "records": [], "error": msg}
 
-        data = resp.json() or {}
+        try:
+            data = resp.json() or {}
+        except Exception as ex:
+            return {"totalRecords": 0, "records": [], "error": f"JSON decode error: {ex}"}
+
         records = data.get("opportunitiesData", data.get("data", []))
         if not isinstance(records, list):
             records = []
@@ -8241,11 +8240,32 @@ def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
         total = data.get("totalRecords", len(all_records))
         if len(all_records) >= total:
             break
-        offset += params["limit"]
+        offset += p["limit"]
 
     return {"totalRecords": len(all_records), "records": all_records, "error": None}
 
 
+# Streamlit-aware caching wrapper so repeated SAM searches with the same parameters
+# (API key, date range, NAICS, keywords, pages, etc.) reuse the same HTTP results
+# within a short TTL. When Streamlit is unavailable (e.g., worker-only context),
+# this falls back to the uncached HTTP helper.
+try:
+    import streamlit as _st_sam_cache  # type: ignore
+
+    @_st_sam_cache.cache_data(show_spinner=False, ttl=600)
+    def _sam_http_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
+        return _sam_http_search_uncached(params)
+except Exception:
+    def _sam_http_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
+        return _sam_http_search_uncached(params)
+
+
+def sam_search_cached(params: Dict[str, Any]) -> Dict[str, Any]:
+    """High-level SAM search entry point used by jobs.
+
+    Keeps the existing public name but delegates to the cached HTTP helper.
+    """
+    return _sam_http_search_cached(dict(params) if isinstance(params, dict) else {})
 def sam_persist_notices(conn: "sqlite3.Connection", records: List[Dict[str, Any]]) -> None:
     """
     Best-effort upsert of SAM notices into the local `notices` table.
@@ -10909,6 +10929,46 @@ def run_sam_watch(conn) -> None:
     # ---------- ALERTS TAB ----------
 
 
+
+# === Cached SQL helpers for read-heavy analytics ===
+try:
+    import streamlit as _st_cache_sql  # type: ignore
+    @_st_cache_sql.cache_data(show_spinner=False, ttl=600)
+    def _cached_read_sql(db_path: str, sql: str, params: tuple):
+        """Cached wrapper around pd.read_sql_query for read-heavy, read-only pages.
+
+        This keeps the analytics pages (Top Buyers / Top Vendors / Knowledge Hub)
+        responsive by reusing results for identical queries within a short window.
+        """
+        import sqlite3 as _sql3  # type: ignore
+        import pandas as _pd3    # type: ignore
+        try:
+            conn2 = _sql3.connect(db_path, check_same_thread=False)
+        except Exception:
+            conn2 = _sql3.connect(db_path)
+        try:
+            return _pd3.read_sql_query(sql, conn2, params=params)
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
+except Exception:
+    def _cached_read_sql(db_path: str, sql: str, params: tuple):
+        import sqlite3 as _sql3  # type: ignore
+        import pandas as _pd3    # type: ignore
+        try:
+            conn2 = _sql3.connect(db_path, check_same_thread=False)
+        except Exception:
+            conn2 = _sql3.connect(db_path)
+        try:
+            return _pd3.read_sql_query(sql, conn2, params=params)
+        finally:
+            try:
+                conn2.close()
+            except Exception:
+                pass
+
 def run_top_buyers(conn: "sqlite3.Connection") -> None:
     """Public data analytics: Top buyers by agency and NAICS based on awards."""
     import pandas as pd
@@ -10978,7 +11038,14 @@ def run_top_buyers(conn: "sqlite3.Connection") -> None:
     else:
         base_sql += " ORDER BY total_value DESC"
 
-    df = pd.read_sql_query(base_sql, conn, params=tuple(params))
+    try:
+        db_path = _db_path_from_conn(conn)
+    except Exception:
+        try:
+            db_path = DB_PATH  # type: ignore[name-defined]
+        except Exception:
+            db_path = "./data/app.db"
+    df = _cached_read_sql(db_path, base_sql, tuple(params))
 
     if df.empty:
         st.info("No awards found yet for this tenant. Try syncing SAM notices and ensuring award data is populated.")
@@ -11087,7 +11154,14 @@ def run_top_vendors(conn: "sqlite3.Connection") -> None:
     else:
         base_sql += " ORDER BY total_value DESC"
 
-    df = pd.read_sql_query(base_sql, conn, params=tuple(params))
+    try:
+        db_path = _db_path_from_conn(conn)
+    except Exception:
+        try:
+            db_path = DB_PATH  # type: ignore[name-defined]
+        except Exception:
+            db_path = "./data/app.db"
+    df = _cached_read_sql(db_path, base_sql, tuple(params))
 
     if df is None or df.empty:
         st.info("No awarded vendors found yet for this tenant. Try syncing SAM notices and ensuring award data is populated.")
@@ -13543,7 +13617,14 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         pass
     st.header("Proposal Builder")
     st.caption("Use this page to draft compliant proposals and assemble the major sections you need for submission.")
-    df_rf = pd.read_sql_query("SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", conn, params=())
+    try:
+        db_path = _db_path_from_conn(conn)
+    except Exception:
+        try:
+            db_path = DB_PATH  # type: ignore[name-defined]
+        except Exception:
+            db_path = "./data/app.db"
+    df_rf = _cached_read_sql(db_path, "SELECT id, title, solnum, notice_id FROM rfps_t ORDER BY id DESC;", ())
     if df_rf.empty:
         st.info("No RFP context found. Use RFP Analyzer first to parse and save.")
         return
@@ -14426,7 +14507,14 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
         params.extend([f"%{f_capability}%", f"%{f_capability}%", f"%{f_capability}%"])
 
     try:
-        df_v = pd.read_sql_query(q + " ORDER BY name ASC;", conn, params=params)
+        try:
+            db_path = _db_path_from_conn(conn)
+        except Exception:
+            try:
+                db_path = DB_PATH  # type: ignore[name-defined]
+            except Exception:
+                db_path = "./data/app.db"
+        df_v = _cached_read_sql(db_path, q + " ORDER BY name ASC;", tuple(params))
     except Exception as e:
         st.error(f"Query failed: {e}")
         df_v = pd.DataFrame()
@@ -19408,9 +19496,10 @@ def run_rfp_analyzer(conn) -> None:
                 logger.exception("CRM wiring failed")
                 ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
-        if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
-            # Track RFP ingest/analyze as a job, and also run it in-process
-            # so the analyzer updates immediately even without a separate worker.
+        
+if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
+            # Enqueue RFP ingest/analyze; if no separate worker is running,
+            # fall back to running the pipeline inline so the Analyzer still updates.
             try:
                 ensure_jobs_schema(conn)
             except Exception:
@@ -19431,25 +19520,67 @@ def run_rfp_analyzer(conn) -> None:
                     payload=payload,
                     created_by=_user_name or None,
                 )
-
-                # Run the ingest/analyze pipeline synchronously, reusing the worker handler.
+                # Remember the last job id for this session so we can show its status elsewhere.
                 try:
-                    with st.spinner("Ingesting, indexing, and analyzing this RFP…"):
-                        _jobs_worker_handle_rfp_ingest_analyze(conn, int(job_id), payload)
-                    st.success("RFP ingest & analyze complete. Analyzer has been updated.")
+                    st.session_state["rfp_ingest_analyze_last_job_id"] = job_id
+                except Exception:
+                    pass
+
+                # Inline fallback so the RFP actually ingests even if no background worker is running.
+                _rfp_id = 0
+                try:
+                    _rfp_id = int(_ensure_selected_rfp_id(conn))
+                except Exception:
+                    _rfp_id = 0
+
+                if _rfp_id:
                     try:
-                        st.rerun()
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="running",
+                            mark_started=True,
+                            progress=0.0,
+                        )
                     except Exception:
-                        # If rerun is not available, the analyzer will reflect changes
-                        # on the next interaction.
                         pass
-                except Exception as e_exec:
-                    logger.exception("RFP ingest/analyze execution failed")
-                    ui_error("RFP ingest/analyze job failed.", str(e_exec))
+                    try:
+                        with st.spinner("Ingesting and analyzing RFP…"):
+                            _one_click_analyze(conn, _rfp_id, None)
+                        try:
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="done",
+                                mark_finished=True,
+                                progress=1.0,
+                                result={"rfp_id": _rfp_id},
+                            )
+                        except Exception:
+                            pass
+                        st.success("RFP ingest & analyze completed.")
+                    except Exception as _exc:
+                        try:
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="failed",
+                                error_message=str(_exc),
+                                mark_finished=True,
+                            )
+                        except Exception:
+                            pass
+                        ui_error("RFP ingest & analyze failed.", str(_exc))
+                else:
+                    st.warning("No RFP selected to ingest/analyze.")
             except Exception as e:
-                job_id = None
                 logger.exception("Failed to enqueue RFP ingest/analyze job")
                 ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
+
+            except Exception as e:
+                logger.exception("Failed to enqueue RFP ingest/analyze job")
+                ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
+
 
 
     # Add files
@@ -25187,6 +25318,71 @@ def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict)
     )
 
 
+def _jobs_worker_handle_fts_index_rebuild(conn, job_id: int, payload: dict):
+    """Worker handler for job_type='fts_index_rebuild'.
+
+    Rebuilds the Y1 semantic index for a single RFP in the background using
+    y1_index_rfp, so heavy PDF parsing and OCR work does not block the main UI.
+    """
+    rfp_id = 0
+    try:
+        if isinstance(payload, dict):
+            rfp_id = int(payload.get("rfp_id") or 0)
+    except Exception:
+        rfp_id = 0
+    if not rfp_id:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message="Missing rfp_id in job payload.",
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        jobs_update_status(
+            conn,
+            job_id,
+            status="running",
+            mark_started=True,
+            progress=0.0,
+        )
+    except Exception:
+        pass
+
+    try:
+        out = y1_index_rfp(conn, int(rfp_id), rebuild=True)
+        added = 0
+        if isinstance(out, dict):
+            try:
+                added = int(out.get("added", 0) or 0)
+            except Exception:
+                added = 0
+        jobs_update_status(
+            conn,
+            job_id,
+            status="done",
+            progress=1.0,
+            mark_finished=True,
+            result={"ok": True, "added": added},
+        )
+    except Exception as exc:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=str(exc),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+
+
 def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
     """Dispatch a single job by type and handle errors uniformly."""
     import traceback as _traceback
@@ -25200,6 +25396,8 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             _jobs_worker_handle_sam_live_search(conn, job_id, payload)
         elif job_type == "rfp_ingest_analyze":
             _jobs_worker_handle_rfp_ingest_analyze(conn, job_id, payload)
+        elif job_type == "fts_index_rebuild":
+            _jobs_worker_handle_fts_index_rebuild(conn, job_id, payload)
         else:
             _jobs_worker_handle_unknown(conn, job_id, job_type, payload)
     except Exception as _exc:
@@ -27309,4 +27507,3 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
-
