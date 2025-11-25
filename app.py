@@ -7926,9 +7926,15 @@ def get_db() -> sqlite3.Connection:
                 );
             """)
 
-            cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'ELA');")
-            cur.execute("UPDATE tenants SET name='ELA' WHERE id=1 AND (name IS NULL OR name='Default');")
-            cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
+            # Best-effort tenant bootstrap; tolerate concurrent writers.
+            try:
+                cur.execute("INSERT OR IGNORE INTO tenants(id, name) VALUES(1, 'ELA');")
+                cur.execute("UPDATE tenants SET name='ELA' WHERE id=1 AND (name IS NULL OR name='Default');")
+                cur.execute("INSERT OR IGNORE INTO current_tenant(id, ctid) VALUES(1, 1);")
+            except Exception as _ex:
+                # If the database is locked, skip without treating as startup failure.
+                if "database is locked" not in str(_ex).lower():
+                    raise
         except Exception:
             try:
                 logger.exception("Tenant bootstrap failed")
@@ -8126,8 +8132,13 @@ def get_db() -> sqlite3.Connection:
                     ver INTEGER
                 );
             """)
-            cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
-            conn.commit()
+            # Best-effort schema_version bootstrap; tolerate concurrent writers.
+            try:
+                cur.execute("INSERT OR IGNORE INTO schema_version(id, ver) VALUES(1, 0);")
+                conn.commit()
+            except Exception as _ex:
+                if "database is locked" not in str(_ex).lower():
+                    raise
         except Exception:
             try:
                 logger.exception("Schema version bootstrap failed")
