@@ -252,34 +252,28 @@ except NameError:
 
 
 def _ensure_selected_rfp_id(conn):
-    """Resolve the active RFP id for the RFP Analyzer and related flows.
+    """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError.
 
-    Priority:
-    1. Streamlit session_state["current_rfp_id"] (what the user has selected now)
-    2. Existing global selected_rfp_id (legacy callers)
-    3. Most recent RFP id in rfps (fallback)
+    Prefer Streamlit session state, then any existing global, then fall back to the most recent RFP in the database.
     """
     try:
-        import streamlit as st, pandas as pd  # type: ignore
+        import streamlit as st, pandas as pd
     except Exception:
         st = None
         pd = None
 
     rid = None
 
-    # 1) UI selection wins: use the RFP currently selected on the Analyzer tab
+    # 1. Prefer the Streamlit session's current_rfp_id if available
     if st is not None:
         try:
-            cur = st.session_state.get("current_rfp_id")
+            _sid = st.session_state.get("current_rfp_id", None)
+            if _sid:
+                rid = int(_sid)
         except Exception:
-            cur = None
-        if cur not in (None, "", 0):
-            try:
-                rid = int(cur)
-            except Exception:
-                rid = cur
+            rid = None
 
-    # 2) Legacy global fallback (for older code paths that still look only at selected_rfp_id)
+    # 2. Fall back to any existing global selected_rfp_id only if session does not have one
     if rid is None:
         try:
             if "selected_rfp_id" in globals() and globals().get("selected_rfp_id"):
@@ -287,29 +281,24 @@ def _ensure_selected_rfp_id(conn):
         except Exception:
             rid = None
 
-    # 3) Database fallback to "most recent" RFP if nothing is selected yet
+    # 3. Finally, fall back to the latest RFP id in the database
     if rid is None and pd is not None:
         try:
-            df = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn, params=())
+            df = pd.read_sql_query(
+                "SELECT id FROM rfps ORDER BY id DESC LIMIT 1;",
+                conn,
+                params=(),
+            )
             if df is not None and not df.empty:
                 rid = int(df.iloc[0]["id"])
         except Exception:
             rid = None
 
-    # Keep global and session aligned so all callers see the same RFP id
+    # Keep the global helper in sync for any legacy code paths
     try:
         globals()["selected_rfp_id"] = rid
     except Exception:
         pass
-    if st is not None:
-        try:
-            if rid not in (None, "", 0):
-                st.session_state["current_rfp_id"] = int(rid)
-        except Exception:
-            try:
-                st.session_state["current_rfp_id"] = rid
-            except Exception:
-                pass
 
     return rid
 
