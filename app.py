@@ -252,12 +252,12 @@ except NameError:
 
 
 def _ensure_selected_rfp_id(conn):
-    """Resolve the active RFP id from UI session, then fallback to global or DB.
+    """Resolve the active RFP id for the RFP Analyzer and related flows.
 
     Priority:
-    1. Streamlit session_state["current_rfp_id"] (current One-Page selection)
-    2. Global selected_rfp_id (legacy callers)
-    3. Most recent RFP in the rfps table
+    1. Streamlit session_state["current_rfp_id"] (what the user has selected now)
+    2. Existing global selected_rfp_id (legacy callers)
+    3. Most recent RFP id in rfps (fallback)
     """
     try:
         import streamlit as st, pandas as pd  # type: ignore
@@ -267,7 +267,7 @@ def _ensure_selected_rfp_id(conn):
 
     rid = None
 
-    # 1) Prefer the current UI selection in Streamlit session_state
+    # 1) UI selection wins: use the RFP currently selected on the Analyzer tab
     if st is not None:
         try:
             cur = st.session_state.get("current_rfp_id")
@@ -279,7 +279,7 @@ def _ensure_selected_rfp_id(conn):
             except Exception:
                 rid = cur
 
-    # 2) Fallback to legacy global selected_rfp_id if no session value
+    # 2) Legacy global fallback (for older code paths that still look only at selected_rfp_id)
     if rid is None:
         try:
             if "selected_rfp_id" in globals() and globals().get("selected_rfp_id"):
@@ -287,21 +287,29 @@ def _ensure_selected_rfp_id(conn):
         except Exception:
             rid = None
 
-    # 3) Fallback to the most recent RFP in the database
-    if rid is None:
+    # 3) Database fallback to "most recent" RFP if nothing is selected yet
+    if rid is None and pd is not None:
         try:
-            import pandas as pd  # type: ignore
             df = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn, params=())
             if df is not None and not df.empty:
                 rid = int(df.iloc[0]["id"])
         except Exception:
             rid = None
 
-    # Keep the legacy global in sync for callers that still rely on it
+    # Keep global and session aligned so all callers see the same RFP id
     try:
         globals()["selected_rfp_id"] = rid
     except Exception:
         pass
+    if st is not None:
+        try:
+            if rid not in (None, "", 0):
+                st.session_state["current_rfp_id"] = int(rid)
+        except Exception:
+            try:
+                st.session_state["current_rfp_id"] = rid
+            except Exception:
+                pass
 
     return rid
 
@@ -8928,26 +8936,6 @@ def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploa
 
 
 # === End RFP data/service helpers ============================================
-
-def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploads):
-    """Create an RFP record, persist uploads, and run the One‑Page analysis inline.
-
-    Returns (rfp_id, saved_count). Analysis errors are logged but do not block
-    RFP creation so you always keep the record and uploaded files.
-    """
-    # 1) Create the RFP shell record
-    new_id = data_insert_rfp(conn, title, solnum, sam_url)
-
-    # 2) Save all uploaded files directly into rfp_files (expanding ZIPs)
-    saved = data_save_rfp_uploads(conn, new_id, uploads)
-
-    # 3) Run the ingest/analyze pipeline inline so this tab does not depend on a jobs worker
-    try:
-        _one_click_analyze(conn, new_id, None)
-    except Exception:
-        logger.exception("Inline one‑click analyze failed in svc_create_rfp_and_ingest")
-
-    return new_id, saved
 
 def extract_sections_L_M(text: str) -> dict:
     out = {}
@@ -19559,22 +19547,91 @@ def run_rfp_analyzer(conn) -> None:
                 logger.exception("CRM wiring failed")
                 ui_error("Could not wire this RFP into the CRM.", str(e))
     with c3:
-        # Direct, inline ingest/analyze so this tab works even if no worker process is running.
+        
         if st.button("Ingest & Analyze ▶", key="p3_ingest_analyze"):
+            # Enqueue RFP ingest/analyze; if no separate worker is running,
+            # fall back to running the pipeline inline so the Analyzer still updates.
             try:
-                rfp_id = int(_ensure_selected_rfp_id(conn))
+                ensure_jobs_schema(conn)
             except Exception:
-                rfp_id = None
-            if not rfp_id:
-                ui_warning("Select an RFP first before running ingest & analyze.")
-            else:
+                pass
+
+            try:
                 try:
-                    with st.spinner("Ingesting and analyzing RFP…"):
-                        _one_click_analyze(conn, rfp_id, None)
-                    st.success("RFP ingest & analyze completed.")
-                except Exception as e:
-                    logger.exception("RFP ingest/analyze failed")
-                    ui_error("Could not ingest/analyze this RFP.", str(e))
+                    _user_name = get_current_user_name()
+                except Exception:
+                    _user_name = ""
+                payload = {
+                    "scope": "rfp_ingest_analyze",
+                    "rfp_id": int(_ensure_selected_rfp_id(conn)),
+                }
+                job_id = jobs_enqueue(
+                    conn,
+                    job_type="rfp_ingest_analyze",
+                    payload=payload,
+                    created_by=_user_name or None,
+                )
+                # Remember the last job id for this session so we can show its status elsewhere.
+                try:
+                    st.session_state["rfp_ingest_analyze_last_job_id"] = job_id
+                except Exception:
+                    pass
+
+                # Inline fallback so the RFP actually ingests even if no background worker is running.
+                _rfp_id = 0
+                try:
+                    _rfp_id = int(_ensure_selected_rfp_id(conn))
+                except Exception:
+                    _rfp_id = 0
+
+                if _rfp_id:
+                    try:
+                        jobs_update_status(
+                            conn,
+                            job_id,
+                            status="running",
+                            mark_started=True,
+                            progress=0.0,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        with st.spinner("Ingesting and analyzing RFP…"):
+                            _one_click_analyze(conn, _rfp_id, None)
+                        try:
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="done",
+                                mark_finished=True,
+                                progress=1.0,
+                                result={"rfp_id": _rfp_id},
+                            )
+                        except Exception:
+                            pass
+                        st.success("RFP ingest & analyze completed.")
+                    except Exception as _exc:
+                        try:
+                            jobs_update_status(
+                                conn,
+                                job_id,
+                                status="failed",
+                                error_message=str(_exc),
+                                mark_finished=True,
+                            )
+                        except Exception:
+                            pass
+                        ui_error("RFP ingest & analyze failed.", str(_exc))
+                else:
+                    st.warning("No RFP selected to ingest/analyze.")
+            except Exception as e:
+                logger.exception("Failed to enqueue RFP ingest/analyze job")
+                ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
+
+            except Exception as e:
+                logger.exception("Failed to enqueue RFP ingest/analyze job")
+                ui_error("Could not enqueue the RFP ingest/analyze job.", str(e))
+
 
 
     # Add files
