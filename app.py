@@ -252,14 +252,18 @@ except NameError:
 
 
 def _ensure_selected_rfp_id(conn):
-    """Resolve the active RFP id from session or DB and expose it as selected_rfp_id to avoid NameError.
+    """Resolve the active RFP id from session or DB and expose it as selected_rfp_id.
 
-    Prefer Streamlit session state, then any existing global, then fall back to the most recent RFP in the database.
+    Prefer Streamlit session state (current_rfp_id), then any existing global selected_rfp_id,
+    then fall back to the most recent RFP id in the database.
     """
     try:
-        import streamlit as st, pandas as pd
+        import streamlit as st
     except Exception:
         st = None
+    try:
+        import pandas as pd
+    except Exception:
         pd = None
 
     rid = None
@@ -284,11 +288,7 @@ def _ensure_selected_rfp_id(conn):
     # 3. Finally, fall back to the latest RFP id in the database
     if rid is None and pd is not None:
         try:
-            df = pd.read_sql_query(
-                "SELECT id FROM rfps ORDER BY id DESC LIMIT 1;",
-                conn,
-                params=(),
-            )
+            df = pd.read_sql_query("SELECT id FROM rfps ORDER BY id DESC LIMIT 1;", conn, params=())
             if df is not None and not df.empty:
                 rid = int(df.iloc[0]["id"])
         except Exception:
@@ -301,6 +301,7 @@ def _ensure_selected_rfp_id(conn):
         pass
 
     return rid
+
 
 # ---- UI style guide and helpers ----
 """
