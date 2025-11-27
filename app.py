@@ -14009,90 +14009,107 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         out_name = f"Proposal_RFP_{int(rfp_id)}.docx"
         out_path = os.path.join(DATA_DIR, out_name)
 
-        if st.button("Export DOCX", type="primary"):
-            # Enqueue a background job to build the Proposal Builder DOCX.
-            try:
-                ensure_jobs_schema(conn)
-            except Exception:
-                pass
+        
+if st.button("Export DOCX", type="primary"):
+    # Track this heavy export as a background job in the jobs table.
+    try:
+        ensure_jobs_schema(conn)
+    except Exception:
+        pass
 
-            sections_payload = [{"title": k, "body": content_map.get(k, "")} for k in selected]
+    # Build sections payload from the currently selected sections
+    sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
 
-            try:
-                try:
-                    _user_name = get_current_user_name()
-                except Exception:
-                    _user_name = ""
-                payload = {
-                    "scope": "proposal_export_docx",
-                    "rfp_id": int(rfp_id) if rfp_id is not None else None,
-                    "sections": sections_payload,
-                    "out_name": out_name,
-                    "font_name": font_name,
-                    "font_size": int(font_size),
-                    "spacing": spacing,
-                }
-                job_id = jobs_enqueue(
-                    conn,
-                    job_type="proposal_export_docx",
-                    payload=payload,
-                    created_by=_user_name or None,
-                )
-            except Exception:
-                job_id = None
-
-            st.session_state["proposal_export_last_job_id"] = job_id
-            if job_id:
-                st.info(f"Export job #{job_id} submitted. The DOCX will be ready once the job finishes.")
-            else:
-                st.warning("Export job could not be enqueued. Please try again.")
-
-        # Show the status of the most recent Proposal Builder DOCX export job and a download button when ready.
+    try:
         try:
-            last_export_job_id = st.session_state.get("proposal_export_last_job_id")
-            if last_export_job_id:
-                import pandas as _pd
-                import json as _json
-                conn_jobs = get_db()
-                ensure_jobs_schema(conn_jobs)
-                _df_export = _pd.read_sql_query(
-                    "SELECT status, result_json, error_message FROM jobs WHERE id = ?",
-                    conn_jobs,
-                    params=(int(last_export_job_id),),
-                )
-                if not _df_export.empty:
-                    _status = str(_df_export.iloc[0].get("status") or "").lower()
-                    _res_raw = _df_export.iloc[0].get("result_json") or ""
-                    _err = _df_export.iloc[0].get("error_message") or ""
-                    if _status in ("queued", "running"):
-                        st.info(f"Export job #{last_export_job_id} is {_status}. Refresh the page after a moment to check again.")
-                    elif _status == "failed":
-                        if _err:
-                            st.error(f"Export job #{last_export_job_id} failed: {_err}")
-                        else:
-                            st.error(f"Export job #{last_export_job_id} failed.")
-                    elif _status == "done":
-                        try:
-                            _data = _json.loads(_res_raw) if isinstance(_res_raw, str) else (_res_raw or {})
-                        except Exception:
-                            _data = {}
-                        _path = _data.get("path") or _data.get("zip_path")
-                        if _path:
-                            try:
-                                with open(_path, "rb") as _f:
-                                    _bin = _f.read()
-                                st.download_button(
-                                    "Download DOCX",
-                                    data=_bin,
-                                    file_name=os.path.basename(_path),
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"dl_exported_docx_{int(last_export_job_id)}",
-                                )
-                                st.success("DOCX export is ready.")
-                            except Exception:
-                                st.info(f"DOCX exported to {_path}. Use your file browser if the download button is unavailable.")
+            _user_name = get_current_user_name()
         except Exception:
-            pass
+            _user_name = ""
+        payload = {
+            "scope": "proposal_export_docx",
+            "rfp_id": int(rfp_id) if rfp_id is not None else None,
+            "out_name": out_name,
+            "out_path": out_path,
+            "doc_title": _first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
+            "sections": sections,
+            "clins": _ctxd(ctx, "clins"),
+            "checklist": _ctxd(ctx, "items"),
+            "metadata": {
+                "rfp_id": int(rfp_id) if rfp_id is not None else None,
+                "notice_id": _first_row_value(_ctxd(ctx, "rfp"), "notice_id", None),
+            },
+            "font_name": font_name,
+            "font_size_pt": int(font_size),
+            "spacing": spacing,
+        }
+        job_id = jobs_enqueue(
+            conn,
+            job_type="proposal_export_docx",
+            payload=payload,
+            created_by=_user_name or None,
+        )
+        st.session_state["pb_export_last_job_id"] = job_id
+    except Exception:
+        job_id = None
+        st.error("Failed to enqueue export job.")
+
+    if job_id:
+        st.info("Export DOCX job queued. The background worker will build your DOCX.")
+
+# Show latest proposal export job status and download if ready
+job_id = st.session_state.get("pb_export_last_job_id")
+if job_id:
+    try:
+        from contextlib import closing
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
+                (int(job_id),),
+            )
+            row = cur.fetchone()
+    except Exception:
+        row = None
+
+    if row:
+        status = row["status"]
+        progress = row["progress"]
+        err = row["error_message"]
+        import json as _json
+        try:
+            result = _json.loads(row["result_json"] or "{}")
+        except Exception:
+            result = {}
+
+        st.caption(
+            f"Latest proposal export job #{job_id} status: {status} "
+            f"({int((progress or 0) * 100)}% complete)"
+        )
+
+        if status == "done":
+            path = result.get("path")
+            if path and os.path.exists(path):
+                try:
+                    with open(path, "rb") as _f:
+                        _data = _f.read()
+                    st.download_button(
+                        "Download DOCX",
+                        data=_data,
+                        file_name=os.path.basename(path),
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="dl_exported_docx",
+                    )
+                except Exception as _e:
+                    st.error(f"Download unavailable: {_e}")
+            else:
+                st.warning("Job finished but output file was not found.")
+        elif status == "failed":
+            if err:
+                st.error(f"Export job failed: {err}")
+            else:
+                st.error("Export job failed.")
+        else:
+            st.info("Export running in background. Refresh the page to update status.")
+# [removed] Legacy Snippets/Citations panel hidden
 # ---------- Subcontractor Finder (Phase D) ----------
     try:
         _rid = locals().get('rfp_id') or locals().get('rid') or st.session_state.get('current_rfp_id')
@@ -18088,133 +18105,181 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
     total_value = float(df_lines_saved["extended_price"].fillna(0).sum()) if not df_lines_saved.empty else 0.0
     st.caption(f"Estimated total value: ${total_value:,.2f}")
     st.subheader("Export one-page quote")
-    if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
-        # Ensure jobs schema exists
-        try:
-            ensure_jobs_schema(conn)
-        except Exception:
-            pass
-
-        # Build CLIN rows in the format expected by _export_docx
-        try:
-            df_clins = pd.read_sql_query(
-                "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
-                conn,
-                params=(int(quote_id),),
-            )
-        except Exception:
-            df_clins = pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
-
-    if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
-        # Enqueue a background job that will build the one-page Fast RFQ DOCX.
-        try:
-            ensure_jobs_schema(conn)
-        except Exception:
-            pass
-
-        # Build CLIN payload summary for the job (worker will re-query for full fidelity).
-        try:
-            df_clins = pd.read_sql_query(
-                "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
-                conn,
-                params=(int(quote_id),),
-            )
-        except Exception:
-            df_clins = pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
-
-        clins_payload = []
-        if not df_clins.empty:
-            for _, row in df_clins.iterrows():
-                clins_payload.append(
-                    {
-                        "clin": row.get("clin_label"),
-                        "description": row.get("description"),
-                        "qty": row.get("qty"),
-                        "unit": row.get("unit"),
-                        "unit_price": row.get("unit_price"),
-                        "extended_price": row.get("extended_price"),
-                    }
-                )
-
-        try:
-            try:
-                _user_name = get_current_user_name()
-            except Exception:
-                _user_name = ""
-            payload = {
-                "scope": "fast_rfq_export_docx",
-                "quote_id": int(quote_id),
-                "has_clins": bool(clins_payload),
-                "title": title_e or (qrow.get("title") if isinstance(qrow, dict) else qrow.get("title") if hasattr(qrow, "get") else None),
-                "customer": customer_e or (qrow.get("customer") if isinstance(qrow, dict) else qrow.get("customer") if hasattr(qrow, "get") else None),
-                "contact_name": contact_name_e or (qrow.get("contact_name") if isinstance(qrow, dict) else qrow.get("contact_name") if hasattr(qrow, "get") else None),
-                "contact_email": contact_email_e or (qrow.get("contact_email") if isinstance(qrow, dict) else qrow.get("contact_email") if hasattr(qrow, "get") else None),
-                "contact_phone": contact_phone_e or (qrow.get("contact_phone") if isinstance(qrow, dict) else qrow.get("contact_phone") if hasattr(qrow, "get") else None),
-                "notes": notes_e or (qrow.get("notes") if isinstance(qrow, dict) else qrow.get("notes") if hasattr(qrow, "get") else None),
-                "terms": terms_e or (qrow.get("terms") if isinstance(qrow, dict) else qrow.get("terms") if hasattr(qrow, "get") else None),
-                "out_name": f"Fast_RFQ_{int(quote_id)}.docx",
-            }
-            job_id = jobs_enqueue(
-                conn,
-                job_type="fast_rfq_export_docx",
-                payload=payload,
-                created_by=_user_name or None,
-            )
-        except Exception:
-            job_id = None
-
-        st.session_state["fast_rfq_export_last_job_id"] = job_id
-        if job_id:
-            st.info(f"Fast RFQ export job #{job_id} submitted. The DOCX will be ready once the job finishes.")
-        else:
-            st.warning("Fast RFQ export job could not be enqueued. Please try again.")
-
-    # Show status of the last Fast RFQ DOCX export job and a download button when ready.
+    
+if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
+    # Ensure jobs schema exists
     try:
-        last_fast_job_id = st.session_state.get("fast_rfq_export_last_job_id")
-        if last_fast_job_id:
-            import pandas as _pd
-            import json as _json
-            conn_jobs = get_db()
-            ensure_jobs_schema(conn_jobs)
-            _df_fast = _pd.read_sql_query(
-                "SELECT status, result_json, error_message FROM jobs WHERE id = ?",
-                conn_jobs,
-                params=(int(last_fast_job_id),),
-            )
-            if not _df_fast.empty:
-                _status_f = str(_df_fast.iloc[0].get("status") or "").lower()
-                _res_raw_f = _df_fast.iloc[0].get("result_json") or ""
-                _err_f = _df_fast.iloc[0].get("error_message") or ""
-                if _status_f in ("queued", "running"):
-                    st.info(f"Fast RFQ export job #{last_fast_job_id} is {_status_f}. Refresh after a moment to check again.")
-                elif _status_f == "failed":
-                    if _err_f:
-                        st.error(f"Fast RFQ export job #{last_fast_job_id} failed: {_err_f}")
-                    else:
-                        st.error(f"Fast RFQ export job #{last_fast_job_id} failed.")
-                elif _status_f == "done":
-                    try:
-                        _data_f = _json.loads(_res_raw_f) if isinstance(_res_raw_f, str) else (_res_raw_f or {})
-                    except Exception:
-                        _data_f = {}
-                    _path_f = _data_f.get("path") or _data_f.get("zip_path")
-                    if _path_f:
-                        try:
-                            with open(_path_f, "rb") as _f:
-                                _bin_f = _f.read()
-                            st.download_button(
-                                "Download Fast RFQ DOCX",
-                                data=_bin_f,
-                                file_name=os.path.basename(_path_f),
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key=f"dl_fast_rfq_docx_{int(last_fast_job_id)}",
-                            )
-                            st.success("Fast RFQ DOCX export is ready.")
-                        except Exception:
-                            st.info(f"Fast RFQ DOCX exported to {_path_f}. Use your file browser if the download button is unavailable.")
+        ensure_jobs_schema(conn)
     except Exception:
         pass
+
+    # Reload CLINs from the database and shape them for _export_docx
+    try:
+        df_clins = pd.read_sql_query(
+            "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
+            conn,
+            params=(int(quote_id),),
+        )
+    except Exception:
+        df_clins = pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
+
+    clins_payload = []
+    try:
+        for _, r in df_clins.iterrows():
+            try:
+                qty = float(r.get("qty") or 0)
+            except Exception:
+                qty = 0.0
+            try:
+                unit_price = float(r.get("unit_price") or 0)
+            except Exception:
+                unit_price = 0.0
+            try:
+                ext_price = float(r.get("extended_price") or 0)
+            except Exception:
+                ext_price = qty * unit_price
+            clins_payload.append(
+                {
+                    "clin": r.get("clin_label") or "",
+                    "description": r.get("description") or "",
+                    "qty": qty,
+                    "unit": r.get("unit") or "",
+                    "unit_price": unit_price,
+                    "extended_price": ext_price,
+                }
+            )
+    except Exception:
+        clins_payload = []
+
+    out_name = f"Fast_RFQ_{int(quote_id)}.docx"
+    out_path = os.path.join(DATA_DIR, out_name)
+
+    # Compose simple one-page style body
+    body_lines = []
+    cust_label = customer_e or qrow.get("customer") or ""
+    if cust_label:
+        body_lines.append(cust_label)
+    poc_line = ""
+    if contact_name_e:
+        poc_line += contact_name_e
+    if contact_email_e:
+        poc_line += f" <{contact_email_e}>"
+    if contact_phone_e:
+        if poc_line:
+            poc_line += " | "
+        poc_line += contact_phone_e
+    if poc_line:
+        body_lines.append(poc_line)
+
+    body_lines.append("")
+    subj = title_e or qrow.get("title") or "Quote"
+    body_lines.append(f"Subject: {subj}")
+    body_lines.append("")
+    body_lines.append(
+        "Thank you for the opportunity to provide pricing for this requirement. "
+        "Below is our proposed pricing for the requested work."
+    )
+    if notes_e:
+        body_lines.append("")
+        body_lines.append(notes_e)
+    if terms_e:
+        body_lines.append("")
+        body_lines.append(f"Terms: {terms_e}")
+
+    sections = [
+        {
+            "title": "Quote",
+            "body": "\n".join(body_lines),
+        }
+    ]
+
+    # Enqueue Fast RFQ export job
+    try:
+        try:
+            _user_name = get_current_user_name()
+        except Exception:
+            _user_name = ""
+        payload = {
+            "scope": "fast_rfq_export_docx",
+            "quote_id": int(quote_id),
+            "out_name": out_name,
+            "out_path": out_path,
+            "doc_title": subj,
+            "sections": sections,
+            "clins": clins_payload,
+            "checklist": None,
+            "metadata": {
+                "fast_rfq": True,
+                "quote_id": int(quote_id),
+            },
+        }
+        job_id = jobs_enqueue(
+            conn,
+            job_type="fast_rfq_export_docx",
+            payload=payload,
+            created_by=_user_name or None,
+        )
+        st.session_state["fast_rfq_last_job_id"] = job_id
+    except Exception:
+        job_id = None
+        st.error("Failed to enqueue Fast RFQ export.")
+
+    if job_id:
+        st.info("Fast RFQ DOCX export job queued. The worker will build your DOCX.")
+
+# Show latest Fast RFQ export job status and download if ready
+job_id = st.session_state.get("fast_rfq_last_job_id")
+if job_id:
+    try:
+        from contextlib import closing
+        with closing(conn.cursor()) as cur:
+            cur.execute(
+                "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
+                (int(job_id),),
+            )
+            row = cur.fetchone()
+    except Exception:
+        row = None
+
+    if row:
+        status = row["status"]
+        progress = row["progress"]
+        err = row["error_message"]
+        import json as _json
+        try:
+            result = _json.loads(row["result_json"] or "{}")
+        except Exception:
+            result = {}
+
+        st.caption(
+            f"Latest Fast RFQ export job #{job_id} status: {status} "
+            f"({int((progress or 0) * 100)}% complete)"
+        )
+
+        if status == "done":
+            path = result.get("path")
+            if path and os.path.exists(path):
+                try:
+                    with open(path, "rb") as _f:
+                        _data = _f.read()
+                    st.download_button(
+                        "Download Fast RFQ DOCX",
+                        data=_data,
+                        file_name=os.path.basename(path),
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"dl_fast_rfq_docx_{int(quote_id)}",
+                    )
+                except Exception as _e:
+                    st.error(f"Download unavailable: {_e}")
+            else:
+                st.warning("Job finished but Fast RFQ DOCX file was not found.")
+        elif status == "failed":
+            if err:
+                st.error(f"Fast RFQ export job failed: {err}")
+            else:
+                st.error("Fast RFQ export job failed.")
+        else:
+            st.info("Fast RFQ export running in background. Refresh to update status.")
 
 def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.header("RFQ Pack")
@@ -18387,8 +18452,10 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.markdown("### Build & Export")
     czip, cmcsv, cclin = st.columns([2,2,2])
     with czip:
+
+        
         if st.button("Build RFQ ZIP", type="primary", key="rfq_build_zip"):
-            # Enqueue a background job to build the RFQ pack ZIP.
+            # Track RFQ pack ZIP build as a job.
             try:
                 ensure_jobs_schema(conn)
             except Exception:
@@ -18409,61 +18476,68 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     payload=payload,
                     created_by=_user_name or None,
                 )
+                st.session_state["rfq_pack_last_job_id"] = job_id
             except Exception:
                 job_id = None
+                st.error("Failed to enqueue RFQ pack build job.")
 
-            st.session_state["rfq_pack_build_last_job_id"] = job_id
             if job_id:
-                st.info(f"RFQ pack build job #{job_id} submitted. The ZIP will be ready once the job finishes.")
-            else:
-                st.warning("RFQ pack build job could not be enqueued. Please try again.")
+                st.info("RFQ pack build job queued. The worker will assemble the ZIP.")
 
-    # Show status of the last RFQ pack build job and a download button when ready.
-    try:
-        last_rfq_job_id = st.session_state.get("rfq_pack_build_last_job_id")
-        if last_rfq_job_id:
-            import pandas as _pd
-            import json as _json
-            conn_jobs = get_db()
-            ensure_jobs_schema(conn_jobs)
-            _df_rfq = _pd.read_sql_query(
-                "SELECT status, result_json, error_message FROM jobs WHERE id = ?",
-                conn_jobs,
-                params=(int(last_rfq_job_id),),
-            )
-            if not _df_rfq.empty:
-                _status_r = str(_df_rfq.iloc[0].get("status") or "").lower()
-                _res_raw_r = _df_rfq.iloc[0].get("result_json") or ""
-                _err_r = _df_rfq.iloc[0].get("error_message") or ""
-                if _status_r in ("queued", "running"):
-                    st.info(f"RFQ pack build job #{last_rfq_job_id} is {_status_r}. Refresh after a moment to check again.")
-                elif _status_r == "failed":
-                    if _err_r:
-                        st.error(f"RFQ pack build job #{last_rfq_job_id} failed: {_err_r}")
-                    else:
-                        st.error(f"RFQ pack build job #{last_rfq_job_id} failed.")
-                elif _status_r == "done":
-                    try:
-                        _data_r = _json.loads(_res_raw_r) if isinstance(_res_raw_r, str) else (_res_raw_r or {})
-                    except Exception:
-                        _data_r = {}
-                    _path_r = _data_r.get("zip_path") or _data_r.get("path")
-                    if _path_r:
+        # Show latest RFQ pack build job status and download if ready
+        job_id = st.session_state.get("rfq_pack_last_job_id")
+        if job_id:
+            try:
+                from contextlib import closing
+                with closing(conn.cursor()) as cur:
+                    cur.execute(
+                        "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
+                        (int(job_id),),
+                    )
+                    row = cur.fetchone()
+            except Exception:
+                row = None
+
+            if row:
+                status = row["status"]
+                progress = row["progress"]
+                err = row["error_message"]
+                import json as _json
+                try:
+                    result = _json.loads(row["result_json"] or "{}")
+                except Exception:
+                    result = {}
+
+                st.caption(
+                    f"Latest RFQ pack build job #{job_id} status: {status} "
+                    f"({int((progress or 0) * 100)}% complete)"
+                )
+
+                if status == "done":
+                    zip_path = result.get("zip_path")
+                    if zip_path and os.path.exists(zip_path):
                         try:
-                            with open(_path_r, "rb") as _f:
-                                _bin_r = _f.read()
+                            with open(zip_path, "rb") as _f:
+                                _data = _f.read()
                             st.download_button(
-                                "Download ZIP",
-                                data=_bin_r,
-                                file_name=os.path.basename(_path_r),
+                                "Download RFQ Pack ZIP",
+                                data=_data,
+                                file_name=os.path.basename(zip_path),
                                 mime="application/zip",
-                                key=f"rfq_zip_download_{int(last_rfq_job_id)}",
+                                key="rfq_pack_zip_download",
                             )
-                            st.success("RFQ pack ZIP export is ready.")
-                        except Exception:
-                            st.info(f"RFQ pack ZIP exported to {_path_r}. Use your file browser if the download button is unavailable.")
-    except Exception:
-        pass
+                        except Exception as _e:
+                            st.error(f"Download unavailable: {_e}")
+                    else:
+                        st.warning("Job finished but RFQ pack ZIP file was not found.")
+                elif status == "failed":
+                    if err:
+                        st.error(f"RFQ pack build job failed: {err}")
+                    else:
+                        st.error("RFQ pack build job failed.")
+                else:
+                    st.info("RFQ pack build running in background. Refresh to update status.")
+
 
     with cmcsv:
         if st.button("Export Vendors Mail-Merge CSV", key="rfq_mail_csv"):
@@ -25436,357 +25510,6 @@ def _jobs_worker_handle_pb_draft_all(conn, job_id: int, payload: dict):
         )
     except Exception:
         pass
-
-def _jobs_worker_handle_proposal_export_docx(conn, job_id: int, payload: dict):
-    """Worker handler to build a full Proposal Builder DOCX in the background."""
-    import os as _os
-
-    rfp_id = payload.get("rfp_id")
-    sections = payload.get("sections") or []
-    out_name = payload.get("out_name") or (f"Proposal_RFP_{int(rfp_id)}.docx" if rfp_id else "Proposal.docx")
-    font_name = payload.get("font_name") or "Times New Roman"
-    try:
-        font_size = int(payload.get("font_size") or 11)
-    except Exception:
-        font_size = 11
-    spacing = payload.get("spacing") or "1.15"
-
-    if not sections:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message="No sections provided for Proposal Builder export.",
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    out_path = _os.path.join(DATA_DIR, out_name)
-
-    try:
-        jobs_update_status(
-            conn,
-            job_id,
-            status="running",
-            progress=0.1,
-            mark_started=True,
-        )
-    except Exception:
-        pass
-
-    # Reload RFP context so CLIN table and L&M checklist are available to the exporter.
-    ctx = {}
-    if rfp_id is not None:
-        try:
-            ctx = _load_rfp_context_struct(conn, int(rfp_id))
-        except Exception:
-            ctx = {}
-
-    try:
-        clins = _ctxd(ctx, "clins")
-    except Exception:
-        clins = None
-    try:
-        checklist = _ctxd(ctx, "items")
-    except Exception:
-        checklist = None
-    try:
-        notice_id = _first_row_value(_ctxd(ctx, "rfp"), "notice_id", None)
-    except Exception:
-        notice_id = None
-
-    try:
-        exported = _export_docx(
-            out_path,
-            doc_title=None,
-            sections=sections,
-            clins=clins,
-            checklist=checklist,
-            metadata={
-                "rfp_id": int(rfp_id) if rfp_id is not None else None,
-                "notice_id": notice_id,
-            },
-            font_name=font_name,
-            font_size_pt=int(font_size),
-            spacing=spacing,
-        )
-    except Exception as _e:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message=str(_e),
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    if not exported:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message="DOCX export did not return a file path.",
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        jobs_update_status(
-            conn,
-            job_id,
-            status="done",
-            progress=1.0,
-            result={"path": str(exported)},
-            mark_finished=True,
-        )
-    except Exception:
-        pass
-
-
-def _jobs_worker_handle_fast_rfq_export_docx(conn, job_id: int, payload: dict):
-    """Worker handler to build a one-page Fast RFQ DOCX in the background."""
-    import os as _os
-    import pandas as _pd
-
-    quote_id = payload.get("quote_id")
-    if not quote_id:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message="Missing quote_id for Fast RFQ export.",
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        jobs_update_status(
-            conn,
-            job_id,
-            status="running",
-            progress=0.1,
-            mark_started=True,
-        )
-    except Exception:
-        pass
-
-    # CLIN rows
-    try:
-        df_clins = _pd.read_sql_query(
-            "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
-            conn,
-            params=(int(quote_id),),
-        )
-    except Exception:
-        df_clins = _pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
-
-    clins_payload = []
-    if not df_clins.empty:
-        for _, row in df_clins.iterrows():
-            clins_payload.append(
-                {
-                    "clin": row.get("clin_label"),
-                    "description": row.get("description"),
-                    "qty": row.get("qty"),
-                    "unit": row.get("unit"),
-                    "unit_price": row.get("unit_price"),
-                    "extended_price": row.get("extended_price"),
-                }
-            )
-
-    # Header fields (prefer payload, fall back to DB row).
-    try:
-        df_q = _pd.read_sql_query(
-            "SELECT * FROM fast_rfq_quotes WHERE id=?;",
-            conn,
-            params=(int(quote_id),),
-        )
-        qrow = df_q.iloc[0].to_dict() if not df_q.empty else {}
-    except Exception:
-        qrow = {}
-
-    def _fallback(key: str, default: str | None = None) -> str | None:
-        v = payload.get(key)
-        if v is None:
-            v = qrow.get(key) if isinstance(qrow, dict) else None
-        return v if v is not None else default
-
-    title = _fallback("title", "Quote")
-    customer = _fallback("customer", "")
-    contact_name = _fallback("contact_name", "")
-    contact_email = _fallback("contact_email", "")
-    contact_phone = _fallback("contact_phone", "")
-    notes = _fallback("notes", "")
-    terms = _fallback("terms", "")
-
-    body_lines: list[str] = []
-    if customer:
-        body_lines.append(customer)
-    poc_line = ""
-    if contact_name:
-        poc_line += contact_name
-    if contact_email:
-        poc_line += f" <{contact_email}>"
-    if contact_phone:
-        if poc_line:
-            poc_line += " | "
-        poc_line += contact_phone
-    if poc_line:
-        body_lines.append(poc_line)
-
-    body_lines.append("")
-    body_lines.append(f"Subject: {title}")
-    body_lines.append("")
-    body_lines.append("Thank you for the opportunity to provide pricing. Below is our proposed pricing for the requested work.")
-    if notes:
-        body_lines.append("")
-        body_lines.append(notes)
-    if terms:
-        body_lines.append("")
-        body_lines.append(f"Terms: {terms}")
-
-    sections = [
-        {
-            "title": "Quote",
-            "body": "\n".join(body_lines),
-        }
-    ]
-
-    out_name = payload.get("out_name") or f"Fast_RFQ_{int(quote_id)}.docx"
-    out_path = _os.path.join(DATA_DIR, out_name)
-
-    try:
-        exported = _export_docx(
-            out_path,
-            doc_title=title,
-            sections=sections,
-            clins=clins_payload,
-            checklist=None,
-            metadata={
-                "fast_rfq": True,
-                "quote_id": int(quote_id),
-            },
-        )
-    except Exception as _e:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message=str(_e),
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    if not exported:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message="Fast RFQ DOCX export did not return a file path.",
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        jobs_update_status(
-            conn,
-            job_id,
-            status="done",
-            progress=1.0,
-            result={"path": str(exported)},
-            mark_finished=True,
-        )
-    except Exception:
-        pass
-
-
-def _jobs_worker_handle_rfq_pack_build(conn, job_id: int, payload: dict):
-    """Worker handler to build an RFQ pack ZIP in the background."""
-    import os as _os
-
-    pack_id = payload.get("pack_id")
-    if pack_id is None:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message="Missing pack_id for RFQ pack build.",
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        jobs_update_status(
-            conn,
-            job_id,
-            status="running",
-            progress=0.1,
-            mark_started=True,
-        )
-    except Exception:
-        pass
-
-    try:
-        zip_path = _rfq_build_zip(conn, int(pack_id))
-    except Exception as _e:
-        zip_path = None
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message=str(_e),
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    if not zip_path:
-        try:
-            jobs_update_status(
-                conn,
-                job_id,
-                status="failed",
-                error_message="RFQ pack ZIP build did not return a file path.",
-                mark_finished=True,
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        jobs_update_status(
-            conn,
-            job_id,
-            status="done",
-            progress=1.0,
-            result={"zip_path": str(zip_path)},
-            mark_finished=True,
-        )
-    except Exception:
-        pass
 def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict):
     """Fallback handler for job types the worker does not yet implement."""
     jobs_update_status(
@@ -25863,14 +25586,166 @@ def _jobs_worker_handle_fts_index_rebuild(conn, job_id: int, payload: dict):
             pass
 
 
+
+def _jobs_worker_handle_proposal_export_docx(conn, job_id: int, payload: dict) -> None:
+    """Worker handler for full proposal DOCX export."""
+    import os as _os
+
+    # Normalize payload
+    path = payload.get("out_path") or payload.get("path")
+    if not path:
+        rfp_id = payload.get("rfp_id")
+        if rfp_id:
+            path = _os.path.join(DATA_DIR, f"Proposal_RFP_{int(rfp_id)}.docx")
+        else:
+            path = _os.path.join(DATA_DIR, f"Proposal_{job_id}.docx")
+
+    doc_title = payload.get("doc_title") or "Proposal"
+    sections = payload.get("sections") or []
+    clins = payload.get("clins")
+    checklist = payload.get("checklist")
+    metadata = payload.get("metadata") or {}
+    font_name = payload.get("font_name") or "Calibri"
+    try:
+        font_size_pt = int(payload.get("font_size_pt") or 11)
+    except Exception:
+        font_size_pt = 11
+    spacing = payload.get("spacing") or "1.15"
+
+    try:
+        jobs_update_status(conn, job_id, status="running", progress=0.05, mark_started=True)
+    except Exception:
+        pass
+
+    try:
+        exported = _export_docx(
+            path,
+            doc_title=doc_title,
+            sections=sections,
+            clins=clins,
+            checklist=checklist,
+            metadata=metadata,
+            font_name=font_name,
+            font_size_pt=font_size_pt,
+            spacing=spacing,
+        )
+        if not exported:
+            try:
+                jobs_update_status(
+                    conn,
+                    job_id,
+                    status="failed",
+                    error_message="DOCX export returned no path.",
+                    mark_finished=True,
+                )
+            except Exception:
+                pass
+            return
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="done",
+                progress=1.0,
+                result={"path": str(exported)},
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=str(exc),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+
+
+def _jobs_worker_handle_fast_rfq_export_docx(conn, job_id: int, payload: dict) -> None:
+    """Worker handler for Fast RFQ one-page DOCX export."""
+    # Reuse the same implementation as full proposal export;
+    # payload already contains sections/clins tailored for Fast RFQ.
+    _jobs_worker_handle_proposal_export_docx(conn, job_id, payload)
+
+
+def _jobs_worker_handle_rfq_pack_build(conn, job_id: int, payload: dict) -> None:
+    """Worker handler for RFQ pack ZIP build."""
+    try:
+        pack_id = int(payload.get("pack_id") or 0)
+    except Exception:
+        pack_id = 0
+
+    if not pack_id:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message="Missing pack_id in RFQ pack build payload.",
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        jobs_update_status(conn, job_id, status="running", progress=0.05, mark_started=True)
+    except Exception:
+        pass
+
+    try:
+        z = _rfq_build_zip(conn, pack_id)
+        if not z:
+            try:
+                jobs_update_status(
+                    conn,
+                    job_id,
+                    status="failed",
+                    error_message="RFQ ZIP build returned no path.",
+                    mark_finished=True,
+                )
+            except Exception:
+                pass
+            return
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="done",
+                progress=1.0,
+                result={"zip_path": str(z)},
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=str(exc),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+
+
 def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
     """Dispatch a single job by type and handle errors uniformly."""
     import traceback as _traceback
+
     try:
         if job_type == "backup_full":
             _jobs_worker_handle_backup_full(conn, job_id, payload)
         elif job_type == "restore_from_backup":
             _jobs_worker_handle_restore_from_backup(conn, job_id, payload)
+        elif job_type == "sam_live_search":
+            _jobs_worker_handle_sam_live_search(conn, job_id, payload)
         elif job_type == "sam_live_search":
             _jobs_worker_handle_sam_live_search(conn, job_id, payload)
         elif job_type == "rfp_ingest_analyze":
@@ -25899,6 +25774,8 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             )
         except Exception:
             _traceback.print_exc()
+
+
 def jobs_worker_loop(sleep_seconds: float = 3.0) -> None:
     """Main background worker loop.
 
