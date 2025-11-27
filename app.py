@@ -14010,105 +14010,103 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         out_path = os.path.join(DATA_DIR, out_name)
 
         
-if st.button("Export DOCX", type="primary"):
-    # Track this heavy export as a background job in the jobs table.
-    try:
-        ensure_jobs_schema(conn)
-    except Exception:
-        pass
 
-    # Build sections payload from the currently selected sections
-    sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
+        if st.button("Export DOCX", type="primary"):
+            # Enqueue proposal export as a background job.
+            try:
+                ensure_jobs_schema(conn)
+            except Exception:
+                pass
 
-    try:
-        try:
-            _user_name = get_current_user_name()
-        except Exception:
-            _user_name = ""
-        payload = {
-            "scope": "proposal_export_docx",
-            "rfp_id": int(rfp_id) if rfp_id is not None else None,
-            "out_name": out_name,
-            "out_path": out_path,
-            "doc_title": _first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
-            "sections": sections,
-            "clins": _ctxd(ctx, "clins"),
-            "checklist": _ctxd(ctx, "items"),
-            "metadata": {
-                "rfp_id": int(rfp_id) if rfp_id is not None else None,
-                "notice_id": _first_row_value(_ctxd(ctx, "rfp"), "notice_id", None),
-            },
-            "font_name": font_name,
-            "font_size_pt": int(font_size),
-            "spacing": spacing,
-        }
-        job_id = jobs_enqueue(
-            conn,
-            job_type="proposal_export_docx",
-            payload=payload,
-            created_by=_user_name or None,
-        )
-        st.session_state["pb_export_last_job_id"] = job_id
-    except Exception:
-        job_id = None
-        st.error("Failed to enqueue export job.")
+            sections = [{"title": k, "body": content_map.get(k, "")} for k in selected]
 
-    if job_id:
-        st.info("Export DOCX job queued. The background worker will build your DOCX.")
-
-# Show latest proposal export job status and download if ready
-job_id = st.session_state.get("pb_export_last_job_id")
-if job_id:
-    try:
-        from contextlib import closing
-        with closing(conn.cursor()) as cur:
-            cur.execute(
-                "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
-                (int(job_id),),
-            )
-            row = cur.fetchone()
-    except Exception:
-        row = None
-
-    if row:
-        status = row["status"]
-        progress = row["progress"]
-        err = row["error_message"]
-        import json as _json
-        try:
-            result = _json.loads(row["result_json"] or "{}")
-        except Exception:
-            result = {}
-
-        st.caption(
-            f"Latest proposal export job #{job_id} status: {status} "
-            f"({int((progress or 0) * 100)}% complete)"
-        )
-
-        if status == "done":
-            path = result.get("path")
-            if path and os.path.exists(path):
+            try:
                 try:
-                    with open(path, "rb") as _f:
-                        _data = _f.read()
-                    st.download_button(
-                        "Download DOCX",
-                        data=_data,
-                        file_name=os.path.basename(path),
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="dl_exported_docx",
+                    _user_name = get_current_user_name()
+                except Exception:
+                    _user_name = ""
+                payload = {
+                    "scope": "proposal_export_docx",
+                    "rfp_id": int(rfp_id) if rfp_id is not None else None,
+                    "out_name": out_name,
+                    "out_path": out_path,
+                    "doc_title": _first_row_value(_ctxd(ctx, "rfp"), "title", "Proposal"),
+                    "sections": sections,
+                    "clins": _ctxd(ctx, "clins"),
+                    "checklist": _ctxd(ctx, "items"),
+                    "metadata": {
+                        "rfp_id": int(rfp_id) if rfp_id is not None else None,
+                        "notice_id": _first_row_value(_ctxd(ctx, "rfp"), "notice_id", None),
+                    },
+                    "font_name": font_name,
+                    "font_size_pt": int(font_size),
+                    "spacing": spacing,
+                }
+                job_id = jobs_enqueue(
+                    conn,
+                    job_type="proposal_export_docx",
+                    payload=payload,
+                    created_by=_user_name or None,
+                )
+                st.session_state["pb_export_last_job_id"] = job_id
+                st.success("Export DOCX job queued. Background worker will build the file.")
+            except Exception:
+                job_id = None
+                st.error("Failed to enqueue export job.")
+
+        # Show latest proposal export job status and download if ready
+        job_id = st.session_state.get("pb_export_last_job_id")
+        if job_id:
+            try:
+                from contextlib import closing
+                with closing(conn.cursor()) as cur:
+                    cur.execute(
+                        "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
+                        (int(job_id),),
                     )
-                except Exception as _e:
-                    st.error(f"Download unavailable: {_e}")
-            else:
-                st.warning("Job finished but output file was not found.")
-        elif status == "failed":
-            if err:
-                st.error(f"Export job failed: {err}")
-            else:
-                st.error("Export job failed.")
-        else:
-            st.info("Export running in background. Refresh the page to update status.")
+                    row = cur.fetchone()
+            except Exception:
+                row = None
+
+            if row:
+                status = row["status"]
+                progress = row["progress"]
+                err = row["error_message"]
+                import json as _json
+                try:
+                    result = _json.loads(row["result_json"] or "{}")
+                except Exception:
+                    result = {}
+
+                st.caption(
+                    f"Latest proposal export job #{job_id} status: {status} "
+                    f"({int((progress or 0) * 100)}% complete)"
+                )
+
+                if status == "done":
+                    path = result.get("path")
+                    if path and os.path.exists(path):
+                        try:
+                            with open(path, "rb") as _f:
+                                _data = _f.read()
+                            st.download_button(
+                                "Download DOCX",
+                                data=_data,
+                                file_name=os.path.basename(path),
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key="dl_exported_docx",
+                            )
+                        except Exception as _e:
+                            st.error(f"Download unavailable: {_e}")
+                    else:
+                        st.warning("Job finished but output file was not found.")
+                elif status == "failed":
+                    if err:
+                        st.error(f"Export job failed: {err}")
+                    else:
+                        st.error("Export job failed.")
+                else:
+                    st.info("Export running in background. Refresh the page to update status.")
 # [removed] Legacy Snippets/Citations panel hidden
 # ---------- Subcontractor Finder (Phase D) ----------
     try:
@@ -18106,6 +18104,7 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
     st.caption(f"Estimated total value: ${total_value:,.2f}")
     st.subheader("Export one-page quote")
     
+
     if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
         # Ensure jobs schema exists
         try:
@@ -18113,7 +18112,7 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
         except Exception:
             pass
 
-        # Reload CLINs from the database and shape them for _export_docx
+        # Reload CLINs from the database and shape them for export
         try:
             df_clins = pd.read_sql_query(
                 "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
@@ -18220,12 +18219,10 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
                 created_by=_user_name or None,
             )
             st.session_state["fast_rfq_last_job_id"] = job_id
+            st.success("Fast RFQ export job queued. Background worker will build the DOCX.")
         except Exception:
             job_id = None
             st.error("Failed to enqueue Fast RFQ export.")
-
-        if job_id:
-            st.info("Fast RFQ DOCX export job queued. The worker will build your DOCX.")
 
     # Show latest Fast RFQ export job status and download if ready
     job_id = st.session_state.get("fast_rfq_last_job_id")
@@ -18280,7 +18277,6 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
                     st.error("Fast RFQ export job failed.")
             else:
                 st.info("Fast RFQ export running in background. Refresh to update status.")
-
 def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.header("RFQ Pack")
     st.caption("Build vendor-ready RFQ packages from your CLINs, attachments, and vendor list.")
@@ -18454,8 +18450,9 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     with czip:
 
         
+
         if st.button("Build RFQ ZIP", type="primary", key="rfq_build_zip"):
-            # Track RFQ pack ZIP build as a job.
+            # Enqueue RFQ pack ZIP build as a job.
             try:
                 ensure_jobs_schema(conn)
             except Exception:
@@ -18477,12 +18474,10 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                     created_by=_user_name or None,
                 )
                 st.session_state["rfq_pack_last_job_id"] = job_id
+                st.success("RFQ pack build job queued. Background worker will assemble the ZIP.")
             except Exception:
                 job_id = None
                 st.error("Failed to enqueue RFQ pack build job.")
-
-            if job_id:
-                st.info("RFQ pack build job queued. The worker will assemble the ZIP.")
 
         # Show latest RFQ pack build job status and download if ready
         job_id = st.session_state.get("rfq_pack_last_job_id")
@@ -25590,9 +25585,10 @@ def _jobs_worker_handle_fts_index_rebuild(conn, job_id: int, payload: dict):
 def _jobs_worker_handle_proposal_export_docx(conn, job_id: int, payload: dict) -> None:
     """Worker handler for full proposal DOCX export."""
     import os as _os
-
-    # Normalize payload
-    path = payload.get("out_path") or payload.get("path")
+    try:
+        path = payload.get("out_path") or payload.get("out_name")
+    except Exception:
+        path = None
     if not path:
         rfp_id = payload.get("rfp_id")
         if rfp_id:
@@ -25667,8 +25663,6 @@ def _jobs_worker_handle_proposal_export_docx(conn, job_id: int, payload: dict) -
 
 def _jobs_worker_handle_fast_rfq_export_docx(conn, job_id: int, payload: dict) -> None:
     """Worker handler for Fast RFQ one-page DOCX export."""
-    # Reuse the same implementation as full proposal export;
-    # payload already contains sections/clins tailored for Fast RFQ.
     _jobs_worker_handle_proposal_export_docx(conn, job_id, payload)
 
 
