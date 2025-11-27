@@ -18106,180 +18106,180 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
     st.caption(f"Estimated total value: ${total_value:,.2f}")
     st.subheader("Export one-page quote")
     
-if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
-    # Ensure jobs schema exists
-    try:
-        ensure_jobs_schema(conn)
-    except Exception:
-        pass
+    if st.button("Export Fast RFQ DOCX", type="primary", key=f"fast_rfq_export_{int(quote_id)}"):
+        # Ensure jobs schema exists
+        try:
+            ensure_jobs_schema(conn)
+        except Exception:
+            pass
 
-    # Reload CLINs from the database and shape them for _export_docx
-    try:
-        df_clins = pd.read_sql_query(
-            "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
-            conn,
-            params=(int(quote_id),),
-        )
-    except Exception:
-        df_clins = pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
-
-    clins_payload = []
-    try:
-        for _, r in df_clins.iterrows():
-            try:
-                qty = float(r.get("qty") or 0)
-            except Exception:
-                qty = 0.0
-            try:
-                unit_price = float(r.get("unit_price") or 0)
-            except Exception:
-                unit_price = 0.0
-            try:
-                ext_price = float(r.get("extended_price") or 0)
-            except Exception:
-                ext_price = qty * unit_price
-            clins_payload.append(
-                {
-                    "clin": r.get("clin_label") or "",
-                    "description": r.get("description") or "",
-                    "qty": qty,
-                    "unit": r.get("unit") or "",
-                    "unit_price": unit_price,
-                    "extended_price": ext_price,
-                }
+        # Reload CLINs from the database and shape them for _export_docx
+        try:
+            df_clins = pd.read_sql_query(
+                "SELECT clin_label, description, qty, unit, unit_price, extended_price FROM fast_rfq_lines WHERE quote_id=? ORDER BY id;",
+                conn,
+                params=(int(quote_id),),
             )
-    except Exception:
+        except Exception:
+            df_clins = pd.DataFrame(columns=["clin_label", "description", "qty", "unit", "unit_price", "extended_price"])
+
         clins_payload = []
-
-    out_name = f"Fast_RFQ_{int(quote_id)}.docx"
-    out_path = os.path.join(DATA_DIR, out_name)
-
-    # Compose simple one-page style body
-    body_lines = []
-    cust_label = customer_e or qrow.get("customer") or ""
-    if cust_label:
-        body_lines.append(cust_label)
-    poc_line = ""
-    if contact_name_e:
-        poc_line += contact_name_e
-    if contact_email_e:
-        poc_line += f" <{contact_email_e}>"
-    if contact_phone_e:
-        if poc_line:
-            poc_line += " | "
-        poc_line += contact_phone_e
-    if poc_line:
-        body_lines.append(poc_line)
-
-    body_lines.append("")
-    subj = title_e or qrow.get("title") or "Quote"
-    body_lines.append(f"Subject: {subj}")
-    body_lines.append("")
-    body_lines.append(
-        "Thank you for the opportunity to provide pricing for this requirement. "
-        "Below is our proposed pricing for the requested work."
-    )
-    if notes_e:
-        body_lines.append("")
-        body_lines.append(notes_e)
-    if terms_e:
-        body_lines.append("")
-        body_lines.append(f"Terms: {terms_e}")
-
-    sections = [
-        {
-            "title": "Quote",
-            "body": "\n".join(body_lines),
-        }
-    ]
-
-    # Enqueue Fast RFQ export job
-    try:
         try:
-            _user_name = get_current_user_name()
-        except Exception:
-            _user_name = ""
-        payload = {
-            "scope": "fast_rfq_export_docx",
-            "quote_id": int(quote_id),
-            "out_name": out_name,
-            "out_path": out_path,
-            "doc_title": subj,
-            "sections": sections,
-            "clins": clins_payload,
-            "checklist": None,
-            "metadata": {
-                "fast_rfq": True,
-                "quote_id": int(quote_id),
-            },
-        }
-        job_id = jobs_enqueue(
-            conn,
-            job_type="fast_rfq_export_docx",
-            payload=payload,
-            created_by=_user_name or None,
-        )
-        st.session_state["fast_rfq_last_job_id"] = job_id
-    except Exception:
-        job_id = None
-        st.error("Failed to enqueue Fast RFQ export.")
-
-    if job_id:
-        st.info("Fast RFQ DOCX export job queued. The worker will build your DOCX.")
-
-# Show latest Fast RFQ export job status and download if ready
-job_id = st.session_state.get("fast_rfq_last_job_id")
-if job_id:
-    try:
-        from contextlib import closing
-        with closing(conn.cursor()) as cur:
-            cur.execute(
-                "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
-                (int(job_id),),
-            )
-            row = cur.fetchone()
-    except Exception:
-        row = None
-
-    if row:
-        status = row["status"]
-        progress = row["progress"]
-        err = row["error_message"]
-        import json as _json
-        try:
-            result = _json.loads(row["result_json"] or "{}")
-        except Exception:
-            result = {}
-
-        st.caption(
-            f"Latest Fast RFQ export job #{job_id} status: {status} "
-            f"({int((progress or 0) * 100)}% complete)"
-        )
-
-        if status == "done":
-            path = result.get("path")
-            if path and os.path.exists(path):
+            for _, r in df_clins.iterrows():
                 try:
-                    with open(path, "rb") as _f:
-                        _data = _f.read()
-                    st.download_button(
-                        "Download Fast RFQ DOCX",
-                        data=_data,
-                        file_name=os.path.basename(path),
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"dl_fast_rfq_docx_{int(quote_id)}",
-                    )
-                except Exception as _e:
-                    st.error(f"Download unavailable: {_e}")
+                    qty = float(r.get("qty") or 0)
+                except Exception:
+                    qty = 0.0
+                try:
+                    unit_price = float(r.get("unit_price") or 0)
+                except Exception:
+                    unit_price = 0.0
+                try:
+                    ext_price = float(r.get("extended_price") or 0)
+                except Exception:
+                    ext_price = qty * unit_price
+                clins_payload.append(
+                    {
+                        "clin": r.get("clin_label") or "",
+                        "description": r.get("description") or "",
+                        "qty": qty,
+                        "unit": r.get("unit") or "",
+                        "unit_price": unit_price,
+                        "extended_price": ext_price,
+                    }
+                )
+        except Exception:
+            clins_payload = []
+
+        out_name = f"Fast_RFQ_{int(quote_id)}.docx"
+        out_path = os.path.join(DATA_DIR, out_name)
+
+        # Compose simple one-page style body
+        body_lines = []
+        cust_label = customer_e or qrow.get("customer") or ""
+        if cust_label:
+            body_lines.append(cust_label)
+        poc_line = ""
+        if contact_name_e:
+            poc_line += contact_name_e
+        if contact_email_e:
+            poc_line += f" <{contact_email_e}>"
+        if contact_phone_e:
+            if poc_line:
+                poc_line += " | "
+            poc_line += contact_phone_e
+        if poc_line:
+            body_lines.append(poc_line)
+
+        body_lines.append("")
+        subj = title_e or qrow.get("title") or "Quote"
+        body_lines.append(f"Subject: {subj}")
+        body_lines.append("")
+        body_lines.append(
+            "Thank you for the opportunity to provide pricing for this requirement. "
+            "Below is our proposed pricing for the requested work."
+        )
+        if notes_e:
+            body_lines.append("")
+            body_lines.append(notes_e)
+        if terms_e:
+            body_lines.append("")
+            body_lines.append(f"Terms: {terms_e}")
+
+        sections = [
+            {
+                "title": "Quote",
+                "body": "\n".join(body_lines),
+            }
+        ]
+
+        # Enqueue Fast RFQ export job
+        try:
+            try:
+                _user_name = get_current_user_name()
+            except Exception:
+                _user_name = ""
+            payload = {
+                "scope": "fast_rfq_export_docx",
+                "quote_id": int(quote_id),
+                "out_name": out_name,
+                "out_path": out_path,
+                "doc_title": subj,
+                "sections": sections,
+                "clins": clins_payload,
+                "checklist": None,
+                "metadata": {
+                    "fast_rfq": True,
+                    "quote_id": int(quote_id),
+                },
+            }
+            job_id = jobs_enqueue(
+                conn,
+                job_type="fast_rfq_export_docx",
+                payload=payload,
+                created_by=_user_name or None,
+            )
+            st.session_state["fast_rfq_last_job_id"] = job_id
+        except Exception:
+            job_id = None
+            st.error("Failed to enqueue Fast RFQ export.")
+
+        if job_id:
+            st.info("Fast RFQ DOCX export job queued. The worker will build your DOCX.")
+
+    # Show latest Fast RFQ export job status and download if ready
+    job_id = st.session_state.get("fast_rfq_last_job_id")
+    if job_id:
+        try:
+            from contextlib import closing
+            with closing(conn.cursor()) as cur:
+                cur.execute(
+                    "SELECT status, progress, error_message, result_json FROM jobs WHERE id=?;",
+                    (int(job_id),),
+                )
+                row = cur.fetchone()
+        except Exception:
+            row = None
+
+        if row:
+            status = row["status"]
+            progress = row["progress"]
+            err = row["error_message"]
+            import json as _json
+            try:
+                result = _json.loads(row["result_json"] or "{}")
+            except Exception:
+                result = {}
+
+            st.caption(
+                f"Latest Fast RFQ export job #{job_id} status: {status} "
+                f"({int((progress or 0) * 100)}% complete)"
+            )
+
+            if status == "done":
+                path = result.get("path")
+                if path and os.path.exists(path):
+                    try:
+                        with open(path, "rb") as _f:
+                            _data = _f.read()
+                        st.download_button(
+                            "Download Fast RFQ DOCX",
+                            data=_data,
+                            file_name=os.path.basename(path),
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"dl_fast_rfq_docx_{int(quote_id)}",
+                        )
+                    except Exception as _e:
+                        st.error(f"Download unavailable: {_e}")
+                else:
+                    st.warning("Job finished but Fast RFQ DOCX file was not found.")
+            elif status == "failed":
+                if err:
+                    st.error(f"Fast RFQ export job failed: {err}")
+                else:
+                    st.error("Fast RFQ export job failed.")
             else:
-                st.warning("Job finished but Fast RFQ DOCX file was not found.")
-        elif status == "failed":
-            if err:
-                st.error(f"Fast RFQ export job failed: {err}")
-            else:
-                st.error("Fast RFQ export job failed.")
-        else:
-            st.info("Fast RFQ export running in background. Refresh to update status.")
+                st.info("Fast RFQ export running in background. Refresh to update status.")
 
 def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     st.header("RFQ Pack")
