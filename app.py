@@ -4909,65 +4909,55 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
             key="onepage_sections_to_draft",
         )
 
-        # Draft all sections via background job record
-        if st.button(
-            "Draft All Sections ▶",
-            type="primary",
-            help="Generate a first-pass draft for the selected sections.",
-            key="onepage_draft_all",
-        ):
-            from typing import Dict
 
-            if not sel:
-                st.warning("Select at least one section to draft.")
-            else:
-                # Enqueue job
+# Draft all sections via background job record
+if st.button(
+    "Draft All Sections ▶",
+    type="primary",
+    help="Generate a first-pass draft for the selected sections.",
+    key="onepage_draft_all",
+):
+    if not sel:
+        st.warning("Select at least one section to draft.")
+    else:
+        # Enqueue job; execution happens in the background worker
+        conn_jobs = get_db()
+        payload = {
+            "scope": "rfp_onepage_proposal_draft",
+            "sections": list(sel),
+            "notice_id": st.session_state.get("onepage_notice_id"),
+            "context": combined,
+        }
+        job_id = jobs_enqueue(conn_jobs, job_type="pb_draft_all", payload=payload)
+        st.session_state["pb_draft_all_last_job_id"] = job_id
+        st.info("Draft job submitted. It will run in the background; see status below.")
+
+        # Pull in completed background drafts from the last job, if any
+        try:
+            last_job_id = st.session_state.get("pb_draft_all_last_job_id")
+            if last_job_id:
+                import pandas as _pd
+                import json as _json
                 conn_jobs = get_db()
-                payload = {
-                    "scope": "rfp_onepage_proposal_draft",
-                    "sections": list(sel),
-                    "notice_id": st.session_state.get("onepage_notice_id"),
-                }
-                job_id = jobs_enqueue(conn_jobs, job_type="pb_draft_all", payload=payload)
-                st.session_state["pb_draft_all_last_job_id"] = job_id
-
-                # Synchronous execution for now, but status is tracked in jobs table
-                try:
-                    total = max(len(sel), 1)
-                    jobs_update_status(
-                        conn_jobs,
-                        job_id,
-                        status="running",
-                        mark_started=True,
-                        progress=0.0,
-                    )
-                    draft: Dict[str, str] = {}
-                    for idx, sec in enumerate(sel):
-                        draft[sec] = _draft_section(sec, combined)
-                        jobs_update_status(
-                            conn_jobs,
-                            job_id,
-                            progress=(idx + 1) / float(total),
-                        )
-                    jobs_update_status(
-                        conn_jobs,
-                        job_id,
-                        status="done",
-                        mark_finished=True,
-                        result={"drafted_sections": list(draft.keys())},
-                    )
-                    st.session_state["onepage_draft"] = draft
-                    st.success("Drafted all selected sections.")
-                except Exception as exc:
-                    jobs_update_status(
-                        conn_jobs,
-                        job_id,
-                        status="failed",
-                        error_message=str(exc),
-                        mark_finished=True,
-                    )
-                    st.error(f"Drafting job failed: {exc!s}")
-
+                ensure_jobs_schema(conn_jobs)
+                _df = _pd.read_sql_query(
+                    "SELECT status, result_json FROM jobs WHERE id = ?",
+                    conn_jobs,
+                    params=(int(last_job_id),),
+                )
+                if not _df.empty:
+                    _status = str(_df.iloc[0].get("status") or "").lower()
+                    _result_json = _df.iloc[0].get("result_json") or ""
+                    if _status == "done" and _result_json:
+                        try:
+                            _data = _json.loads(_result_json) if isinstance(_result_json, str) else {}
+                        except Exception:
+                            _data = {}
+                        _job_draft = _data.get("draft") or {}
+                        if _job_draft:
+                            st.session_state["onepage_draft"] = _job_draft
+        except Exception:
+            pass
         draft = st.session_state.get("onepage_draft") or {}
         if draft:
             for sec, body in draft.items():
@@ -25348,6 +25338,103 @@ def _jobs_worker_handle_rfp_ingest_analyze(conn, job_id: int, payload: dict):
             pass
 
 
+
+def _jobs_worker_handle_pb_draft_all(conn, job_id: int, payload: dict):
+    """Worker handler for job_type='pb_draft_all'.
+
+    Generates one-page proposal sections in the background using the same
+    _draft_section helper as the synchronous one-page analyzer.
+    """
+    from typing import Dict
+    import json as _json
+
+    sections: list[str] = []
+    context: str = ""
+
+    try:
+        if isinstance(payload, dict):
+            raw_sections = payload.get("sections") or []
+            if isinstance(raw_sections, (list, tuple, set)):
+                sections = [str(s) for s in raw_sections]
+            else:
+                sections = [str(raw_sections)]
+            ctx = payload.get("context") or payload.get("combined") or ""
+            if ctx is None:
+                ctx = ""
+            context = str(ctx)
+    except Exception:
+        sections = []
+        context = ""
+
+    if not sections:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message="No sections provided for pb_draft_all job.",
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        return
+
+    total = max(len(sections), 1)
+    try:
+        jobs_update_status(
+            conn,
+            job_id,
+            status="running",
+            mark_started=True,
+            progress=0.0,
+        )
+    except Exception:
+        pass
+
+    draft: Dict[str, str] = {}
+    error: Exception | None = None
+
+    try:
+        for idx, sec in enumerate(sections):
+            try:
+                draft[sec] = _draft_section(sec, context)
+            except Exception as _sec_exc:
+                draft[sec] = f"[Draft failed for section '{sec}': {_sec_exc!s}]"
+            try:
+                jobs_update_status(
+                    conn,
+                    job_id,
+                    progress=(idx + 1) / float(total),
+                )
+            except Exception:
+                pass
+    except Exception as exc:
+        error = exc
+
+    if error is not None:
+        try:
+            jobs_update_status(
+                conn,
+                job_id,
+                status="failed",
+                error_message=str(error),
+                mark_finished=True,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        jobs_update_status(
+            conn,
+            job_id,
+            status="done",
+            progress=1.0,
+            result={"drafted_sections": list(draft.keys()), "draft": draft},
+            mark_finished=True,
+        )
+    except Exception:
+        pass
 def _jobs_worker_handle_unknown(conn, job_id: int, job_type: str, payload: dict):
     """Fallback handler for job types the worker does not yet implement."""
     jobs_update_status(
@@ -25435,8 +25522,12 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             _jobs_worker_handle_restore_from_backup(conn, job_id, payload)
         elif job_type == "sam_live_search":
             _jobs_worker_handle_sam_live_search(conn, job_id, payload)
+        elif job_type == "sam_live_search":
+            _jobs_worker_handle_sam_live_search(conn, job_id, payload)
         elif job_type == "rfp_ingest_analyze":
             _jobs_worker_handle_rfp_ingest_analyze(conn, job_id, payload)
+        elif job_type == "pb_draft_all":
+            _jobs_worker_handle_pb_draft_all(conn, job_id, payload)
         elif job_type == "fts_index_rebuild":
             _jobs_worker_handle_fts_index_rebuild(conn, job_id, payload)
         else:
