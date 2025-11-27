@@ -13709,31 +13709,71 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             "Appendices"
         ]
         selected = st.multiselect("Include sections", default_sections, default=default_sections)
+        selected = st.multiselect("Include sections", default_sections, default=default_sections)
         gcol1, gcol2 = st.columns([1,1])
         with gcol1:
-            global_maxw = st.number_input("Max words per section (Draft All)", min_value=0, value=750, step=50, key="pb_global_maxw")
+            global_maxw = st.number_input(
+                "Max words per section (Draft All)",
+                min_value=0,
+                value=750,
+                step=50,
+                key="pb_global_maxw",
+            )
         with gcol2:
             st.caption("Used when per-section max is unset.")
-        if st.button("Draft All Sections ▶", key="pb_draft_all"):
-            with st.spinner("Drafting all selected sections…"):
-                for sec in selected:
-                    notes = st.session_state.get(f"y3_notes_{sec}", st.session_state.get(f"y3_notes_{sec}", ""))
-                    k = y_auto_k(f"{sec} {notes}")
-                    maxw = st.session_state.get(f"y3_maxw_{sec}", st.session_state.get("pb_global_maxw", 750))
-                    acc = []
-                    for tok in y3_stream_draft(conn, int(rfp_id), section_title=sec, notes=notes or "", k=int(k), max_words=int(maxw) if maxw and int(maxw)>0 else None):
-                        acc.append(tok)
-                    drafted = "".join(acc).strip()
-                    if drafted:
-                        drafted = _strip_citations(drafted)
-                        drafted = _y3_top_off_precise(conn, int(rfp_id), sec, notes or "", drafted, int(maxw) if maxw>0 else None)
-                        final = _finalize_section(sec, drafted)
-                    norm = _pb_normalize_text(final)
-                    st.session_state[f"pb_section_{sec}"] = norm
-                    st.session_state[f"pb_ta_{sec}"] = norm
-            st.success("Drafted all sections.")
-            st.rerun()
 
+        # Draft all Proposal Builder sections via background job
+        if st.button("Draft All Sections ▶", key="pb_draft_all"):
+            if not selected:
+                st.warning("Select at least one section to draft.")
+            else:
+                conn_jobs = get_db()
+                # Build a lightweight context from current PB state
+                notes_map = {}
+                for sec in selected:
+                    notes_map[str(sec)] = st.session_state.get(f"y3_notes_{sec}", "")
+                payload = {
+                    "scope": "proposal_builder_draft",
+                    "rfp_id": int(rfp_id) if rfp_id else None,
+                    "sections": list(selected),
+                    "notes": notes_map,
+                    "global_max_words": int(st.session_state.get("pb_global_maxw", 750)),
+                }
+                job_id = jobs_enqueue(conn_jobs, job_type="pb_draft_all", payload=payload)
+                st.session_state["pb_draft_all_last_job_id_main"] = job_id
+                st.info("Draft job submitted. It will run in the background; see status below.")
+
+        # Hydrate PB sections from the last completed background draft job (if any)
+        try:
+            last_job_id_main = st.session_state.get("pb_draft_all_last_job_id_main")
+            if last_job_id_main:
+                import pandas as _pd
+                import json as _json
+                conn_jobs = get_db()
+                ensure_jobs_schema(conn_jobs)
+                _df_pb = _pd.read_sql_query(
+                    "SELECT status, result_json FROM jobs WHERE id = ?",
+                    conn_jobs,
+                    params=(int(last_job_id_main),),
+                )
+                if not _df_pb.empty:
+                    _status_pb = str(_df_pb.iloc[0].get("status") or "").lower()
+                    _result_json_pb = _df_pb.iloc[0].get("result_json") or ""
+                    if _status_pb == "done" and _result_json_pb:
+                        try:
+                            _data_pb = _json.loads(_result_json_pb) if isinstance(_result_json_pb, str) else {}
+                        except Exception:
+                            _data_pb = {}
+                        _draft_pb = _data_pb.get("draft") or {}
+                        for sec, body in _draft_pb.items():
+                            if not body:
+                                continue
+                            final = _finalize_section(sec, body)
+                            norm = _pb_normalize_text(final)
+                            st.session_state[f"pb_section_{sec}"] = norm
+                            st.session_state[f"pb_ta_{sec}"] = norm
+        except Exception:
+            pass
         # Optional: auto-fill all selected sections from templates.
         if isinstance(tpl_df, pd.DataFrame) and not tpl_df.empty and selected:
             with st.expander("Auto-fill sections from templates", expanded=False):
