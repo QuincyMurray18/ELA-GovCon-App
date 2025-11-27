@@ -14069,12 +14069,11 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
                 row = None
 
             if row:
-                status = row["status"]
-                progress = row["progress"]
-                err = row["error_message"]
+                # jobs rows are returned as tuples (status, progress, error_message, result_json)
+                status, progress, err, result_json_raw = row
                 import json as _json
                 try:
-                    result = _json.loads(row["result_json"] or "{}")
+                    result = _json.loads(result_json_raw or "{}")
                 except Exception:
                     result = {}
 
@@ -18239,12 +18238,11 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
             row = None
 
         if row:
-            status = row["status"]
-            progress = row["progress"]
-            err = row["error_message"]
+            # jobs rows are returned as tuples (status, progress, error_message, result_json)
+            status, progress, err, result_json_raw = row
             import json as _json
             try:
-                result = _json.loads(row["result_json"] or "{}")
+                result = _json.loads(result_json_raw or "{}")
             except Exception:
                 result = {}
 
@@ -18494,12 +18492,11 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
                 row = None
 
             if row:
-                status = row["status"]
-                progress = row["progress"]
-                err = row["error_message"]
+                # jobs rows are returned as tuples (status, progress, error_message, result_json)
+                status, progress, err, result_json_raw = row
                 import json as _json
                 try:
-                    result = _json.loads(row["result_json"] or "{}")
+                    result = _json.loads(result_json_raw or "{}")
                 except Exception:
                     result = {}
 
