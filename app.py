@@ -13708,8 +13708,7 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             "Compliance Crosswalk",
             "Appendices"
         ]
-        selected = st.multiselect("Include sections", default_sections, default=default_sections)
-        selected = st.multiselect("Include sections", default_sections, default=default_sections)
+        selected = st.multiselect("Include sections", default_sections, default=default_sections, key="pb_include_sections")
         gcol1, gcol2 = st.columns([1,1])
         with gcol1:
             global_maxw = st.number_input(
