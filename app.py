@@ -4910,27 +4910,27 @@ def run_rfp_analyzer_onepage(pages: List[Dict[str, Any]]) -> None:
         )
 
 
-# Draft all sections via background job record
-if st.button(
-    "Draft All Sections ▶",
-    type="primary",
-    help="Generate a first-pass draft for the selected sections.",
-    key="onepage_draft_all",
-):
-    if not sel:
-        st.warning("Select at least one section to draft.")
-    else:
-        # Enqueue job; execution happens in the background worker
-        conn_jobs = get_db()
-        payload = {
-            "scope": "rfp_onepage_proposal_draft",
-            "sections": list(sel),
-            "notice_id": st.session_state.get("onepage_notice_id"),
-            "context": combined,
-        }
-        job_id = jobs_enqueue(conn_jobs, job_type="pb_draft_all", payload=payload)
-        st.session_state["pb_draft_all_last_job_id"] = job_id
-        st.info("Draft job submitted. It will run in the background; see status below.")
+        # Draft all sections via background job record
+        if st.button(
+            "Draft All Sections ▶",
+            type="primary",
+            help="Generate a first-pass draft for the selected sections.",
+            key="onepage_draft_all",
+        ):
+            if not sel:
+                st.warning("Select at least one section to draft.")
+            else:
+                # Enqueue job; execution happens in the background worker
+                conn_jobs = get_db()
+                payload = {
+                    "scope": "rfp_onepage_proposal_draft",
+                    "sections": list(sel),
+                    "notice_id": st.session_state.get("onepage_notice_id"),
+                    "context": combined,
+                }
+                job_id = jobs_enqueue(conn_jobs, job_type="pb_draft_all", payload=payload)
+                st.session_state["pb_draft_all_last_job_id"] = job_id
+                st.info("Draft job submitted. It will run in the background; see status below.")
 
         # Pull in completed background drafts from the last job, if any
         try:
@@ -4958,6 +4958,7 @@ if st.button(
                             st.session_state["onepage_draft"] = _job_draft
         except Exception:
             pass
+
         draft = st.session_state.get("onepage_draft") or {}
         if draft:
             for sec, body in draft.items():
