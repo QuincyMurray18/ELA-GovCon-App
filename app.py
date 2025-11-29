@@ -8040,6 +8040,7 @@ def get_db() -> sqlite3.Connection:
             "saved_searches",
             "outreach_sequences",
             "outreach_steps",
+            "rfps",
         ]
         for t in user_owned_tables:
             if t in existing_tables:
@@ -8837,6 +8838,21 @@ def data_insert_rfp(conn, title: str, solnum: str, sam_url: str) -> int:
                 ),
             )
             new_id = cur.lastrowid
+            # Best-effort per-user ownership tagging; ignore if column does not exist yet
+            owner_name = None
+            try:
+                owner_name = get_current_user_name()
+            except Exception:
+                owner_name = None
+            if owner_name:
+                try:
+                    cur.execute(
+                        "UPDATE rfps SET owner_user = COALESCE(owner_user, ?) WHERE id = ?;",
+                        (owner_name, int(new_id)),
+                    )
+                except Exception:
+                    # If the column is missing or update fails, continue without blocking RFP creation
+                    pass
             conn.commit()
         return int(new_id)
     except Exception as e:
@@ -11518,11 +11534,24 @@ def _run_rfp_analyzer_phase3(conn):
     st.header("RFP Analyzer")
     st.caption("Build: OnePage+P3")
 
-    # RFP picker
+    # RFP picker (respect per-user scope when possible)
+    owner_scope = None
     try:
-        df_rfps = pd.read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        _current_user = get_current_user_name()
     except Exception:
-        df_rfps = None
+        _current_user = None
+    if _current_user:
+        _scope_choice = st.radio(
+            "RFP scope",
+            ["My RFPs", "All users"],
+            index=0,
+            horizontal=True,
+            key="rfp_scope_p3",
+        )
+        if _scope_choice == "My RFPs":
+            owner_scope = _current_user
+
+    df_rfps = _rfp_load_for_scope(conn, owner_scope)
     if df_rfps is None or df_rfps.empty:
         st.info("No RFPs found. Use Parse & Save to add one.")
         return
@@ -19385,17 +19414,87 @@ def render_ai_attachments_panel(conn, rfp_id: int) -> None:
                     st.write(answer)
 
 
+
+def _rfp_load_for_scope(conn, owner_scope: str | None):
+    """
+    Return a DataFrame of RFPs filtered by tenant and optional owner scope.
+
+    If owner_scope is a non-empty string, rows must either be owned by that
+    logical user (rfps.owner_user) or be marked visible to all users
+    (visibility = 'public'). Falls back to an unfiltered list if newer
+    columns are missing so older databases still work.
+    """
+    import pandas as _pd
+
+    # Base query
+    sql = "SELECT id, title FROM rfps"
+    clauses = []
+    params: list = []
+
+    # Tenant filter when tenant_id is available
+    has_tenant = False
+    try:
+        with conn:
+            conn.execute("SELECT tenant_id FROM rfps LIMIT 1;")
+        has_tenant = True
+    except Exception:
+        has_tenant = False
+    if has_tenant:
+        clauses.append("tenant_id=(SELECT ctid FROM current_tenant WHERE id=1)")
+
+    # Owner / visibility filter when columns are available
+    owner_name = owner_scope or ""
+    has_owner_visibility = False
+    if owner_name:
+        try:
+            with conn:
+                conn.execute("SELECT owner_user, visibility FROM rfps LIMIT 1;")
+            has_owner_visibility = True
+        except Exception:
+            has_owner_visibility = False
+    if owner_name and has_owner_visibility:
+        clauses.append("(owner_user = ? OR visibility = 'public')")
+        params.append(owner_name)
+
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY id DESC;"
+
+    try:
+        return _pd.__p_read_sql_query(sql, conn, params=tuple(params))
+    except Exception:
+        # Last-resort fallback for older schemas
+        try:
+            return _pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        except Exception:
+            return _pd.DataFrame(columns=["id", "title"])
+
 def run_rfp_analyzer(conn) -> None:
     import pandas as _pd
     import streamlit as st
 
     from contextlib import closing as _closing
 
-    # Load RFP list
+    # Scope: per-user vs all users
+    owner_scope = None
     try:
-        df_rfps = _pd.__p_read_sql_query("SELECT id, title FROM rfps ORDER BY id DESC;", conn, params=())
+        _current_user = get_current_user_name()
     except Exception:
-        df_rfps = _pd.DataFrame()
+        _current_user = None
+    if _current_user:
+        _scope_choice = st.radio(
+            "RFP scope",
+            ["My RFPs", "All users"],
+            index=0,
+            horizontal=True,
+            key="rfp_scope_main",
+        )
+        if _scope_choice == "My RFPs":
+            owner_scope = _current_user
+
+    # Load RFP list (tenant- and optional owner-scoped)
+    df_rfps = _rfp_load_for_scope(conn, owner_scope)
+
 
     if df_rfps is None or df_rfps.empty:
         st.title("RFP Analyzer — One‑Page")
@@ -21480,11 +21579,18 @@ def render_outreach_mailmerge(conn):
                     out = _o3_send_batch(conn, sender, rows, subj, body, True, int(maxn), attachments=attach_paths)
                     st.success("Test run executed")
                 else:
-                    job_id = None
                     if large_batch:
-                        # For large sends, create a job record so it appears in My Jobs.
+                        # For large sends, enqueue a job so it can be processed in the jobs worker.
                         try:
                             ensure_jobs_schema(conn)
+                            try:
+                                rows_payload = rows.to_dict(orient="records")
+                            except Exception:
+                                try:
+                                    import pandas as _pd
+                                    rows_payload = _pd.DataFrame(rows).to_dict(orient="records")
+                                except Exception:
+                                    rows_payload = []
                             payload = {
                                 "sender": sender,
                                 "subject_tpl": subj,
@@ -21492,6 +21598,7 @@ def render_outreach_mailmerge(conn):
                                 "max_send": int(maxn),
                                 "attachments": attach_paths,
                                 "row_count": int(total_rows),
+                                "rows": rows_payload,
                             }
                             job_id = jobs_enqueue(
                                 conn,
@@ -21502,40 +21609,20 @@ def render_outreach_mailmerge(conn):
                             jobs_update_status(
                                 conn,
                                 job_id,
-                                status="running",
+                                status="queued",
                                 progress=0.0,
-                                mark_started=True,
+                                mark_started=False,
                             )
-                        except Exception:
-                            job_id = None
-                    try:
-                        out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn), attachments=attach_paths)
-                        if large_batch and job_id:
-                            sent_count = 0
-                            try:
-                                if isinstance(out, tuple) and out:
-                                    sent_count = int(out[0] or 0)
-                            except Exception:
-                                sent_count = 0
-                            jobs_update_status(
-                                conn,
-                                job_id,
-                                status="done",
-                                progress=1.0,
-                                mark_finished=True,
-                                result={"sent": sent_count, "row_count": int(total_rows)},
-                            )
-                        st.success("Send function executed")
-                    except Exception as e:
-                        if large_batch and job_id:
-                            jobs_update_status(
-                                conn,
-                                job_id,
-                                status="failed",
-                                error_message=str(e),
-                                mark_finished=True,
-                            )
-                        raise
+                            st.success(f"Queued {int(total_rows)} recipients as job #{job_id}. You can monitor progress on the My Jobs tab.")
+                        except Exception as e:
+                            st.error(f"Failed to enqueue outreach batch job: {e}")
+                    else:
+                        try:
+                            out = _o3_send_batch(conn, sender, rows, subj, body, False, int(maxn), attachments=attach_paths)
+                            st.success("Send function executed")
+                        except Exception as e:
+                            st.error(f"Send failed: {e}")
+                            raise
             else:
                 st.warning("Send function not available in this build.")
         except Exception as e:
@@ -25705,6 +25792,122 @@ def _jobs_worker_handle_rfq_pack_build(conn, job_id: int, payload: dict) -> None
             pass
 
 
+
+def _jobs_worker_handle_outreach_batch_send(conn, job_id: int, payload: dict):
+    """Worker handler for job_type='outreach_batch_send'.
+
+    Sends outreach mail-merge batches using the generic SMTP helper so large
+    blasts run in the jobs worker instead of the Streamlit UI.
+    """
+    import pandas as _pd
+    from contextlib import closing as _closing
+    import datetime as _dt
+
+    rows_data = payload.get("rows") or []
+    subject_tpl = payload.get("subject_tpl") or ""
+    html_tpl = payload.get("html_tpl") or ""
+    attachments = payload.get("attachments") or []
+    try:
+        max_send = int(payload.get("max_send") or 0)
+    except Exception:
+        max_send = 0
+
+    if not rows_data:
+        # Nothing to do; mark job done with zero work.
+        jobs_update_status(
+            conn,
+            job_id,
+            status="done",
+            progress=1.0,
+            mark_finished=True,
+            result={"sent": 0, "row_count": 0},
+        )
+        return
+
+    try:
+        df = _pd.DataFrame(rows_data)
+    except Exception:
+        # Fallback if payload isn't tabular
+        df = _pd.DataFrame(list(rows_data))
+
+    row_count = int(len(df))
+
+    # Ensure Outreach schema exists
+    try:
+        _o3_ensure_schema(conn)
+    except Exception:
+        pass
+
+    # Derive sender email from payload
+    sender = payload.get("sender") or {}
+    sender_email = (sender.get("email") or sender.get("username") or "").strip()
+
+    # Determine owner_user from jobs.created_by when available
+    owner_user = "system"
+    try:
+        with _closing(conn.cursor()) as cur:
+            cur.execute("SELECT created_by FROM jobs WHERE id = ?", (int(job_id),))
+            row = cur.fetchone()
+        if row and row[0]:
+            owner_user = str(row[0])
+    except Exception:
+        owner_user = "system"
+
+    # Create a new blast record
+    blast_title = payload.get("blast_title") or f"Outreach job #{job_id} ({_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')})"
+    template_name = payload.get("template_name") or ""
+    with _closing(conn.cursor()) as cur:
+        cur.execute(
+            "INSERT INTO outreach_blasts(title, template_name, sender_email, owner_user) VALUES(?,?,?,?);",
+            (blast_title, template_name, sender_email, owner_user),
+        )
+        conn.commit()
+        blast_id = cur.lastrowid
+
+    sent_count = 0
+
+    for _, r in df.iterrows():
+        if max_send and sent_count >= max_send:
+            break
+
+        # Basic email + name extraction
+        to_email = str(r.get("email") or r.get("Email") or r.get("EMAIL") or "").strip()
+        to_name = str(r.get("name") or r.get("Name") or r.get("contact_name") or "").strip()
+
+        if not to_email or "@" not in to_email:
+            status = "Skipped: invalid email"
+            error = "Missing or malformed address"
+        else:
+            data = {k: ("" if v is None else v) for k, v in dict(r).items()}
+            if "name" not in data:
+                data["name"] = to_name
+
+            # Simple merge rendering
+            subject = _o3_merge(subject_tpl or "", data)
+            body_html = _o3_merge(html_tpl or "", data)
+
+            ok, err = send_email_smtp(to_email, subject, body_html, attachments or [])
+            status = "Sent" if ok else "Error"
+            error = "" if ok else (err or "Unknown error")
+            if ok:
+                sent_count += 1
+
+        with _closing(conn.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO outreach_log(blast_id,to_email,to_name,subject,status,error) VALUES(?,?,?,?,?,?);",
+                (blast_id, to_email, to_name, subject_tpl or "", status, error),
+            )
+            conn.commit()
+
+    jobs_update_status(
+        conn,
+        job_id,
+        status="done",
+        progress=1.0,
+        mark_finished=True,
+        result={"sent": int(sent_count), "row_count": row_count},
+    )
+
 def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
     """Dispatch a single job by type and handle errors uniformly."""
     import traceback as _traceback
@@ -25728,6 +25931,8 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             _jobs_worker_handle_fast_rfq_export_docx(conn, job_id, payload)
         elif job_type == "rfq_pack_build":
             _jobs_worker_handle_rfq_pack_build(conn, job_id, payload)
+        elif job_type == "outreach_batch_send":
+            _jobs_worker_handle_outreach_batch_send(conn, job_id, payload)
         elif job_type == "fts_index_rebuild":
             _jobs_worker_handle_fts_index_rebuild(conn, job_id, payload)
         else:
