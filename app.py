@@ -15301,9 +15301,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         with _closing(conn.cursor()) as cur:
         
                                 cur.execute(
-                                    "INSERT INTO deals(title, agency, status, stage, value, owner, owner_user, co_contact_id, created_at) "
-                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val, co_contact_id)
+                                    "INSERT INTO deals(title, agency, status, stage, value, owner, owner_user, co_contact_id, rfp_deadline, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val, co_contact_id, d_due)
                                 )
                                 cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
                                 conn.commit()
