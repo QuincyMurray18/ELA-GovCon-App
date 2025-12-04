@@ -10661,7 +10661,7 @@ def run_sam_watch(conn) -> None:
                                     _db.commit()
                                 # Ensure the new deal has a normalized rfp_deadline based on the SAM Response Due field
                                 try:
-                                    _due_raw = row.get('Response Due') or ""
+                                    _due_raw = row.get('Original Date Offers Due') or row.get('Response Due') or ""
                                     if _due_raw and deal_id:
                                         from datetime import datetime as _dt
                                         _due_norm = None
