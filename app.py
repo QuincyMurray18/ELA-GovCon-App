@@ -8384,10 +8384,11 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         set_aside_code = r.get("setAsideCode") or ""
         naics = r.get("naicsCode") or r.get("ncode") or ""
         psc = r.get("classificationCode") or r.get("ccode") or ""
+
         # Prefer original response date/time when available, then fall back
         orig_due = (
-            r.get("originalResponseDate")
-            or r.get("originalResponseDateTime")
+            r.get("originalResponseDateTime")
+            or r.get("originalResponseDate")
             or ""
         )
         deadline = (
@@ -8397,6 +8398,7 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
             or r.get("responseDate")
             or ""
         )
+
         org_path = r.get("fullParentPathName") or r.get("organizationName") or ""
         notice_id = r.get("noticeId") or r.get("noticeid") or r.get("id") or ""
         sam_url = f"https://sam.gov/opp/{notice_id}/view" if notice_id else ""
@@ -8426,7 +8428,6 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         "Agency Path", "Notice ID", "SAM Link",
     ]
     return df[wanted] if not df.empty else df
-
 def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
     """Best-effort attempt to fetch attachments for a SAM notice.
     Returns list of (filename, bytes). Falls back to saving the notice description HTML
@@ -9796,12 +9797,12 @@ def _ensure_deal_for_notice_and_rfp(conn, tenant_id, notice, rfp_id):
                 or notice.get("Posted Date")
                 or ""
             )
-            # Prefer Original Date Offers Due (with time) when available, then fall back
+            # Prefer Original Date Offers Due / originalResponseDate when available, then fall back
             raw_due = (
                 notice.get("Original Date Offers Due")
                 or notice.get("Original Response Date")
-                or notice.get("originalResponseDate")
                 or notice.get("originalResponseDateTime")
+                or notice.get("originalResponseDate")
                 or notice.get("Response Due")
                 or notice.get("Response Date")
                 or notice.get("reponseDeadLine")
@@ -10649,8 +10650,8 @@ def run_sam_watch(conn) -> None:
                                         _rfp_deadline_val = (
                                             row.get('Original Date Offers Due')
                                             or row.get('Original Response Date')
-                                            or row.get('originalResponseDate')
                                             or row.get('originalResponseDateTime')
+                                            or row.get('originalResponseDate')
                                             or row.get('Response Due')
                                             or row.get('Response Date')
                                             or row.get('due_date')
@@ -15570,7 +15571,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
                                     _raw_dt = None
-                                    _due_default = None
+                                    _due_default_date = None
+                                    _due_default_time = None
                                     try:
                                         if isinstance(_raw_deadline, _dt.datetime):
                                             _raw_dt = _raw_deadline
@@ -15591,16 +15593,25 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                                         except Exception:
                                                             _raw_dt = None
                                         if _raw_dt is not None:
-                                            _due_default = _raw_dt.date()
+                                            _due_default_date = _raw_dt.date()
+                                            _due_default_time = _raw_dt.time()
                                     except Exception:
                                         _raw_dt = None
-                                        _due_default = None
-                                    if _due_default is None:
-                                        _due_default = _dt.datetime.now().date()
+                                        _due_default_date = None
+                                        _due_default_time = None
+                                    if _due_default_date is None:
+                                        _due_default_date = _dt.datetime.now().date()
+                                    if _due_default_time is None:
+                                        _due_default_time = _dt.time(17, 0)
                                     due_input = st.date_input(
                                         "Due date",
-                                        value=_due_default,
+                                        value=_due_default_date,
                                         key=f"k_due_{did}",
+                                    )
+                                    due_time_input = st.time_input(
+                                        "Due time",
+                                        value=_due_default_time,
+                                        key=f"k_due_time_{did}",
                                     )
                                     # Show full deadline (including time) when available
                                     try:
@@ -15640,21 +15651,26 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         key=f"k_stage_{did}",
                                     )
 
-                                    def _parse_due_input(_val):
-                                        """Convert calendar date back to an ISO datetime string, preserving time when possible."""
-                                        if isinstance(_val, _dt.datetime):
-                                            _date_part = _val.date()
-                                        elif isinstance(_val, _dt.date):
-                                            _date_part = _val
+                                    def _parse_due_input(_date_val, _time_val):
+                                        """Combine date and time into an ISO string suitable for rfp_deadline."""
+                                        if isinstance(_date_val, _dt.datetime):
+                                            _date_part = _date_val.date()
+                                        elif isinstance(_date_val, _dt.date):
+                                            _date_part = _date_val
                                         else:
                                             return None
-                                        # Preserve original time-of-day if we have it, otherwise default to 17:00
-                                        _time_part = _raw_dt.time() if isinstance(_raw_dt, _dt.datetime) else _dt.time(17, 0)
+                                        if isinstance(_time_val, _dt.time):
+                                            _time_part = _time_val
+                                        else:
+                                            _time_part = _dt.time(17, 0)
                                         try:
                                             _combined = _dt.datetime.combine(_date_part, _time_part)
                                             return _combined.isoformat(timespec="minutes")
                                         except Exception:
-                                            return _combined.strftime("%Y-%m-%d %H:%M")
+                                            try:
+                                                return _combined.strftime("%Y-%m-%d %H:%M")
+                                            except Exception:
+                                                return None
 
                                     c1, c2, c3 = st.columns([1, 1, 1])
                                     with c1:
@@ -15662,7 +15678,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_prev(stage)
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input)
+                                                _due = _parse_due_input(due_input, due_time_input)
                                                 cur.execute(
                                                     "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, updated_at=datetime('now') WHERE id=?",
                                                     (ns2, ns2, _due, float(v or 0.0), owner_new, did),
@@ -15678,7 +15694,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         if st.button("Save", key=f"k_save_{did}"):
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input)
+                                                _due = _parse_due_input(due_input, due_time_input)
                                                 cur.execute(
                                                     "UPDATE deals SET value=?, status=?, stage=?, rfp_deadline=?, owner=?, updated_at=datetime('now') WHERE id=?",
                                                     (float(v or 0.0), ns, ns, _due, owner_new, did),
@@ -15695,7 +15711,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_next(stage)
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input)
+                                                _due = _parse_due_input(due_input, due_time_input)
                                                 cur.execute(
                                                     "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, updated_at=datetime('now') WHERE id=?",
                                                     (ns2, ns2, _due, float(v or 0.0), owner_new, did),
