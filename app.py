@@ -10629,11 +10629,40 @@ def run_sam_watch(conn) -> None:
                                     _owned = True
                                     _db = get_db()
                                 with _closing(_db.cursor()) as cur:
+                                    # Prefer the canonical response_date stored in notices (which already
+                                    # normalizes originalResponseDate / responseDeadline from SAM), then
+                                    # fall back to the SAM Watch row fields.
+                                    _notice_id_val = (row.get('Notice ID') or "").strip()
+                                    _rfp_deadline_val = ""
+                                    try:
+                                        if _notice_id_val:
+                                            cur.execute(
+                                                "SELECT response_date FROM notices WHERE notice_id = ? LIMIT 1;",
+                                                (_notice_id_val,),
+                                            )
+                                            _row_nd = cur.fetchone()
+                                            if _row_nd and _row_nd[0]:
+                                                _rfp_deadline_val = str(_row_nd[0]).strip()
+                                    except Exception:
+                                        _rfp_deadline_val = ""
+                                    if not _rfp_deadline_val:
+                                        _rfp_deadline_val = (
+                                            row.get('Original Date Offers Due')
+                                            or row.get('Original Response Date')
+                                            or row.get('originalResponseDate')
+                                            or row.get('originalResponseDateTime')
+                                            or row.get('Response Due')
+                                            or row.get('Response Date')
+                                            or row.get('due_date')
+                                            or ""
+                                        )
+
                                     cur.execute(
                                         """
-                                        INSERT INTO deals(title, agency, status, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
+                                        INSERT INTO deals(title, agency, stage, value, notice_id, solnum, posted_date, rfp_deadline, naics, psc, sam_url)
                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                                        """,
+                                        """
+                                        ,
                                         (
                                             row.get('Title') or "",
                                             row.get('Agency Path') or "",
@@ -10642,16 +10671,7 @@ def run_sam_watch(conn) -> None:
                                             row.get('Notice ID') or "",
                                             row.get('Solicitation') or "",
                                             row.get('Posted') or "",
-                                            (
-                                                row.get('Original Date Offers Due')
-                                                or row.get('Original Response Date')
-                                                or row.get('originalResponseDate')
-                                                or row.get('originalResponseDateTime')
-                                                or row.get('Response Due')
-                                                or row.get('Response Date')
-                                                or row.get('due_date')
-                                                or ""
-                                            ),
+                                            _rfp_deadline_val,
                                             row.get('NAICS') or "",
                                             row.get('PSC') or "",
                                             row.get('SAM Link') or "",
