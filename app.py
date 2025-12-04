@@ -8428,6 +8428,7 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         "Agency Path", "Notice ID", "SAM Link",
     ]
     return df[wanted] if not df.empty else df
+
 def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
     """Best-effort attempt to fetch attachments for a SAM notice.
     Returns list of (filename, bytes). Falls back to saving the notice description HTML
@@ -15603,44 +15604,76 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         _due_default_date = _dt.datetime.now().date()
                                     if _due_default_time is None:
                                         _due_default_time = _dt.time(17, 0)
+
+                                    # Convert default time to 12-hour components
+                                    _hour24 = _due_default_time.hour
+                                    _minute = _due_default_time.minute
+                                    if _hour24 == 0:
+                                        _hour12 = 12
+                                        _ampm_default = "AM"
+                                    elif 1 <= _hour24 < 12:
+                                        _hour12 = _hour24
+                                        _ampm_default = "AM"
+                                    elif _hour24 == 12:
+                                        _hour12 = 12
+                                        _ampm_default = "PM"
+                                    else:
+                                        _hour12 = _hour24 - 12
+                                        _ampm_default = "PM"
+
                                     due_input = st.date_input(
                                         "Due date",
                                         value=_due_default_date,
                                         key=f"k_due_{did}",
                                     )
-                                    due_time_input = st.time_input(
-                                        "Due time",
-                                        value=_due_default_time,
-                                        key=f"k_due_time_{did}",
-                                    )
-                                    # Show full deadline (including time) when available (displayed in 12-hour format)
+                                    c_t1, c_t2, c_t3 = st.columns([1, 1, 1])
+                                    with c_t1:
+                                        due_hour_input = st.selectbox(
+                                            "Hour",
+                                            list(range(1, 13)),
+                                            index=list(range(1, 13)).index(_hour12),
+                                            key=f"k_due_hour_{did}",
+                                        )
+                                    with c_t2:
+                                        _minute_options = list(range(0, 60, 5))
+                                        # Find nearest minute option for default
+                                        try:
+                                            _minute_idx = min(range(len(_minute_options)), key=lambda i: abs(_minute_options[i] - _minute))
+                                        except Exception:
+                                            _minute_idx = 0
+                                        due_minute_input = st.selectbox(
+                                            "Minute",
+                                            _minute_options,
+                                            index=_minute_idx,
+                                            key=f"k_due_minute_{did}",
+                                        )
+                                    with c_t3:
+                                        due_ampm_input = st.selectbox(
+                                            "AM/PM",
+                                            ["AM", "PM"],
+                                            index=0 if _ampm_default == "AM" else 1,
+                                            key=f"k_due_ampm_{did}",
+                                        )
+
+                                    # Show full deadline (including time) in 12-hour format when available
                                     try:
-                                        _deadline_display = ""
-                                        _dt_val = None
-                                        if isinstance(_raw_deadline, _dt.datetime):
-                                            _dt_val = _raw_deadline
-                                        elif isinstance(_raw_deadline, _dt.date):
-                                            # Combine date with the currently selected or default time
-                                            _dt_val = _dt.datetime.combine(
-                                                _raw_deadline,
-                                                _due_default_time or _dt.time(17, 0),
-                                            )
-                                        else:
-                                            _s = str(_raw_deadline or "").strip()
-                                            if _s:
+                                        _caption_dt = _raw_dt
+                                        if _caption_dt is None:
+                                            _s2 = str(_raw_deadline or "").strip()
+                                            if _s2:
                                                 try:
                                                     import pandas as _pd
-                                                    _tmp = _pd.to_datetime(_s, errors="coerce")
+                                                    _tmp2 = _pd.to_datetime(_s2, errors="coerce")
                                                 except Exception:
-                                                    _tmp = None
+                                                    _tmp2 = None
                                                 else:
-                                                    if _tmp is not None:
+                                                    if _tmp2 is not None:
                                                         try:
-                                                            _dt_val = _tmp.to_pydatetime() if hasattr(_tmp, "to_pydatetime") else _tmp
+                                                            _caption_dt = _tmp2.to_pydatetime() if hasattr(_tmp2, "to_pydatetime") else _tmp2
                                                         except Exception:
-                                                            _dt_val = None
-                                        if _dt_val is not None:
-                                            _deadline_display = _dt_val.strftime("%Y-%m-%d %I:%M %p")
+                                                            _caption_dt = None
+                                        if _caption_dt is not None:
+                                            _deadline_display = _caption_dt.strftime("%Y-%m-%d %I:%M %p")
                                         else:
                                             _deadline_display = str(_raw_deadline or "").strip()
                                         if _deadline_display:
@@ -15674,17 +15707,33 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         key=f"k_stage_{did}",
                                     )
 
-                                    def _parse_due_input(_date_val, _time_val):
-                                        """Combine date and time into an ISO string suitable for rfp_deadline."""
+                                    def _parse_due_input(_date_val, _hour12, _minute, _ampm):
+                                        """Combine date and 12-hour time into ISO string for rfp_deadline."""
                                         if isinstance(_date_val, _dt.datetime):
                                             _date_part = _date_val.date()
                                         elif isinstance(_date_val, _dt.date):
                                             _date_part = _date_val
                                         else:
                                             return None
-                                        if isinstance(_time_val, _dt.time):
-                                            _time_part = _time_val
+                                        # Convert 12-hour components back to 24-hour time
+                                        try:
+                                            _h12 = int(_hour12)
+                                        except Exception:
+                                            return None
+                                        try:
+                                            _m = int(_minute)
+                                        except Exception:
+                                            _m = 0
+                                        _ampm_norm = str(_ampm or "").strip().upper()
+                                        if _ampm_norm not in ("AM", "PM"):
+                                            _ampm_norm = "AM"
+                                        if _h12 == 12:
+                                            _hour24 = 0 if _ampm_norm == "AM" else 12
                                         else:
+                                            _hour24 = _h12 if _ampm_norm == "AM" else _h12 + 12
+                                        try:
+                                            _time_part = _dt.time(_hour24, _m)
+                                        except Exception:
                                             _time_part = _dt.time(17, 0)
                                         try:
                                             _combined = _dt.datetime.combine(_date_part, _time_part)
@@ -15701,7 +15750,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_prev(stage)
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input, due_time_input)
+                                                _due = _parse_due_input(due_input, due_hour_input, due_minute_input, due_ampm_input)
                                                 cur.execute(
                                                     "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, updated_at=datetime('now') WHERE id=?",
                                                     (ns2, ns2, _due, float(v or 0.0), owner_new, did),
@@ -15717,7 +15766,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         if st.button("Save", key=f"k_save_{did}"):
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input, due_time_input)
+                                                _due = _parse_due_input(due_input, due_hour_input, due_minute_input, due_ampm_input)
                                                 cur.execute(
                                                     "UPDATE deals SET value=?, status=?, stage=?, rfp_deadline=?, owner=?, updated_at=datetime('now') WHERE id=?",
                                                     (float(v or 0.0), ns, ns, _due, owner_new, did),
@@ -15734,7 +15783,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_next(stage)
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input, due_time_input)
+                                                _due = _parse_due_input(due_input, due_hour_input, due_minute_input, due_ampm_input)
                                                 cur.execute(
                                                     "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, updated_at=datetime('now') WHERE id=?",
                                                     (ns2, ns2, _due, float(v or 0.0), owner_new, did),
