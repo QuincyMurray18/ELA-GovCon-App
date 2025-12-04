@@ -15524,7 +15524,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     except Exception:
                                         _due_default = None
                                     if _due_default is None:
-                                        _due_default = datetime.date.today()
+                                        _due_default = datetime.datetime.now().date()
                                     due_input = st.date_input(
                                         "Due date",
                                         value=_due_default,
