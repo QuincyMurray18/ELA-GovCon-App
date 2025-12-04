@@ -15456,7 +15456,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                            "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, COALESCE(owner, '') AS owner "
                             "FROM deals_t WHERE owner_user = ? "
                             "ORDER BY id DESC;",
                             conn,
@@ -15465,7 +15465,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     else:
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, COALESCE(owner, '') AS owner "
+                            "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, COALESCE(owner, '') AS owner "
                             "FROM deals_t ORDER BY id DESC;",
                             conn,
                             params=(),
@@ -15489,6 +15489,17 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             sdf = df_k[df_k["status"] == stage]
                             if sdf.empty:
                                 st.caption("—")
+                            else:
+                                try:
+                                    import pandas as pd
+                                    sdf = sdf.copy()
+                                    sdf["_deadline_sort"] = pd.to_datetime(sdf.get("rfp_deadline"), errors="coerce")
+                                    sdf = sdf.sort_values(by=["_deadline_sort", "id"], ascending=[True, True], na_position="last")
+                                except Exception:
+                                    try:
+                                        sdf = sdf.sort_values(by=["id"], ascending=[True])
+                                    except Exception:
+                                        pass
                             for _, r in sdf.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
