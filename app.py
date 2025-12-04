@@ -15613,11 +15613,34 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         value=_due_default_time,
                                         key=f"k_due_time_{did}",
                                     )
-                                    # Show full deadline (including time) when available
+                                    # Show full deadline (including time) when available (displayed in 12-hour format)
                                     try:
                                         _deadline_display = ""
-                                        if isinstance(_raw_deadline, (_dt.date, _dt.datetime)):
-                                            _deadline_display = str(_raw_deadline)
+                                        _dt_val = None
+                                        if isinstance(_raw_deadline, _dt.datetime):
+                                            _dt_val = _raw_deadline
+                                        elif isinstance(_raw_deadline, _dt.date):
+                                            # Combine date with the currently selected or default time
+                                            _dt_val = _dt.datetime.combine(
+                                                _raw_deadline,
+                                                _due_default_time or _dt.time(17, 0),
+                                            )
+                                        else:
+                                            _s = str(_raw_deadline or "").strip()
+                                            if _s:
+                                                try:
+                                                    import pandas as _pd
+                                                    _tmp = _pd.to_datetime(_s, errors="coerce")
+                                                except Exception:
+                                                    _tmp = None
+                                                else:
+                                                    if _tmp is not None:
+                                                        try:
+                                                            _dt_val = _tmp.to_pydatetime() if hasattr(_tmp, "to_pydatetime") else _tmp
+                                                        except Exception:
+                                                            _dt_val = None
+                                        if _dt_val is not None:
+                                            _deadline_display = _dt_val.strftime("%Y-%m-%d %I:%M %p")
                                         else:
                                             _deadline_display = str(_raw_deadline or "").strip()
                                         if _deadline_display:
