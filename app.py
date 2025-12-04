@@ -8263,12 +8263,15 @@ def sam_persist_notices(conn: "sqlite3.Connection", records: List[Dict[str, Any]
 
                 # Dates
                 posted_date = (r.get("postedDate") or "").strip()
-                response_date = (
-                    r.get("reponseDeadLine")
+                raw_response_date = (
+                    r.get("originalResponseDate")
+                    or r.get("originalResponseDateTime")
+                    or r.get("reponseDeadLine")
                     or r.get("responseDeadline")
+                    or r.get("responseDate")
                     or ""
                 )
-                response_date = (response_date or "").strip()
+                response_date = (raw_response_date or "").strip()
                 award_date = (r.get("awardDate") or "").strip()
 
                 # Organization path → agency / office split
@@ -8381,7 +8384,19 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         set_aside_code = r.get("setAsideCode") or ""
         naics = r.get("naicsCode") or r.get("ncode") or ""
         psc = r.get("classificationCode") or r.get("ccode") or ""
-        deadline = r.get("reponseDeadLine") or r.get("responseDeadline") or ""
+        # Prefer original response date/time when available, then fall back
+        orig_due = (
+            r.get("originalResponseDate")
+            or r.get("originalResponseDateTime")
+            or ""
+        )
+        deadline = (
+            orig_due
+            or r.get("reponseDeadLine")
+            or r.get("responseDeadline")
+            or r.get("responseDate")
+            or ""
+        )
         org_path = r.get("fullParentPathName") or r.get("organizationName") or ""
         notice_id = r.get("noticeId") or r.get("noticeid") or r.get("id") or ""
         sam_url = f"https://sam.gov/opp/{notice_id}/view" if notice_id else ""
@@ -8392,6 +8407,8 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
                 "Type": ptype,
                 "Posted": posted,
                 "Response Due": deadline,
+                "Original Date Offers Due": orig_due,
+                "Original Response Date": orig_due,
                 "Set-Aside": set_aside,
                 "Set-Aside Code": set_aside_code,
                 "NAICS": naics,
@@ -8404,6 +8421,7 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     wanted = [
         "Title", "Solicitation", "Type", "Posted", "Response Due",
+        "Original Date Offers Due", "Original Response Date",
         "Set-Aside", "Set-Aside Code", "NAICS", "PSC",
         "Agency Path", "Notice ID", "SAM Link",
     ]
@@ -9782,8 +9800,13 @@ def _ensure_deal_for_notice_and_rfp(conn, tenant_id, notice, rfp_id):
             raw_due = (
                 notice.get("Original Date Offers Due")
                 or notice.get("Original Response Date")
+                or notice.get("originalResponseDate")
+                or notice.get("originalResponseDateTime")
                 or notice.get("Response Due")
                 or notice.get("Response Date")
+                or notice.get("reponseDeadLine")
+                or notice.get("responseDeadline")
+                or notice.get("responseDate")
                 or notice.get("due_date")
                 or ""
             )
@@ -10622,6 +10645,8 @@ def run_sam_watch(conn) -> None:
                                             (
                                                 row.get('Original Date Offers Due')
                                                 or row.get('Original Response Date')
+                                                or row.get('originalResponseDate')
+                                                or row.get('originalResponseDateTime')
                                                 or row.get('Response Due')
                                                 or row.get('Response Date')
                                                 or row.get('due_date')
