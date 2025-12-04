@@ -10339,8 +10339,14 @@ def run_sam_watch(conn) -> None:
                 state = st.text_input("Place of Performance State (e.g., TX)", key="sam_state", help="Two-letter state where the work will be performed, such as TX or CA.")
             with e5:
                 set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key="sam_set_aside", help="Optional set-aside filter, such as SB, 8A, WOSB, HUBZone, or SDVOSB.")
-            with e6:
-                pass
+
+with e6:
+    our_set_aside = st.text_input(
+        "Our Set-Aside (for sub filter)",
+        key="sam_our_set_aside",
+        placeholder="e.g., WOSB or 8A",
+        help="Used to identify notices that are outside your own set-aside when filtering results.",
+    )
 
             ptype_map = {
                 "Pre-solicitation": "p",
@@ -10524,8 +10530,25 @@ def run_sam_watch(conn) -> None:
             except Exception as e:
                 st.warning(f"Scoring unavailable: {e}")
 
-            # Optional: Table toggle
-            show_table = st.toggle("Show table view", value=False, key="sam_table_toggle")
+
+# Optional: Sub-opportunity filter based on our own set-aside (for finding sub work)
+our_sa = (st.session_state.get("sam_our_set_aside") or "").strip().upper()
+if our_sa and ("Set-Aside" in results_df.columns):
+    only_non_our = st.checkbox(
+        f"Show only notices NOT in our set-aside ({our_sa})",
+        value=st.session_state.get("sam_only_non_our_set", False),
+        key="sam_only_non_our_set",
+    )
+    if only_non_our:
+        try:
+            sa_series = results_df["Set-Aside"].astype(str).str.upper()
+            mask = ~sa_series.str.contains(our_sa)
+            results_df = results_df.loc[mask].reset_index(drop=True)
+        except Exception:
+            pass
+
+# Optional: Table toggle
+show_table = st.toggle("Show table view", value=False, key="sam_table_toggle")
             if show_table:
                 cols = [c for c in ["Score","Title","Solicitation","Type","Set-Aside","NAICS","PSC","Posted","Response Due","Agency Path","SAM Link"] if c in results_df.columns]
                 st.dataframe(results_df[cols].sort_values("Score", ascending=False), use_container_width=True, hide_index=True)
@@ -10634,12 +10657,39 @@ def run_sam_watch(conn) -> None:
                                                 "UPDATE deals SET status=?, stage=? WHERE id=?;",
                                                 (STAGES_ORDERED[0], STAGES_ORDERED[0], deal_id),
                                             )
-                                            _db.commit()
-                                    except Exception:
-                                        pass
-                                    _db.commit()
-                                try:
-                                    with _closing(_db.cursor()) as cur:
+
+            _db.commit()
+    except Exception:
+        pass
+    _db.commit()
+# Ensure the new deal has a normalized rfp_deadline based on the SAM Response Due field
+try:
+    _due_raw = row.get('Response Due') or ""
+    if _due_raw and deal_id:
+        from datetime import datetime as _dt
+        _due_norm = None
+        try:
+            _txt = str(_due_raw).split(" ")[0].replace(".", "/")
+            for _fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+                try:
+                    _dt_obj = _dt.strptime(_txt, _fmt)
+                    _due_norm = _dt_obj.date().isoformat()
+                    break
+                except Exception:
+                    continue
+        except Exception:
+            _due_norm = str(_due_raw)
+        if _due_norm:
+            with _closing(_db.cursor()) as _c2:
+                _c2.execute(
+                    "UPDATE deals SET rfp_deadline=? WHERE id=?;",
+                    (_due_norm, deal_id),
+                )
+            _db.commit()
+except Exception:
+    pass
+try:
+    with _closing(_db.cursor()) as cur:
                                         cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
                                         rfp_id = cur.lastrowid
                                         _db.commit()
