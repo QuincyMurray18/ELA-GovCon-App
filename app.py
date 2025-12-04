@@ -9778,12 +9778,16 @@ def _ensure_deal_for_notice_and_rfp(conn, tenant_id, notice, rfp_id):
                 or notice.get("Posted Date")
                 or ""
             )
-            due = str(
-                notice.get("Response Due")
+            # Prefer Original Date Offers Due (with time) when available, then fall back
+            raw_due = (
+                notice.get("Original Date Offers Due")
+                or notice.get("Original Response Date")
+                or notice.get("Response Due")
                 or notice.get("Response Date")
                 or notice.get("due_date")
                 or ""
             )
+            due = str(raw_due or "")
             naics = str(
                 notice.get("NAICS")
                 or notice.get("naics")
@@ -10340,12 +10344,7 @@ def run_sam_watch(conn) -> None:
             with e5:
                 set_aside = st.text_input("Set-Aside Code (SB, 8A, SDVOSB)", key="sam_set_aside", help="Optional set-aside filter, such as SB, 8A, WOSB, HUBZone, or SDVOSB.")
             with e6:
-                our_set_aside = st.text_input(
-                    "Our Set-Aside (for sub filter)",
-                    key="sam_our_set_aside",
-                    placeholder="e.g., WOSB or 8A",
-                    help="Used to identify notices that are outside your own set-aside when filtering results.",
-                )
+                pass
 
             ptype_map = {
                 "Pre-solicitation": "p",
@@ -10529,22 +10528,6 @@ def run_sam_watch(conn) -> None:
             except Exception as e:
                 st.warning(f"Scoring unavailable: {e}")
 
-            # Optional: Sub-opportunity filter based on our own set-aside (for finding sub work)
-            our_sa = (st.session_state.get("sam_our_set_aside") or "").strip().upper()
-            if our_sa and ("Set-Aside" in results_df.columns):
-                only_non_our = st.checkbox(
-                    f"Show only notices NOT in our set-aside ({our_sa})",
-                    value=st.session_state.get("sam_only_non_our_set", False),
-                    key="sam_only_non_our_set",
-                )
-                if only_non_our:
-                    try:
-                        sa_series = results_df["Set-Aside"].astype(str).str.upper()
-                        mask = ~sa_series.str.contains(our_sa)
-                        results_df = results_df.loc[mask].reset_index(drop=True)
-                    except Exception:
-                        pass
-
             # Optional: Table toggle
             show_table = st.toggle("Show table view", value=False, key="sam_table_toggle")
             if show_table:
@@ -10636,7 +10619,14 @@ def run_sam_watch(conn) -> None:
                                             row.get('Notice ID') or "",
                                             row.get('Solicitation') or "",
                                             row.get('Posted') or "",
-                                            row.get('Response Due') or "",
+                                            (
+                                                row.get('Original Date Offers Due')
+                                                or row.get('Original Response Date')
+                                                or row.get('Response Due')
+                                                or row.get('Response Date')
+                                                or row.get('due_date')
+                                                or ""
+                                            ),
                                             row.get('NAICS') or "",
                                             row.get('PSC') or "",
                                             row.get('SAM Link') or "",
@@ -10659,33 +10649,6 @@ def run_sam_watch(conn) -> None:
                                     except Exception:
                                         pass
                                     _db.commit()
-                                # Ensure the new deal has a normalized rfp_deadline based on the SAM Response Due field
-                                try:
-                                    _due_raw = row.get('Original Date Offers Due') or row.get('Response Due') or ""
-                                    if _due_raw and deal_id:
-                                        _due_norm = None
-                                        try:
-                                            # Try to parse SAM due date strings (e.g., "Dec 12, 2025 10:00 AM ET")
-                                            from dateutil import parser as _dp  # type: ignore[import-untyped]
-                                            _dt_obj = _dp.parse(str(_due_raw), fuzzy=True)
-                                            _due_norm = _dt_obj.date().isoformat()
-                                        except Exception:
-                                            try:
-                                                # Fall back to the app's helper if available
-                                                _dt_obj2 = _parse_dt_guess(str(_due_raw))  # type: ignore[name-defined]
-                                                if _dt_obj2 is not None:
-                                                    _due_norm = _dt_obj2.date().isoformat()
-                                            except Exception:
-                                                _due_norm = None
-                                        if _due_norm:
-                                            with _closing(_db.cursor()) as _c2:
-                                                _c2.execute(
-                                                    "UPDATE deals SET rfp_deadline=? WHERE id=?;",
-                                                    (_due_norm, deal_id),
-                                                )
-                                            _db.commit()
-                                except Exception:
-                                    pass
                                 try:
                                     with _closing(_db.cursor()) as cur:
                                         cur.execute("INSERT INTO rfps(title, solnum, notice_id, sam_url, file_path, created_at) VALUES (?,?,?,?,?, datetime('now'));", (row.get('Title') or '', row.get('Solicitation') or '', row.get('Notice ID') or '', row.get('SAM Link') or '', ''))
@@ -15561,15 +15524,31 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     import datetime as _dt
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
+                                    _raw_dt = None
                                     _due_default = None
                                     try:
-                                        if isinstance(_raw_deadline, (_dt.date, _dt.datetime)):
-                                            _due_default = _raw_deadline.date() if isinstance(_raw_deadline, _dt.datetime) else _raw_deadline
+                                        if isinstance(_raw_deadline, _dt.datetime):
+                                            _raw_dt = _raw_deadline
+                                        elif isinstance(_raw_deadline, _dt.date):
+                                            _raw_dt = _dt.datetime.combine(_raw_deadline, _dt.time(17, 0))
                                         else:
                                             _s = str(_raw_deadline or "").strip()
                                             if _s and _s not in ("NaT", "None"):
-                                                _due_default = _dt.datetime.strptime(_s, "%Y-%m-%d").date()
+                                                try:
+                                                    import pandas as _pd
+                                                    _tmp = _pd.to_datetime(_s, errors="coerce")
+                                                except Exception:
+                                                    _tmp = None
+                                                else:
+                                                    if _tmp is not None:
+                                                        try:
+                                                            _raw_dt = _tmp.to_pydatetime() if hasattr(_tmp, "to_pydatetime") else _tmp
+                                                        except Exception:
+                                                            _raw_dt = None
+                                        if _raw_dt is not None:
+                                            _due_default = _raw_dt.date()
                                     except Exception:
+                                        _raw_dt = None
                                         _due_default = None
                                     if _due_default is None:
                                         _due_default = _dt.datetime.now().date()
@@ -15578,7 +15557,18 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         value=_due_default,
                                         key=f"k_due_{did}",
                                     )
-                                    # Editable value
+                                    # Show full deadline (including time) when available
+                                    try:
+                                        _deadline_display = ""
+                                        if isinstance(_raw_deadline, (_dt.date, _dt.datetime)):
+                                            _deadline_display = str(_raw_deadline)
+                                        else:
+                                            _deadline_display = str(_raw_deadline or "").strip()
+                                        if _deadline_display:
+                                            st.caption(f"Full deadline: {_deadline_display}")
+                                    except Exception:
+                                        pass
+# Editable value
                                     v = st.number_input(
                                         "Value",
                                         value=float(r.get("value") or 0.0),
@@ -15606,11 +15596,20 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     )
 
                                     def _parse_due_input(_val):
+                                        """Convert calendar date back to an ISO datetime string, preserving time when possible."""
                                         if isinstance(_val, _dt.datetime):
-                                            return _val.date()
-                                        if isinstance(_val, _dt.date):
-                                            return _val
-                                        return None
+                                            _date_part = _val.date()
+                                        elif isinstance(_val, _dt.date):
+                                            _date_part = _val
+                                        else:
+                                            return None
+                                        # Preserve original time-of-day if we have it, otherwise default to 17:00
+                                        _time_part = _raw_dt.time() if isinstance(_raw_dt, _dt.datetime) else _dt.time(17, 0)
+                                        try:
+                                            _combined = _dt.datetime.combine(_date_part, _time_part)
+                                            return _combined.isoformat(timespec="minutes")
+                                        except Exception:
+                                            return _combined.strftime("%Y-%m-%d %H:%M")
 
                                     c1, c2, c3 = st.columns([1, 1, 1])
                                     with c1:
