@@ -15510,11 +15510,26 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
                                     st.caption(str(r.get("agency") or ""))
-                                    # Editable due date for Kanban cards
-                                    _due_raw = str(r.get("rfp_deadline") or "").strip()
-                                    if _due_raw in ("NaT", "None"):
-                                        _due_raw = ""
-                                    due_input = st.text_input("Due date (YYYY-MM-DD)", value=_due_raw, key=f"k_due_{did}")
+
+                                    # Editable due date for Kanban cards (calendar picker)
+                                    _raw_deadline = r.get("rfp_deadline")
+                                    _due_default = None
+                                    try:
+                                        if isinstance(_raw_deadline, (datetime.date, datetime.datetime)):
+                                            _due_default = _raw_deadline.date() if isinstance(_raw_deadline, datetime.datetime) else _raw_deadline
+                                        else:
+                                            _s = str(_raw_deadline or "").strip()
+                                            if _s and _s not in ("NaT", "None"):
+                                                _due_default = datetime.datetime.strptime(_s, "%Y-%m-%d").date()
+                                    except Exception:
+                                        _due_default = None
+                                    if _due_default is None:
+                                        _due_default = datetime.date.today()
+                                    due_input = st.date_input(
+                                        "Due date",
+                                        value=_due_default,
+                                        key=f"k_due_{did}",
+                                    )
                                     # Editable value
                                     v = st.number_input(
                                         "Value",
@@ -15542,14 +15557,12 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         key=f"k_stage_{did}",
                                     )
 
-                                    def _parse_due_input(_txt: str):
-                                        _txt = (_txt or "").strip()
-                                        if not _txt:
-                                            return None
-                                        try:
-                                            return datetime.datetime.strptime(_txt, "%Y-%m-%d").date()
-                                        except Exception:
-                                            return None
+                                    def _parse_due_input(_val):
+                                        if isinstance(_val, datetime.datetime):
+                                            return _val.date()
+                                        if isinstance(_val, datetime.date):
+                                            return _val
+                                        return None
 
                                     c1, c2, c3 = st.columns([1, 1, 1])
                                     with c1:
