@@ -2518,6 +2518,7 @@ def _insert_or_skip_rfp_file(conn, rfp_id: int, filename: str, blob: bytes | Non
         return False
 
 def _one_click_analyze(conn, rfp_id: int, sam_url: str | None = None):
+    import pandas as pd
     try:
         notice = None
         _sam_url = (sam_url or "")
@@ -3885,6 +3886,7 @@ closing = _rtm_closing
 # === RTM + Amendment helpers ===
 
 def _now_iso():
+    import pandas as pd
     try:
         return __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
@@ -10110,6 +10112,7 @@ def _rfp_chat(conn, rfp_id: int, question: str, k: int = 6) -> str:
 
 
 def _sam_run_live_search_job(conn_jobs, job_id: int, params: dict):
+    import pandas as pd
     """Execute a SAM.gov live search as a tracked job.
 
     For now this still runs in-process, but the job row in `jobs`
@@ -15456,7 +15459,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, COALESCE(owner, '') AS owner "
+                            "COALESCE(value, 0) AS value, rfp_deadline, COALESCE(owner, '') AS owner "
                             "FROM deals_t WHERE owner_user = ? "
                             "ORDER BY id DESC;",
                             conn,
@@ -15465,7 +15468,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     else:
                         df_k = pd.read_sql_query(
                             "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, COALESCE(rfp_deadline, '') AS rfp_deadline, COALESCE(owner, '') AS owner "
+                            "COALESCE(value, 0) AS value, rfp_deadline, COALESCE(owner, '') AS owner "
                             "FROM deals_t ORDER BY id DESC;",
                             conn,
                             params=(),
@@ -15493,10 +15496,15 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             try:
                                 sdf = sdf.copy()
                                 if "rfp_deadline" in sdf.columns:
-                                    sdf["_deadline_sort"] = pd.to_datetime(sdf["rfp_deadline"], errors="coerce")
-                                    sdf = sdf.sort_values(by=["_deadline_sort", "id"], ascending=[True, True], na_position="last")
+                                    sdf["_deadline_sort"] = sdf["rfp_deadline"].fillna("")
+                                    sdf["_has_deadline"] = sdf["_deadline_sort"].astype(str).str.len() > 0
+                                    sdf = sdf.sort_values(
+                                        by=["_has_deadline", "_deadline_sort", "id"],
+                                        ascending=[False, True, True],
+                                    )
                             except Exception:
                                 pass
+                                st.caption("—")
                             for _, r in sdf.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
@@ -15508,6 +15516,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     owner_opts = ["Quincy","Collin","Charles"]
                                     owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
                                     owner_new = st.selectbox("Owner", owner_opts, index=(owner_opts.index(owner_cur) if owner_cur in owner_opts else 0), key=f"k_owner_{did}")
+        
                                     ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
                                     c1, c2, c3 = st.columns([1,1,1])
                                     with c1:
@@ -22826,6 +22835,7 @@ def __p_s1d_existing(conn):
     return by_np, by_pid
 
 def __p_s1d_ui(conn):
+    import pandas as pd
     by_np, by_pid = _s1d_select_existing_pairs(conn)
     _st.subheader("S1D — Google Places & Dedupe")
     key = __p_s1d_key()
@@ -24576,6 +24586,7 @@ def jobs_worker_loop(sleep_seconds: float = 3.0) -> None:
 
 
 def jobs_list_for_user(conn: "sqlite3.Connection", user_name: str, limit: int = 50):
+    import pandas as pd
     """Return a DataFrame of recent jobs for the given user name."""
     import pandas as _pd
 
