@@ -15510,21 +15510,21 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
                                     st.caption(str(r.get("agency") or ""))
-
+                                    import datetime as _dt
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
                                     _due_default = None
                                     try:
-                                        if isinstance(_raw_deadline, (datetime.date, datetime.datetime)):
-                                            _due_default = _raw_deadline.date() if isinstance(_raw_deadline, datetime.datetime) else _raw_deadline
+                                        if isinstance(_raw_deadline, (_dt.date, _dt.datetime)):
+                                            _due_default = _raw_deadline.date() if isinstance(_raw_deadline, _dt.datetime) else _raw_deadline
                                         else:
                                             _s = str(_raw_deadline or "").strip()
                                             if _s and _s not in ("NaT", "None"):
-                                                _due_default = datetime.datetime.strptime(_s, "%Y-%m-%d").date()
+                                                _due_default = _dt.datetime.strptime(_s, "%Y-%m-%d").date()
                                     except Exception:
                                         _due_default = None
                                     if _due_default is None:
-                                        _due_default = datetime.datetime.now().date()
+                                        _due_default = _dt.datetime.now().date()
                                     due_input = st.date_input(
                                         "Due date",
                                         value=_due_default,
@@ -15558,9 +15558,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     )
 
                                     def _parse_due_input(_val):
-                                        if isinstance(_val, datetime.datetime):
+                                        if isinstance(_val, _dt.datetime):
                                             return _val.date()
-                                        if isinstance(_val, datetime.date):
+                                        if isinstance(_val, _dt.date):
                                             return _val
                                         return None
 
