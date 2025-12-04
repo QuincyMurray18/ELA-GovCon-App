@@ -15488,6 +15488,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     cols = st.columns(len(STAGES_ORDERED))
                     for idx, stage in enumerate(STAGES_ORDERED):
                         with cols[idx]:
+
                             st.markdown(f"**{stage}**")
                             sdf = df_k[df_k["status"] == stage]
                             if sdf.empty:
@@ -15504,39 +15505,79 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     )
                             except Exception:
                                 pass
-                                st.caption("—")
                             for _, r in sdf.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
                                     st.caption(str(r.get("agency") or ""))
-                                    if r.get('rfp_deadline'):
-                                        st.caption(f"Due: {r['rfp_deadline']}")
-                                    v = st.number_input("Value", min_value=0.0, value=float(r.get("value") or 0.0), step=1000.0, format="%.2f", key=f"k_val_{did}")
-                                    owner_opts = ["Quincy","Collin","Charles"]
+                                    # Editable due date
+                                    existing_deadline = r.get("rfp_deadline")
+                                    deadline_str = str(existing_deadline or "")
+                                    new_deadline_str = st.text_input(
+                                        "Due date (YYYY-MM-DD)",
+                                        value=deadline_str,
+                                        key=f"k_due_{did}",
+                                    )
+                                    v = st.number_input(
+                                        "Value",
+                                        min_value=0.0,
+                                        value=float(r.get("value") or 0.0),
+                                        step=1000.0,
+                                        format="%.2f",
+                                        key=f"k_val_{did}",
+                                    )
+                                    owner_opts = ["Quincy", "Collin", "Charles"]
                                     owner_cur = (str(r.get("owner") or "") or (deal_owner_ctx if deal_owner_ctx in owner_opts else "Quincy"))
-                                    owner_new = st.selectbox("Owner", owner_opts, index=(owner_opts.index(owner_cur) if owner_cur in owner_opts else 0), key=f"k_owner_{did}")
-        
-                                    ns = st.selectbox("Stage", STAGES_ORDERED, index=STAGES_ORDERED.index(stage), key=f"k_stage_{did}")
-                                    c1, c2, c3 = st.columns([1,1,1])
+                                    if owner_cur not in owner_opts:
+                                        owner_cur = owner_opts[0]
+                                    owner_new = st.selectbox(
+                                        "Owner",
+                                        owner_opts,
+                                        index=owner_opts.index(owner_cur),
+                                        key=f"k_owner_{did}",
+                                    )
+
+                                    ns = st.selectbox(
+                                        "Stage",
+                                        STAGES_ORDERED,
+                                        index=STAGES_ORDERED.index(stage),
+                                        key=f"k_stage_{did}",
+                                    )
+                                    c1, c2, c3 = st.columns([1, 1, 1])
                                     with c1:
                                         if st.button("◀", key=f"k_prev_{did}"):
-                                            ns2 = _stage_prev(stage)
+                                            ps = _stage_prev(stage)
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                cur.execute("UPDATE deals SET status=?, stage=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, did))
-                                                if ns2 != stage:
-                                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
-                                                cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
+                                                cur.execute(
+                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?",
+                                                    (ps, ps, new_deadline_str or None, did),
+                                                )
+                                                if ps != stage:
+                                                    cur.execute(
+                                                        "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
+                                                        (did, ps),
+                                                    )
+                                                # Keep value/owner in sync when using navigation arrows
+                                                cur.execute(
+                                                    "UPDATE deals SET value=?, owner=? WHERE id=?",
+                                                    (float(v or 0.0), owner_new, did),
+                                                )
                                                 conn.commit()
                                             st.rerun()
                                     with c2:
                                         if st.button("Save", key=f"k_save_{did}"):
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                cur.execute("UPDATE deals SET value=?, status=?, stage=?, owner=?, updated_at=datetime(\'now\') WHERE id=?", (float(v or 0.0), ns, ns, owner_new, did))
+                                                cur.execute(
+                                                    "UPDATE deals SET value=?, status=?, stage=?, owner=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?",
+                                                    (float(v or 0.0), ns, ns, owner_new, new_deadline_str or None, did),
+                                                )
                                                 if ns != stage:
-                                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns))
+                                                    cur.execute(
+                                                        "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
+                                                        (did, ns),
+                                                    )
                                                 conn.commit()
                                             st.rerun()
                                     with c3:
@@ -15544,75 +15585,21 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_next(stage)
                                             from contextlib import closing as _closing
                                             with _closing(conn.cursor()) as cur:
-                                                cur.execute("UPDATE deals SET status=?, stage=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?", (ns2, ns2, str(pd.to_datetime(r.get('rfp_deadline')).date()) if pd.notnull(r.get('rfp_deadline')) else None, did))
+                                                cur.execute(
+                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, updated_at=datetime('now') WHERE id=?",
+                                                    (ns2, ns2, new_deadline_str or None, did),
+                                                )
                                                 if ns2 != stage:
-                                                    cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));", (did, ns2))
-                                                cur.execute("UPDATE deals SET value=?, owner=? WHERE id=?", (float(v or 0.0), owner_new, did))
+                                                    cur.execute(
+                                                        "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
+                                                        (did, ns2),
+                                                    )
+                                                cur.execute(
+                                                    "UPDATE deals SET value=?, owner=? WHERE id=?",
+                                                    (float(v or 0.0), owner_new, did),
+                                                )
                                                 conn.commit()
                                             st.rerun()
-        
-            
-                    st.subheader("Summary by Stage")
-                    summary = df.groupby("status").agg(
-                        deals=("id","count"),
-                        value=("value","sum"),
-                        expected=("weighted_value","sum")
-                    ).reset_index().sort_values("expected", ascending=False)
-                    _styled_dataframe(summary, use_container_width=True, hide_index=True)
-                    if st.button("Export Pipeline CSV", key="pipe_export"):
-                        # Track pipeline metrics export / rebuild as a job.
-                        try:
-                            ensure_jobs_schema(conn)
-                        except Exception:
-                            pass
-
-                        try:
-                            try:
-                                _user_name = get_current_user_name()
-                            except Exception:
-                                _user_name = ""
-                            payload = {
-                                "scope": "pipeline_metrics_rebuild",
-                                "owner_scope": owner_scope,
-                            }
-                            job_id = jobs_enqueue(
-                                conn,
-                                job_type="pipeline_metrics_rebuild",
-                                payload=payload,
-                                created_by=_user_name or None,
-                            )
-                        except Exception:
-                            job_id = None
-
-                        path = str(Path(DATA_DIR) / "pipeline.csv")
-                        try:
-                            if job_id:
-                                jobs_update_status(
-                                    conn,
-                                    job_id,
-                                    status="running",
-                                    progress=0.5,
-                                    mark_started=True,
-                                )
-                        except Exception:
-                            pass
-
-                        df.to_csv(path, index=False)
-                        st.markdown(f"[Download CSV]({path})")
-
-                        try:
-                            if job_id:
-                                jobs_update_status(
-                                    conn,
-                                    job_id,
-                                    status="done",
-                                    progress=1.0,
-                                    mark_finished=True,
-                                    result={"path": path, "rows": int(len(df) if df is not None else 0)},
-                                )
-                        except Exception:
-                            pass
-            
                 # Editable pipeline table with stage logging
                 st.subheader("Edit Pipeline")
                 try:
