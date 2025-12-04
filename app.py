@@ -10663,19 +10663,20 @@ def run_sam_watch(conn) -> None:
                                 try:
                                     _due_raw = row.get('Original Date Offers Due') or row.get('Response Due') or ""
                                     if _due_raw and deal_id:
-                                        from datetime import datetime as _dt
                                         _due_norm = None
                                         try:
-                                            _txt = str(_due_raw).split(" ")[0].replace(".", "/")
-                                            for _fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
-                                                try:
-                                                    _dt_obj = _dt.strptime(_txt, _fmt)
-                                                    _due_norm = _dt_obj.date().isoformat()
-                                                    break
-                                                except Exception:
-                                                    continue
+                                            # Try to parse SAM due date strings (e.g., "Dec 12, 2025 10:00 AM ET")
+                                            from dateutil import parser as _dp  # type: ignore[import-untyped]
+                                            _dt_obj = _dp.parse(str(_due_raw), fuzzy=True)
+                                            _due_norm = _dt_obj.date().isoformat()
                                         except Exception:
-                                            _due_norm = str(_due_raw)
+                                            try:
+                                                # Fall back to the app's helper if available
+                                                _dt_obj2 = _parse_dt_guess(str(_due_raw))  # type: ignore[name-defined]
+                                                if _dt_obj2 is not None:
+                                                    _due_norm = _dt_obj2.date().isoformat()
+                                            except Exception:
+                                                _due_norm = None
                                         if _due_norm:
                                             with _closing(_db.cursor()) as _c2:
                                                 _c2.execute(
