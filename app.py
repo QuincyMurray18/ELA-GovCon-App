@@ -15458,8 +15458,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     if deal_owner_ctx != "All":
                         # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, rfp_deadline, COALESCE(owner, '') AS owner "
+                            "SELECT id, title, agency, "
+                            "COALESCE(status, stage, '') AS status, "
+                            "COALESCE(value, 0) AS value, "
+                            "COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                            "COALESCE(owner, '') AS owner "
                             "FROM deals_t WHERE owner_user = ? "
                             "ORDER BY id DESC;",
                             conn,
@@ -15467,22 +15470,34 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         )
                     else:
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, rfp_deadline, COALESCE(owner, '') AS owner "
-                            "FROM deals_t ORDER BY id DESC;",
+                            "SELECT id, title, agency, "
+                            "COALESCE(status, stage, '') AS status, "
+                            "COALESCE(value, 0) AS value, "
+                            "COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                            "COALESCE(owner, '') AS owner "
+                            "FROM deals_t "
+                            "ORDER BY id DESC;",
                             conn,
                             params=(),
                         )
                 except Exception:
-                    # Fallback to view without owner_user column
+                    # Fallback: if deals_t view does not exist yet, pull directly from deals.
                     try:
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
-                            conn, params=()
+                            "SELECT id, title, agency, "
+                            "COALESCE(status, stage, '') AS status, "
+                            "COALESCE(value, 0) AS value, "
+                            "COALESCE(rfp_deadline, '') AS rfp_deadline, "
+                            "COALESCE(owner, '') AS owner "
+                            "FROM deals "
+                            "ORDER BY id DESC;",
+                            conn,
+                            params=(),
                         )
                     except Exception:
                         df_k = None
-                if df_k is None or df_k.empty:
+
+if df_k is None or df_k.empty:
                     st.caption("No deals to display")
                 else:
                     cols = st.columns(len(STAGES_ORDERED))
