@@ -15772,7 +15772,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             except Exception:
                                                 return None
 
-                                                                        c1, c2, c3 = st.columns([1, 1, 1])
+                                    c1, c2, c3 = st.columns([1, 1, 1])
                                     def _update_deal_row(_new_stage, _new_status):
                                         from contextlib import closing as _closing
                                         _due = _parse_due_input(due_input, due_time_input)
