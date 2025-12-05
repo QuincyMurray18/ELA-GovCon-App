@@ -19416,7 +19416,64 @@ def run_help_docs(conn: "sqlite3.Connection") -> None:
     )
 
 
+
+
+def jobs_tick_once(max_jobs: int = 1) -> None:
+    """Best-effort one-shot background jobs processor for the Streamlit UI.
+
+    This reuses the same worker helpers as jobs_worker_loop but processes
+    at most `max_jobs` queued jobs and then returns immediately so it can
+    safely be called at the start of each app run without blocking.
+    """
+    import traceback as _traceback
+
+    try:
+        max_jobs_int = int(max_jobs)
+    except Exception:
+        max_jobs_int = 1
+
+    if max_jobs_int <= 0:
+        return
+
+    processed = 0
+    while processed < max_jobs_int:
+        conn = None
+        try:
+            # Use the same connection helper as the dedicated worker so
+            # row_factory and schema are configured consistently.
+            conn = _jobs_worker_connect_db()
+            job_info = _jobs_worker_fetch_next_queued_job(conn)
+            if not job_info:
+                # Nothing queued
+                break
+
+            job_id, job_type, payload = job_info
+            # Reuse the same dispatcher as the worker loop so all existing
+            # job types (backup, exports, outreach, etc.) run identically.
+            _jobs_worker_run_single(conn, job_id, job_type, payload)
+            processed += 1
+        except Exception:
+            # Never let background jobs crash the UI; log to stderr only.
+            try:
+                _traceback.print_exc()
+            except Exception:
+                pass
+            break
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
 def main() -> None:
+    # Opportunistically process at most one queued background job on each run
+    try:
+        jobs_tick_once(max_jobs=1)
+    except Exception:
+        # Best-effort only; never break the UI if jobs processing fails
+        pass
+
     # Phase 1 re-init inside main
     # Bootstrap UI and sidebar
     try:
