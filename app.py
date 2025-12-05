@@ -1107,15 +1107,14 @@ import streamlit as st
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_read_sql_simple(sql: str):
-    """Cached helper for small read heavy tables using a fresh read only style connection.
+    """Cached helper for small read-heavy tables.
 
-    Intended for simple SELECT id, name style queries where slight staleness is fine.
-    """
+    Uses a fresh connection so the cache key is the SQL string only.
+    """ 
     import pandas as pd
     try:
         conn = get_db()
     except Exception:
-        # Fallback: try direct sqlite open if get_db is not yet wired
         import sqlite3
         conn = sqlite3.connect("ela_govcon.db")
     try:
@@ -1534,7 +1533,7 @@ def _phase3_analyzer_inline(conn):
     if ' _ensure_phase3_schema' not in globals():
         pass  # defined elsewhere in this file in Phase 3 block
     else:
-        _ensure_phase3_schema(conn)
+        _ensure_phase3_schema_plus(conn)
 
     st.markdown("### 🧠 Phase 3 — One‑Page Analyzer")
     notice = st.session_state.get("rfp_selected_notice") or {}
@@ -1750,7 +1749,7 @@ def _ensure_phase3_dirs():
 
 def _get_or_create_rfp(conn, notice: dict):
     """Return rfp_id for the selected notice (create if needed)."""
-    _ensure_phase3_schema(conn)
+    _ensure_phase3_schema_plus(conn)
     nid = (notice or {}).get("Notice ID") or (notice or {}).get("Solicitation") or ""
     title = (notice or {}).get("Title") or ""
     sam_url = (notice or {}).get("SAM Link") or (notice or {}).get("URL") or ""
@@ -5338,6 +5337,19 @@ def _ensure_y1_schema(conn: "sqlite3.Connection") -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_rfp ON rfp_chunks(rfp_id);")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_chunk_key ON rfp_chunks(rfp_file_id, page, chunk_idx);")
             conn.commit()
+            try:
+                cur.execute("DROP VIEW IF EXISTS rfp_files_t;")
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    "CREATE VIEW IF NOT EXISTS rfp_files_t AS "
+                    "SELECT id, rfp_id, filename, mime, sha256, pages, text "
+                    "FROM rfp_files;"
+                )
+            except Exception:
+                pass
+
     except Exception:
         pass
 
@@ -8456,7 +8468,18 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         "Agency Path", "Notice ID", "SAM Link",
     ]
     return df[wanted] if not df.empty else df
-def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
+def sam_try_fetch_attachments
+
+try:
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def sam_try_fetch_attachments_cached(notice_id: str) -> List[Tuple[str, bytes]]:
+        """Cached wrapper around sam_try_fetch_attachments by notice_id."""
+        return sam_try_fetch_attachments(notice_id)
+except Exception:
+    def sam_try_fetch_attachments_cached(notice_id: str) -> List[Tuple[str, bytes]]:
+        return sam_try_fetch_attachments(notice_id)
+
+(notice_id: str) -> List[Tuple[str, bytes]]:
     """Best-effort attempt to fetch attachments for a SAM notice.
     Returns list of (filename, bytes). Falls back to saving the notice description HTML
     when public attachment download isn't available.
@@ -8562,7 +8585,7 @@ def _fetch_sam_attachments(notice, api_key: str | None, target_dir: str, cookie:
             errors.append("sam_try_fetch_attachments helper is not available.")
             return [], errors
 
-        files = fetcher(str(notice_id)) or []
+        files = sam_try_fetch_attachments_cached(str(notice_id)) or []
         if not files:
             return [], errors
 
@@ -8777,8 +8800,8 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                 elif existing_rfp != int(rfp_id):
                     try:
                         cur.execute(
-                            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
-                            "SELECT ?, ?, mime, sha256, pages, bytes, datetime('now') FROM rfp_files WHERE id=?;",
+                            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, text, created_at) "
+                            "SELECT ?, ?, mime, sha256, pages, bytes, text, datetime('now') FROM rfp_files WHERE id=?;",
                             (int(rfp_id), name, rid)
                         )
                         new_rid = cur.lastrowid
@@ -8798,9 +8821,15 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
         pages_before = len(pages_text)
         pages_text, ocr_count = ocr_pages_if_empty(index_bytes, mime, pages_text)
         pages = len(pages_text) if pages_text else None
+        full_text = ""
+        try:
+            if pages_text:
+                full_text = "\n\n".join([str(p or "") for p in pages_text])
+        except Exception:
+            full_text = ""
         cur.execute(
-            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
-            (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes))
+            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+            (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes), full_text)
         )
         rid = cur.lastrowid
         conn.commit()
@@ -20034,7 +20063,35 @@ def s1_get_google_api_key()->str|None:
         pass
     return os.environ.get("GOOGLE_API_KEY")
 
-def s1_geocode_address(address:str):
+def s1_geocode_address(
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_vendor_enrich(name: str, city: str, state: str, naics: str, raw_name: str | None = None) -> dict:
+    """Cached Google/Places enrichment by normalized vendor identity.
+
+    This wrapper calls the underlying enrichment helper using only identity fields,
+    so repeated lookups for the same vendor/location avoid hitting Google again.
+    """ 
+    try:
+        base_name = (raw_name or name or "").strip()
+    except Exception:
+        base_name = name
+    # Delegate into the underlying enrichment function if available.
+    fn = globals().get("s1_geocode_address")
+    if not callable(fn):
+        return {}
+    try:
+        return fn(base_name, city, state, naics) or {}
+    except TypeError:
+        # Fallback for legacy signatures that don't take naics
+        try:
+            return fn(base_name, city, state) or {}
+        except Exception:
+            return {}
+    except Exception:
+        return {}
+
+address:str):
     key = s1_get_google_api_key()
     if not key: return None
     import urllib.parse, urllib.request, json
@@ -24849,11 +24906,11 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
 
 
 def jobs_tick_once(max_jobs: int = 1) -> None:
-    """Best effort background jobs processor for the UI.
+    """Best-effort background jobs processor for the UI.
 
     Processes at most `max_jobs` queued jobs using the same handlers as jobs_worker_loop,
-    but returns immediately so it can be safely called from the main app.
-    """
+    but returns quickly so it is safe to call from the main app on each rerun.
+    """ 
     import traceback as _traceback
 
     try:
@@ -26984,3 +27041,29 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
         return pd.read_sql_query(sql, conn, params=tuple(params))
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
+def _ensure_phase3_schema_plus(conn):
+    """Wrapper around _ensure_phase3_schema that also ensures rfp_files.text column exists.
+
+    This keeps the original Phase 3 schema logic and only adds the minimal column
+    needed for parse-once text reuse.
+    """ 
+    try:
+        _ensure_phase3_schema_plus(conn)
+    except Exception:
+        # If the base schema helper fails we still try to add the column best-effort.
+        pass
+    try:
+        cur = conn.execute("PRAGMA table_info(rfp_files);")
+        cols = {row[1] for row in cur.fetchall()}
+    except Exception:
+        cols = set()
+    try:
+        if "text" not in cols:
+            try:
+                conn.execute("ALTER TABLE rfp_files ADD COLUMN text TEXT;")
+            except Exception:
+                # Some SQLite builds do not support ALTER in this way; ignore.
+                pass
+    except Exception:
+        pass
+
