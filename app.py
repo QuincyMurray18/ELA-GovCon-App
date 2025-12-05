@@ -8468,28 +8468,21 @@ def flatten_records(records: List[Dict[str, Any]]) -> pd.DataFrame:
         "Agency Path", "Notice ID", "SAM Link",
     ]
     return df[wanted] if not df.empty else df
-def sam_try_fetch_attachments
 
-try:
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def sam_try_fetch_attachments_cached(notice_id: str) -> List[Tuple[str, bytes]]:
-        """Cached wrapper around sam_try_fetch_attachments by notice_id."""
-        return sam_try_fetch_attachments(notice_id)
-except Exception:
-    def sam_try_fetch_attachments_cached(notice_id: str) -> List[Tuple[str, bytes]]:
-        return sam_try_fetch_attachments(notice_id)
-
-(notice_id: str) -> List[Tuple[str, bytes]]:
+def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
     """Best-effort attempt to fetch attachments for a SAM notice.
-    Returns list of (filename, bytes). Falls back to saving the notice description HTML
-    when public attachment download isn't available.
+
+    Returns list of (filename, bytes). Falls back to saving the
+    notice description HTML when public attachment download isn't available.
     """
     import io, zipfile, os
+    from typing import List, Tuple
+    import requests
     files: List[Tuple[str, bytes]] = []
     if not notice_id:
         return files
 
-    # Attempt 1: Use Opportunity Management API 'download all' if system creds are present.
+    # Attempt 1: use Opportunity Management API 'download all' if system creds are present.
     sys_key = None
     sys_auth = None
     try:
@@ -8511,7 +8504,7 @@ except Exception:
             params = {"api_key": sys_key}
             headers = {"Authorization": sys_auth}
             r = requests.get(url, headers=headers, params=params, timeout=60)
-            if r.ok and (r.headers.get("content-type","").lower().endswith("zip") or r.content[:2] == b'PK'):
+            if r.ok and (r.headers.get("content-type", "").lower().endswith("zip") or r.content[:2] == b"PK"):
                 zf = zipfile.ZipFile(io.BytesIO(r.content))
                 for zi in zf.infolist():
                     if zi.is_dir():
@@ -8523,9 +8516,6 @@ except Exception:
                         continue
                 if files:
                     return files
-            else:
-                # If unauthorized or not found, silently fall back
-                pass
     except Exception:
         # Swallow and fall back
         pass
@@ -8533,17 +8523,27 @@ except Exception:
     # Attempt 2: Save description HTML as a helpful "attachment"
     try:
         api_key = get_sam_api_key()
-        desc_url = f"https://api.sam.gov/prod/opportunities/v1/noticedesc"
+        desc_url = "https://api.sam.gov/prod/opportunities/v1/noticedesc"
         params = {"noticeid": notice_id}
         if api_key:
             params["api_key"] = api_key
-        resp = requests.get(desc_url, params=params, timeout=30)
-        if resp.ok and resp.text:
-            files.append((f"{notice_id}_description.sig_html", resp.text.encode("utf-8", errors="ignore")))
+        r = requests.get(desc_url, params=params, timeout=30)
+        if r.ok and r.text:
+            files.append((f"{notice_id}_description.sig_html", r.text.encode("utf-8", errors="ignore")))
     except Exception:
         pass
 
     return files
+
+try:
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def sam_try_fetch_attachments_cached(notice_id: str) -> List[Tuple[str, bytes]]:
+        """Cached wrapper around sam_try_fetch_attachments by notice_id."""
+        return sam_try_fetch_attachments(notice_id)
+except Exception:
+    def sam_try_fetch_attachments_cached(notice_id: str) -> List[Tuple[str, bytes]]:
+        return sam_try_fetch_attachments(notice_id)
+
 
 # ---------------------- Phase B: RFP parsing helpers ----------------------
 
