@@ -1105,6 +1105,34 @@ except Exception:
 import re
 import streamlit as st
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_read_sql_simple(sql: str):
+    """Cached helper for small read heavy tables using a fresh read only style connection.
+
+    Intended for simple SELECT id, name style queries where slight staleness is fine.
+    """
+    import pandas as pd
+    try:
+        conn = get_db()
+    except Exception:
+        # Fallback: try direct sqlite open if get_db is not yet wired
+        import sqlite3
+        conn = sqlite3.connect("ela_govcon.db")
+    try:
+        return pd.read_sql_query(sql, conn, params=())
+    except Exception:
+        try:
+            return pd.DataFrame()
+        except Exception:
+            return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+
 # === Perf+QA helpers ===
 import traceback as _traceback
 from contextlib import closing as _closing
@@ -13961,7 +13989,7 @@ def _scenario_summary(conn: "sqlite3.Connection", scenario_id: int) -> Dict[str,
 def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     st.header("Pricing Calculator")
     st.caption("Use this page to build quick should cost estimates and translate inputs into structured pricing.")
-    df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer (parse & save) first.")
         return
@@ -14076,7 +14104,7 @@ def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: O
 def run_win_probability(conn: "sqlite3.Connection") -> None:
     st.header("Win Probability")
     st.caption("Use this page to score opportunities and estimate win probability based on fit, competition, and strategy.")
-    df = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
     if df.empty:
         st.info("No RFP context. Use RFP Analyzer first.")
         return
@@ -14643,7 +14671,7 @@ def run_past_performance(conn: "sqlite3.Connection") -> None:
     selected_ids = st.multiselect("Select projects for writeup", options=df["id"].tolist(), format_func=lambda i: f"#{i} — {df.loc[df['id']==i, 'project_title'].values[0]}")
 
     # Relevance scoring vs RFP
-    df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df_rf = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
     rfp_id = None
     if not df_rf.empty:
         rfp_id = st.selectbox("RFP context for relevance scoring (optional)", options=[None] + df_rf["id"].tolist(),
@@ -15106,8 +15134,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     # --- Activities
     with tabs[0]:
         st.subheader("Log Activity")
-        df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
-        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
+        df_deals = _cached_read_sql_simple("SELECT id, title FROM deals_t ORDER BY id DESC;")
+        df_contacts = _cached_read_sql_simple("SELECT id, name FROM contacts_t ORDER BY name;")
         a_col1, a_col2, a_col3 = st.columns([2,2,2])
         with a_col1:
             a_type = st.selectbox("Type", ["Call","Email","Meeting","Note"], key="act_type")
@@ -15198,8 +15226,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     with tabs[1]:
         
         st.subheader("New Task")
-        df_deals = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
-        df_contacts = pd.read_sql_query("SELECT id, name FROM contacts_t ORDER BY name;", conn, params=())
+        df_deals = _cached_read_sql_simple("SELECT id, title FROM deals_t ORDER BY id DESC;")
+        df_contacts = _cached_read_sql_simple("SELECT id, name FROM contacts_t ORDER BY name;")
         t1, t2, t3 = st.columns([2,2,2])
         with t1:
             t_title = st.text_input("Task title", key="task_title")
@@ -16396,13 +16424,13 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
             owner_type = st.selectbox("Attach to", ["RFP", "Deal", "Vendor", "Other"], key="fm_owner_type")
             owner_id = None
             if owner_type == "RFP":
-                df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+                df_rf = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
                 if not df_rf.empty:
                     owner_id = st.selectbox("RFP", options=df_rf["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_rf.loc[df_rf['id']==i, 'title'].values[0]}",
                                             key="fm_owner_rfp")
             elif owner_type == "Deal":
-                df_deal = pd.read_sql_query("SELECT id, title FROM deals_t ORDER BY id DESC;", conn, params=())
+                df_deal = _cached_read_sql_simple("SELECT id, title FROM deals_t ORDER BY id DESC;")
                 if not df_deal.empty:
                     owner_id = st.selectbox("Deal", options=df_deal["id"].tolist(),
                                             format_func=lambda i: f"#{i} — {df_deal.loc[df_deal['id']==i, 'title'].values[0]}",
@@ -16506,7 +16534,7 @@ def run_file_manager(conn: "sqlite3.Connection") -> None:
 
     # --- Submission Kit (ZIP) ---
     st.subheader("Submission Kit (ZIP)")
-    df_rf_all = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+    df_rf_all = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
     if df_rf_all.empty:
         st.info("Create an RFP in RFP Analyzer first (Parse → Save).")
         return
@@ -16694,11 +16722,11 @@ def run_fast_rfq(conn: "sqlite3.Connection") -> None:
     with left:
         st.subheader("Create")
         try:
-            df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+            df_rf = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
         except Exception:
             df_rf = pd.DataFrame(columns=["id", "title"])
         try:
-            df_deals = pd.read_sql_query("SELECT id, nickname, stage FROM deals_t ORDER BY id DESC;", conn, params=())
+            df_deals = _cached_read_sql_simple("SELECT id, nickname, stage FROM deals_t ORDER BY id DESC;")
         except Exception:
             df_deals = pd.DataFrame(columns=["id", "nickname", "stage"])
 
@@ -17170,7 +17198,7 @@ def run_rfq_pack(conn: "sqlite3.Connection") -> None:
     left, right = st.columns([2,2])
     with left:
         st.subheader("Create")
-        df_rf = pd.read_sql_query("SELECT id, title FROM rfps_t ORDER BY id DESC;", conn, params=())
+        df_rf = _cached_read_sql_simple("SELECT id, title FROM rfps_t ORDER BY id DESC;")
         rf_opt = st.selectbox("RFP (optional)", options=[None] + df_rf["id"].tolist(),
                               format_func=lambda x: "None" if x is None else f"#{x} — {df_rf.loc[df_rf['id']==x,'title'].values[0]}",
                               key="rfq_rfp_sel")
@@ -19416,62 +19444,10 @@ def run_help_docs(conn: "sqlite3.Connection") -> None:
     )
 
 
-
-
-def jobs_tick_once(max_jobs: int = 1) -> None:
-    """Best-effort one-shot background jobs processor for the Streamlit UI.
-
-    This reuses the same worker helpers as jobs_worker_loop but processes
-    at most `max_jobs` queued jobs and then returns immediately so it can
-    safely be called at the start of each app run without blocking.
-    """
-    import traceback as _traceback
-
-    try:
-        max_jobs_int = int(max_jobs)
-    except Exception:
-        max_jobs_int = 1
-
-    if max_jobs_int <= 0:
-        return
-
-    processed = 0
-    while processed < max_jobs_int:
-        conn = None
-        try:
-            # Use the same connection helper as the dedicated worker so
-            # row_factory and schema are configured consistently.
-            conn = _jobs_worker_connect_db()
-            job_info = _jobs_worker_fetch_next_queued_job(conn)
-            if not job_info:
-                # Nothing queued
-                break
-
-            job_id, job_type, payload = job_info
-            # Reuse the same dispatcher as the worker loop so all existing
-            # job types (backup, exports, outreach, etc.) run identically.
-            _jobs_worker_run_single(conn, job_id, job_type, payload)
-            processed += 1
-        except Exception:
-            # Never let background jobs crash the UI; log to stderr only.
-            try:
-                _traceback.print_exc()
-            except Exception:
-                pass
-            break
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
 def main() -> None:
-    # Opportunistically process at most one queued background job on each run
     try:
         jobs_tick_once(max_jobs=1)
     except Exception:
-        # Best-effort only; never break the UI if jobs processing fails
         pass
 
     # Phase 1 re-init inside main
@@ -24869,6 +24845,49 @@ def _jobs_worker_run_single(conn, job_id: int, job_type: str, payload: dict):
             )
         except Exception:
             _traceback.print_exc()
+
+
+
+def jobs_tick_once(max_jobs: int = 1) -> None:
+    """Best effort background jobs processor for the UI.
+
+    Processes at most `max_jobs` queued jobs using the same handlers as jobs_worker_loop,
+    but returns immediately so it can be safely called from the main app.
+    """
+    import traceback as _traceback
+
+    try:
+        max_jobs_int = int(max_jobs)
+    except Exception:
+        max_jobs_int = 1
+
+    if max_jobs_int <= 0:
+        return
+
+    processed = 0
+    while processed < max_jobs_int:
+        conn = None
+        try:
+            conn = _jobs_worker_connect_db()
+            job_info = _jobs_worker_fetch_next_queued_job(conn)
+            if not job_info:
+                break
+
+            job_id, job_type, payload = job_info
+            _jobs_worker_run_single(conn, job_id, job_type, payload)
+            processed += 1
+        except Exception:
+            try:
+                _traceback.print_exc()
+            except Exception:
+                pass
+            break
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def jobs_worker_loop(sleep_seconds: float = 3.0) -> None:
