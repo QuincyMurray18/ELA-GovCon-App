@@ -20063,35 +20063,7 @@ def s1_get_google_api_key()->str|None:
         pass
     return os.environ.get("GOOGLE_API_KEY")
 
-def s1_geocode_address(
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _cached_vendor_enrich(name: str, city: str, state: str, naics: str, raw_name: str | None = None) -> dict:
-    """Cached Google/Places enrichment by normalized vendor identity.
-
-    This wrapper calls the underlying enrichment helper using only identity fields,
-    so repeated lookups for the same vendor/location avoid hitting Google again.
-    """ 
-    try:
-        base_name = (raw_name or name or "").strip()
-    except Exception:
-        base_name = name
-    # Delegate into the underlying enrichment function if available.
-    fn = globals().get("s1_geocode_address")
-    if not callable(fn):
-        return {}
-    try:
-        return fn(base_name, city, state, naics) or {}
-    except TypeError:
-        # Fallback for legacy signatures that don't take naics
-        try:
-            return fn(base_name, city, state) or {}
-        except Exception:
-            return {}
-    except Exception:
-        return {}
-
-address:str):
+def s1_geocode_address(address:str):
     key = s1_get_google_api_key()
     if not key: return None
     import urllib.parse, urllib.request, json
