@@ -15090,7 +15090,7 @@ def data_get_all_deals_for_detail(conn):
                 "COALESCE(c.email, '') AS co_email "
                 "FROM deals_t d "
                 "LEFT JOIN contacts_t c ON d.co_contact_id = c.id "
-                "WHERE d.owner_user=? ORDER BY d.id DESC;",
+                "WHERE d.owner_user=? ORDER BY d.id DESC LIMIT 500;",
                 conn,
                 params=(owner_scope,),
             )
@@ -15108,7 +15108,7 @@ def data_get_all_deals_for_detail(conn):
                 "COALESCE(c.email, '') AS co_email "
                 "FROM deals_t d "
                 "LEFT JOIN contacts_t c ON d.co_contact_id = c.id "
-                "ORDER BY d.id DESC;",
+                "ORDER BY d.id DESC LIMIT 500;",
                 conn,
                 params=(),
             )
@@ -15237,7 +15237,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
             q += " AND deal_id=?"; params.append(f_deal)
         if f_contact:
             q += " AND contact_id=?"; params.append(f_contact)
-        q += " ORDER BY ts DESC"
+        q += " ORDER BY ts DESC LIMIT 1000"
         df_a = pd.read_sql_query(q, conn, params=params)
         if df_a.empty:
             st.write("No activities")
