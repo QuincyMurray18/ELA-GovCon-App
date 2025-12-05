@@ -15515,34 +15515,59 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     if deal_owner_ctx != "All":
                         # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, rfp_deadline, COALESCE(owner, '') AS owner "
-                            "FROM deals_t WHERE owner_user = ? "
-                            "ORDER BY id DESC;",
+                            "SELECT d.id, d.title, d.agency, COALESCE(d.status, d.stage, '') AS status, "
+                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, COALESCE(d.owner, '') AS owner, "
+                            "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
+                            "COALESCE(c.name, '') AS co_name, "
+                            "COALESCE(c.email, '') AS co_email, "
+                            "COALESCE(c.phone, '') AS co_phone "
+                            "FROM deals_t d "
+                            "LEFT JOIN contacts_t c ON d.co_contact_id = c.id "
+                            "WHERE d.owner_user = ? "
+                            "ORDER BY d.id DESC;",
                             conn,
                             params=(deal_owner_ctx,),
                         )
                     else:
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, COALESCE(status, stage, '') AS status, "
-                            "COALESCE(value, 0) AS value, rfp_deadline, COALESCE(owner, '') AS owner "
-                            "FROM deals_t ORDER BY id DESC;",
+                            "SELECT d.id, d.title, d.agency, COALESCE(d.status, d.stage, '') AS status, "
+                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, COALESCE(d.owner, '') AS owner, "
+                            "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
+                            "COALESCE(c.name, '') AS co_name, "
+                            "COALESCE(c.email, '') AS co_email, "
+                            "COALESCE(c.phone, '') AS co_phone "
+                            "FROM deals_t d "
+                            "LEFT JOIN contacts_t c ON d.co_contact_id = c.id "
+                            "ORDER BY d.id DESC;",
                             conn,
                             params=(),
                         )
                 except Exception:
-                    # Fallback to view without owner_user column
+                    # Fallback to view without owner_user column or contacts_t
                     try:
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner FROM deals_t ORDER BY id DESC;",
-                            conn, params=()
+                            "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner, "
+                            "0 AS co_contact_id, '' AS co_name, '' AS co_email, '' AS co_phone "
+                            "FROM deals_t ORDER BY id DESC;",
+                            conn,
+                            params=(),
                         )
                     except Exception:
                         df_k = None
-                
+
                 if df_k is None or df_k.empty:
                     st.caption("No deals to display")
                 else:
+                    # Preload contacts for Kanban contact dropdowns
+                    try:
+                        df_contacts_k = pd.read_sql_query(
+                            "SELECT id, name, email FROM contacts_t ORDER BY name;",
+                            conn,
+                            params=(),
+                        )
+                    except Exception:
+                        import pandas as _pd
+                        df_contacts_k = _pd.DataFrame(columns=["id", "name", "email"])
                     cols = st.columns(len(STAGES_ORDERED))
                     for idx, stage in enumerate(STAGES_ORDERED):
                         with cols[idx]:
@@ -15567,6 +15592,58 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
                                     st.caption(str(r.get("agency") or ""))
+                                    # Contact display and selector for this deal
+                                    co_name = str(r.get("co_name") or "").strip()
+                                    co_email = str(r.get("co_email") or "").strip()
+                                    co_phone = str(r.get("co_phone") or "").strip()
+                                    if co_name or co_email or co_phone:
+                                        _parts = []
+                                        if co_name:
+                                            _parts.append(co_name)
+                                        if co_email:
+                                            _parts.append(co_email)
+                                        if co_phone:
+                                            _parts.append(co_phone)
+                                        st.caption("Contact: " + " — ".join(_parts))
+                                    else:
+                                        st.caption("Contact: None selected")
+                                    co_contact_current = int(r.get("co_contact_id") or 0)
+                                    contact_new = co_contact_current or None
+                                    if 'df_contacts_k' in locals() and df_contacts_k is not None and not df_contacts_k.empty:
+                                        try:
+                                            ids = df_contacts_k["id"].astype(int).tolist()
+                                        except Exception:
+                                            ids = []
+                                        options = [None] + ids
+
+                                        def _fmt_contact_option_k(cid):
+                                            if cid is None:
+                                                return "None"
+                                            try:
+                                                r2 = df_contacts_k[df_contacts_k["id"] == cid].iloc[0]
+                                                nm = str(r2.get("name") or "").strip()
+                                                em = str(r2.get("email") or "").strip()
+                                                label = nm or em or f"ID {cid}"
+                                                if nm and em:
+                                                    label = f"{nm} — {em}"
+                                                return label
+                                            except Exception:
+                                                return str(cid)
+
+                                        idx_opt = 0
+                                        if co_contact_current and co_contact_current in ids:
+                                            idx_opt = 1 + ids.index(co_contact_current)
+
+                                        sel_co = st.selectbox(
+                                            "Contact",
+                                            options=options,
+                                            format_func=_fmt_contact_option_k,
+                                            index=idx_opt,
+                                            key=f"k_co_{did}",
+                                        )
+                                        contact_new = None if sel_co is None else int(sel_co)
+                                    else:
+                                        contact_new = None
                                     import datetime as _dt
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
@@ -15703,8 +15780,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             with _closing(conn.cursor()) as cur:
                                                 _due = _parse_due_input(due_input, due_time_input)
                                                 cur.execute(
-                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, updated_at=datetime('now') WHERE id=?",
-                                                    (ns2, ns2, _due, float(v or 0.0), owner_new, did),
+                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, co_contact_id=?, updated_at=datetime('now') WHERE id=?",
+                                                    (ns2, ns2, _due, float(v or 0.0), owner_new, contact_new, did),
                                                 )
                                                 if ns2 != stage:
                                                     cur.execute(
@@ -15720,7 +15797,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                                 _due = _parse_due_input(due_input, due_time_input)
                                                 cur.execute(
                                                     "UPDATE deals SET value=?, status=?, stage=?, rfp_deadline=?, owner=?, updated_at=datetime('now') WHERE id=?",
-                                                    (float(v or 0.0), ns, ns, _due, owner_new, did),
+                                                    (float(v or 0.0), ns, ns, _due, owner_new, contact_new, did),
                                                 )
                                                 if ns != stage:
                                                     cur.execute(
@@ -15736,8 +15813,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             with _closing(conn.cursor()) as cur:
                                                 _due = _parse_due_input(due_input, due_time_input)
                                                 cur.execute(
-                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, updated_at=datetime('now') WHERE id=?",
-                                                    (ns2, ns2, _due, float(v or 0.0), owner_new, did),
+                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, co_contact_id=?, updated_at=datetime('now') WHERE id=?",
+                                                    (ns2, ns2, _due, float(v or 0.0), owner_new, contact_new, did),
                                                 )
                                                 if ns2 != stage:
                                                     cur.execute(
