@@ -15772,56 +15772,55 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             except Exception:
                                                 return None
 
-                                    c1, c2, c3 = st.columns([1, 1, 1])
+                                                                        c1, c2, c3 = st.columns([1, 1, 1])
+                                    def _update_deal_row(_new_stage, _new_status):
+                                        from contextlib import closing as _closing
+                                        _due = _parse_due_input(due_input, due_time_input)
+                                        with _closing(conn.cursor()) as cur:
+                                            cur.execute(
+                                                """
+                                                UPDATE deals
+                                                SET status=?,
+                                                    stage=?,
+                                                    rfp_deadline=?,
+                                                    value=?,
+                                                    owner=?,
+                                                    co_contact_id=?,
+                                                    updated_at=datetime('now')
+                                                WHERE id=?
+                                                """,
+                                                (
+                                                    _new_status,
+                                                    _new_stage,
+                                                    _due,
+                                                    float(v or 0.0),
+                                                    owner_new,
+                                                    contact_new,
+                                                    did,
+                                                ),
+                                            )
+                                            if _new_stage != stage:
+                                                cur.execute(
+                                                    """
+                                                    INSERT INTO deal_stage_log(deal_id, stage, changed_at)
+                                                    VALUES(?, ?, datetime('now'));
+                                                    """,
+                                                    (did, _new_stage),
+                                                )
+                                            conn.commit()
                                     with c1:
                                         if st.button("◀", key=f"k_prev_{did}"):
                                             ns2 = _stage_prev(stage)
-                                            from contextlib import closing as _closing
-                                            with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input, due_time_input)
-                                                cur.execute(
-                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, co_contact_id=?, updated_at=datetime('now') WHERE id=?",
-                                                    (ns2, ns2, _due, float(v or 0.0), owner_new, contact_new, did),
-                                                )
-                                                if ns2 != stage:
-                                                    cur.execute(
-                                                        "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
-                                                        (did, ns2),
-                                                    )
-                                                conn.commit()
+                                            _update_deal_row(ns2, ns2)
                                             st.rerun()
                                     with c2:
                                         if st.button("Save", key=f"k_save_{did}"):
-                                            from contextlib import closing as _closing
-                                            with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input, due_time_input)
-                                                cur.execute(
-                                                    "UPDATE deals SET value=?, status=?, stage=?, rfp_deadline=?, owner=?, updated_at=datetime('now') WHERE id=?",
-                                                    (float(v or 0.0), ns, ns, _due, owner_new, contact_new, did),
-                                                )
-                                                if ns != stage:
-                                                    cur.execute(
-                                                        "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
-                                                        (did, ns),
-                                                    )
-                                                conn.commit()
+                                            _update_deal_row(ns, ns)
                                             st.rerun()
                                     with c3:
                                         if st.button("▶", key=f"k_next_{did}"):
                                             ns2 = _stage_next(stage)
-                                            from contextlib import closing as _closing
-                                            with _closing(conn.cursor()) as cur:
-                                                _due = _parse_due_input(due_input, due_time_input)
-                                                cur.execute(
-                                                    "UPDATE deals SET status=?, stage=?, rfp_deadline=?, value=?, owner=?, co_contact_id=?, updated_at=datetime('now') WHERE id=?",
-                                                    (ns2, ns2, _due, float(v or 0.0), owner_new, contact_new, did),
-                                                )
-                                                if ns2 != stage:
-                                                    cur.execute(
-                                                        "INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(?, ?, datetime('now'));",
-                                                        (did, ns2),
-                                                    )
-                                                conn.commit()
+                                            _update_deal_row(ns2, ns2)
                                             st.rerun()
                     st.subheader("Summary by Stage")
                     summary = df.groupby("status").agg(
