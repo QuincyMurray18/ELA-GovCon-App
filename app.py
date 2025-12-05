@@ -1110,7 +1110,7 @@ def _cached_read_sql_simple(sql: str):
     """Cached helper for small read-heavy tables.
 
     Uses a fresh connection so the cache key is the SQL string only.
-    """ 
+    """
     import pandas as pd
     try:
         conn = get_db()
@@ -8493,13 +8493,11 @@ def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
                     or st.secrets.get("SAM_SYSTEM_AUTH")
                     or os.getenv("SAM_SYSTEM_AUTH"))
     except Exception:
-        # Fall back to env only
         sys_key = os.getenv("SAM_SYSTEM_API_KEY")
         sys_auth = os.getenv("SAM_SYSTEM_AUTH")
 
     try:
         if sys_key and sys_auth:
-            # Per docs: GET /{opportunityId}/resources/download/zip with Authorization header
             url = f"https://api.sam.gov/prod/opportunity/v1/api/{notice_id}/resources/download/zip"
             params = {"api_key": sys_key}
             headers = {"Authorization": sys_auth}
@@ -8517,7 +8515,6 @@ def sam_try_fetch_attachments(notice_id: str) -> List[Tuple[str, bytes]]:
                 if files:
                     return files
     except Exception:
-        # Swallow and fall back
         pass
 
     # Attempt 2: Save description HTML as a helpful "attachment"
@@ -22288,6 +22285,16 @@ def _s1d_places_textsearch(query: str, lat: float|None, lng: float|None, radius_
     js = r.json()
     return js
 
+
+try:
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _s1d_places_textsearch_cached(*args, **kwargs):
+        return _s1d_places_textsearch(*args, **kwargs)
+except Exception:
+    def _s1d_places_textsearch_cached(*args, **kwargs):
+        return _s1d_places_textsearch(*args, **kwargs)
+
+
 def _s1d_places_nearby(keyword, lat, lng, pagetoken, key, rankby="distance"):
     import requests as _rq_nb
     params = {"key": key}
@@ -22300,6 +22307,16 @@ def _s1d_places_nearby(keyword, lat, lng, pagetoken, key, rankby="distance"):
         if keyword:
             params["keyword"] = keyword
     return _rq_nb.get(url, params=params, timeout=12).json()
+
+
+try:
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _s1d_places_nearby_cached(*args, **kwargs):
+        return _s1d_places_nearby(*args, **kwargs)
+except Exception:
+    def _s1d_places_nearby_cached(*args, **kwargs):
+        return _s1d_places_nearby(*args, **kwargs)
+
 
 def _s1d_place_details(pid: str, key: str):
     try:
@@ -23227,9 +23244,9 @@ def __p_s1d_ui(conn):
 
     def _fetch_page(tok=None):
         if lat is not None and lng is not None and _st.session_state["__p_s1d_q"]:
-            js = _s1d_places_nearby(_st.session_state["__p_s1d_q"], lat, lng, tok, key, rankby="distance")
+            js = _s1d_places_nearby_cached(_st.session_state["__p_s1d_q"], lat, lng, tok, key, rankby="distance")
         else:
-            js = _s1d_places_textsearch(_st.session_state["__p_s1d_q"], lat, lng, radius_m, tok, key)
+            js = _s1d_places_textsearch_cached(_st.session_state["__p_s1d_q"], lat, lng, radius_m, tok, key)
         return js
 
     if go:
@@ -23274,10 +23291,7 @@ def __p_s1d_ui(conn):
             website = ""
             gurl = f"https://www.google.com/maps/place/?q=place_id:{pid}"
             try:
-                import requests as _rqd2
-                det = _rqd2.get("https://maps.googleapis.com/maps/api/place/details/json",
-                                params={"place_id": pid, "fields": "formatted_phone_number,website,url", "key": key},
-                                timeout=10).json().get("result",{}) or {}
+                det = _s1d_place_details_cached(pid, key) or {}
                 phone_disp = det.get("formatted_phone_number","") or ""
                 digits = "".join([c for c in phone_disp if c.isdigit()])
                 if len(digits)==11 and digits.startswith("1"):
@@ -24882,7 +24896,7 @@ def jobs_tick_once(max_jobs: int = 1) -> None:
 
     Processes at most `max_jobs` queued jobs using the same handlers as jobs_worker_loop,
     but returns quickly so it is safe to call from the main app on each rerun.
-    """ 
+    """
     import traceback as _traceback
 
     try:
@@ -27014,15 +27028,10 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
     except Exception:
         return pd.DataFrame(columns=["id", "title", "status", "created_at"])
 def _ensure_phase3_schema_plus(conn):
-    """Wrapper around _ensure_phase3_schema that also ensures rfp_files.text column exists.
-
-    This keeps the original Phase 3 schema logic and only adds the minimal column
-    needed for parse-once text reuse.
-    """ 
+    """Wrapper around _ensure_phase3_schema that also ensures rfp_files.text column exists."""
     try:
         _ensure_phase3_schema_plus(conn)
     except Exception:
-        # If the base schema helper fails we still try to add the column best-effort.
         pass
     try:
         cur = conn.execute("PRAGMA table_info(rfp_files);")
@@ -27034,7 +27043,6 @@ def _ensure_phase3_schema_plus(conn):
             try:
                 conn.execute("ALTER TABLE rfp_files ADD COLUMN text TEXT;")
             except Exception:
-                # Some SQLite builds do not support ALTER in this way; ignore.
                 pass
     except Exception:
         pass
