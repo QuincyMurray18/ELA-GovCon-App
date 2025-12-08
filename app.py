@@ -305,7 +305,15 @@ def _ensure_selected_rfp_id(conn):
 
 # ---- UI style guide and helpers ----
 """
+Internal UI style guide (keep short and practical):
 
+- Page titles: use a single clear header at the top of each main page.
+- Section headings: use expanders or subheaders to group related controls.
+- Padding: leave a small visual gap between major blocks so content does not feel cramped.
+- Cards and tables: keep titles bold, supporting text in normal weight, and use captions for meta info.
+
+The helpers below are the preferred way to render new UI going forward.
+Older sections can be gradually updated to use them when you touch that area.
 """
 
 def render_page_title(text: str, subtitle: str | None = None) -> None:
@@ -10908,13 +10916,13 @@ def run_sam_watch(conn) -> None:
                                 # Hand off into RFP Analyzer with this notice as context
                                 st.session_state["current_rfp_id"] = int(rfp_id)
                                 st.session_state["rfp_selected_notice"] = notice
-                                st.session_state["nav_target"] = "RFP Workspace"
+                                st.session_state["nav_target"] = "RFP Analyzer"
                                 if linked:
                                     st.success(f"RFP #{rfp_id} ready. Linked {linked} attachment(s) from SAM.gov.")
                                 else:
                                     st.info(f"RFP #{rfp_id} ready. No attachments were linked from SAM.gov.")
                                 try:
-                                    router("RFP Workspace", conn); st.stop()
+                                    router("RFP Analyzer", conn); st.stop()
                                 except Exception:
                                     try:
                                         st.rerun()
@@ -10922,9 +10930,9 @@ def run_sam_watch(conn) -> None:
                                         st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                             else:
                                 # Could not create RFP; still try to route to Analyzer so user can work manually
-                                st.info("Opening RFP Workspace…")
+                                st.info("Opening RFP Analyzer…")
                                 try:
-                                    router("RFP Workspace", conn); st.stop()
+                                    router("RFP Analyzer", conn); st.stop()
                                 except Exception:
                                     try:
                                         st.rerun()
@@ -11279,31 +11287,6 @@ def run_top_vendors(conn: "sqlite3.Connection") -> None:
             "- Treat them as competitors to study and potential primes to team under.\n"
             "- Use Subcontractor Finder and Outreach to pull contact info and begin conversations."
         )
-
-
-
-def run_market_intel(conn: "sqlite3.Connection") -> None:
-    """Combined Market Intel hub wrapping Top Buyers and Top Vendors analytics."""
-    import streamlit as st
-
-    st.header("Market Intel")
-    st.caption(
-        "Use this hub to see which agencies are buying in your NAICS and which vendors are winning, "
-        "so you can target real buyers and smart teaming partners."
-    )
-
-    view = st.radio(
-        "Choose view",
-        ["Top Buyers", "Top Vendors"],
-        horizontal=True,
-        key="market_intel_view",
-    )
-    st.divider()
-
-    if view == "Top Buyers":
-        run_top_buyers(conn)
-    else:
-        run_top_vendors(conn)
 
 
 def run_research_tab(conn: "sqlite3.Connection") -> None:
@@ -13192,7 +13175,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                             )
                             n += 1
                     conn.commit()
-                    st.success(f"Imported {n} vendors")
+                    st.success(f"Imported {n} vendors"); st.rerun()
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
@@ -13280,7 +13263,7 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
                                 ),
                             )
                         conn.commit()
-                    st.success("Vendor saved")
+                    st.success("Vendor saved"); st.rerun()
                 except Exception as e:
                     st.error(f"Save failed: {e}")
 
@@ -14128,29 +14111,6 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     )
 
 # ---------- Win Probability (Phase E) ----------
-
-
-def run_pricing_and_quotes(conn: "sqlite3.Connection") -> None:
-    """Combined workspace for pricing calculator and quote comparison."""
-    import streamlit as st
-
-    st.header("Pricing and Quotes")
-    st.caption(
-        "Use this hub to build should-cost pricing and compare vendor quotes so you can stay competitive and profitable."
-    )
-
-    view = st.radio(
-        "Choose tool",
-        ["Pricing Calculator", "Quote Comparison"],
-        horizontal=True,
-        key="pricing_and_quotes_view",
-    )
-    st.divider()
-
-    if view == "Pricing Calculator":
-        _safe_route_call(globals().get("run_pricing_calculator"), conn)
-    else:
-        _safe_route_call(globals().get("run_quote_comparison"), conn)
 def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
     df = pd.read_sql_query(""" SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC; """, conn, params=(rfp_id,))
     if df.empty or our_total is None:
@@ -16220,9 +16180,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if _linked_rfp_id:
                     if st.button("Open in RFP Analyzer", key=f"deal_open_rfp_{int(sel_id)}"):
                         st.session_state["current_rfp_id"] = int(_linked_rfp_id)
-                        st.session_state["nav_target"] = "RFP Workspace"
+                        st.session_state["nav_target"] = "RFP Analyzer"
                         try:
-                            router("RFP Workspace", conn); st.stop()
+                            router("RFP Analyzer", conn); st.stop()
                         except Exception:
                             try:
                                 st.rerun()
@@ -18067,19 +18027,19 @@ def nav() -> str:
 
     # One-shot "force" flag (used when creating / ingesting RFPs, etc.)
     if st.session_state.pop('_force_rfp_analyzer', False):
-        default_page = 'RFP Workspace'
+        default_page = 'RFP Analyzer'
 
     # Keep user on RFP Analyzer while working with inline / new RFP uploads
     if st.session_state.get('op_inline_files'):
-        default_page = 'RFP Workspace'
+        default_page = 'RFP Analyzer'
     if st.session_state.get('op_new_files'):
-        default_page = 'RFP Workspace'
+        default_page = 'RFP Analyzer'
     if st.session_state.get('onepage_uploads'):
-        default_page = 'RFP Workspace'
+        default_page = 'RFP Analyzer'
 
     # Auto-jump when a SAM notice was pushed
     if st.session_state.pop('rfp_selected_notice', None):
-        default_page = 'RFP Workspace'
+        default_page = 'RFP Analyzer'
 
     # One-shot explicit nav target
     _tgt = st.session_state.pop("nav_target", None)
@@ -18096,30 +18056,47 @@ def nav() -> str:
 
     # Journeys and grouped pages
     journeys = [
-        ("Start and learn", [
+        ("Start here", [
             "Start here",
             "Help & Docs",
         ]),
-        ("Search and intel", [
+        ("SAM Watch", [
             "SAM Watch",
-            "Market Intel",
+            "Top Buyers",
+            "Top Vendors",
+        ]),
+        ("RFP Analyzer", [
+            "RFP Analyzer",
+            "L and M Checklist",
+            "File Manager",
+            "Past Performance",
+            "White Paper Builder",
+            "RFQ Pack",
+            "Fast RFQ",
+        ]),
+        ("Knowledge Hub", [
             "Knowledge Hub",
         ]),
-        ("RFP and proposal workspace", [
-            "RFP Workspace",
+        ("Deals and CRM", [
+            "Deals",
+            "Contacts",
+            "Quote Comparison",
+            "Pricing Calculator",
+            "Win Probability",
+        ]),
+        ("Proposal Builder", [
             "Proposal Builder",
-            "White Paper Builder",
-            "RFQ Tools",
             "Capability Statement",
         ]),
-        ("Deals, pricing, outreach, subs", [
-            "Deals",
-            "Pricing and Quotes",
+        ("Outreach", [
             "Outreach",
+        ]),
+        ("Subcontractor Finder", [
             "Subcontractor Finder",
         ]),
-        ("Admin and assistant", [
-            "Ops and Maintenance",
+        ("Settings and Admin", [
+            "Backup & Data",
+            "My Jobs",
             "Chat Assistant",
         ]),
     ]
@@ -19003,9 +18980,9 @@ def _global_search_nav_to(conn: "sqlite3.Connection", ref_type: str, ref_id: str
 
     if ref_type == "rfp":
         st.session_state["current_rfp_id"] = rid
-        st.session_state["nav_target"] = "RFP Workspace"
+        st.session_state["nav_target"] = "RFP Analyzer"
         try:
-            router("RFP Workspace", conn)
+            router("RFP Analyzer", conn)
             st.stop()
         except Exception:
             st.rerun()
@@ -19302,61 +19279,6 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
     # Hooks
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
-
-
-
-def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
-    """Combined workspace for RFP analysis and capture tools."""
-    import streamlit as st
-
-    st.header("RFP and Proposal Workspace")
-    st.caption(
-        "Work the full RFP lifecycle in one place: analyze the notice, build your capture file, "
-        "track past performance, and stay organized."
-    )
-
-    view = st.radio(
-        "Choose RFP tool",
-        ["RFP Analyzer", "L/M Checklist", "File Manager", "Past Performance"],
-        horizontal=True,
-        key="rfp_workspace_view",
-    )
-    st.divider()
-
-    if view == "RFP Analyzer":
-        _safe_route_call(globals().get("run_rfp_analyzer"), conn)
-    elif view == "L/M Checklist":
-        # Prefer the streamlined checklist handler, with a fallback.
-        fn = globals().get("run_lm_checklist") or globals().get("run_l_and_m_checklist")
-        _safe_route_call(fn, conn)
-    elif view == "File Manager":
-        _safe_route_call(globals().get("run_file_manager"), conn)
-    elif view == "Past Performance":
-        _safe_route_call(globals().get("run_past_performance"), conn)
-
-
-def run_rfq_tools(conn: "sqlite3.Connection") -> None:
-    """Wrapper hub for RFQ tools."""
-    import streamlit as st
-
-    st.header("RFQ Tools")
-    st.caption(
-        "Generate fast, accurate RFQ responses and packs without leaving the workspace."
-    )
-
-    view = st.radio(
-        "Choose RFQ tool",
-        ["RFQ Pack", "Fast RFQ"],
-        horizontal=True,
-        key="rfq_tools_view",
-    )
-    st.divider()
-
-    if view == "RFQ Pack":
-        _safe_route_call(globals().get("run_rfq_pack"), conn)
-    else:
-        _safe_route_call(globals().get("run_fast_rfq"), conn)
-
 
 def run_start_here(conn: "sqlite3.Connection") -> None:
     """Guided onboarding for new users."""
@@ -22525,12 +22447,12 @@ def _s1d_render_from_cache(conn, df):
             if st.button("Save selected", key="s1d_save_selected_cache") and new_sel:
                 sub = keep[keep["row_id"].isin(list(new_sel))].drop(columns=["row_id"], errors="ignore")
                 n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
-                st.success(f"Saved {n} vendors")
+                st.success(f"Saved {n} vendors"); st.rerun()
         with c2:
             if st.button("Save all new vendors", key="s1d_save_all_cache"):
                 sub = keep.drop(columns=["row_id"], errors="ignore")
                 n = _s1d_save_new_vendors(conn, sub.to_dict("records"))
-                st.success(f"Saved {n} vendors")
+                st.success(f"Saved {n} vendors"); st.rerun()
         with c3:
             if st.button("New search", key="s1d_new_search"):
                 st.session_state.pop("s1d_df", None)
@@ -22786,7 +22708,7 @@ def render_subfinder_s1d(conn):
         st.caption(f"{len(keep)} new vendors can be saved")
         if st.button("Save all new vendors", key="s1d_save_all") and not keep.empty:
             n = _s1d_save_new_vendors(conn, keep.to_dict("records"))
-            st.success(f"Saved {n} vendors")
+            st.success(f"Saved {n} vendors"); st.rerun()
     with c2:
         if st.session_state.get("s1d_next_token"):
             if st.button("Next page ▶", key="s1d_next_under"):
@@ -25131,29 +25053,6 @@ def run_my_jobs(conn: "sqlite3.Connection") -> None:
 
 
 # --- Proposal Template Library UI (lifted earlier to avoid NameError) ---
-def run_ops_and_maintenance(conn: "sqlite3.Connection") -> None:
-    """Combined workspace for ops, backups, and background jobs."""
-    import streamlit as st
-
-    st.header("Ops and Maintenance")
-    st.caption(
-        "Manage backups, migrations, exports, and background jobs for this workspace."
-    )
-
-    view = st.radio(
-        "Choose tool",
-        ["Backup & Data", "My Jobs"],
-        horizontal=True,
-        key="ops_and_maintenance_view",
-    )
-    st.divider()
-
-    if view == "Backup & Data":
-        _safe_route_call(globals().get("run_backup_and_data"), conn)
-    else:
-        _safe_route_call(globals().get("run_my_jobs"), conn)
-
-
 def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
     """Basic Proposal Template Library management UI.
 
@@ -27147,3 +27046,4 @@ def _ensure_phase3_schema_plus(conn):
                 pass
     except Exception:
         pass
+
