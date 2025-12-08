@@ -10916,13 +10916,13 @@ def run_sam_watch(conn) -> None:
                                 # Hand off into RFP Analyzer with this notice as context
                                 st.session_state["current_rfp_id"] = int(rfp_id)
                                 st.session_state["rfp_selected_notice"] = notice
-                                st.session_state["nav_target"] = "RFP Analyzer"
+                                st.session_state["nav_target"] = "RFP Workspace"
                                 if linked:
                                     st.success(f"RFP #{rfp_id} ready. Linked {linked} attachment(s) from SAM.gov.")
                                 else:
                                     st.info(f"RFP #{rfp_id} ready. No attachments were linked from SAM.gov.")
                                 try:
-                                    router("RFP Analyzer", conn); st.stop()
+                                    router("RFP Workspace", conn); st.stop()
                                 except Exception:
                                     try:
                                         st.rerun()
@@ -10930,9 +10930,9 @@ def run_sam_watch(conn) -> None:
                                         st.success("Sent to RFP Analyzer. Switch to that tab to continue.")
                             else:
                                 # Could not create RFP; still try to route to Analyzer so user can work manually
-                                st.info("Opening RFP Analyzer…")
+                                st.info("Opening RFP Workspace…")
                                 try:
-                                    router("RFP Analyzer", conn); st.stop()
+                                    router("RFP Workspace", conn); st.stop()
                                 except Exception:
                                     try:
                                         st.rerun()
@@ -16205,9 +16205,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if _linked_rfp_id:
                     if st.button("Open in RFP Analyzer", key=f"deal_open_rfp_{int(sel_id)}"):
                         st.session_state["current_rfp_id"] = int(_linked_rfp_id)
-                        st.session_state["nav_target"] = "RFP Analyzer"
+                        st.session_state["nav_target"] = "RFP Workspace"
                         try:
-                            router("RFP Analyzer", conn); st.stop()
+                            router("RFP Workspace", conn); st.stop()
                         except Exception:
                             try:
                                 st.rerun()
@@ -18052,19 +18052,19 @@ def nav() -> str:
 
     # One-shot "force" flag (used when creating / ingesting RFPs, etc.)
     if st.session_state.pop('_force_rfp_analyzer', False):
-        default_page = 'RFP Analyzer'
+        default_page = 'RFP Workspace'
 
     # Keep user on RFP Analyzer while working with inline / new RFP uploads
     if st.session_state.get('op_inline_files'):
-        default_page = 'RFP Analyzer'
+        default_page = 'RFP Workspace'
     if st.session_state.get('op_new_files'):
-        default_page = 'RFP Analyzer'
+        default_page = 'RFP Workspace'
     if st.session_state.get('onepage_uploads'):
-        default_page = 'RFP Analyzer'
+        default_page = 'RFP Workspace'
 
     # Auto-jump when a SAM notice was pushed
     if st.session_state.pop('rfp_selected_notice', None):
-        default_page = 'RFP Analyzer'
+        default_page = 'RFP Workspace'
 
     # One-shot explicit nav target
     _tgt = st.session_state.pop("nav_target", None)
@@ -18090,13 +18090,11 @@ def nav() -> str:
             "Market Intel",
             "Knowledge Hub",
         ]),
-        ("RFP Analyzer", [
-            "RFP Analyzer",
-            "L and M Checklist",
-            "File Manager",
-            "Past Performance",
-            "White Paper Builder",
+        ("RFP and proposal workspace", [
+            "RFP Workspace",
             "Proposal Builder",
+            "White Paper Builder",
+            "RFQ Tools",
             "Capability Statement",
         ]),
         ("Outreach", [
@@ -18991,9 +18989,9 @@ def _global_search_nav_to(conn: "sqlite3.Connection", ref_type: str, ref_id: str
 
     if ref_type == "rfp":
         st.session_state["current_rfp_id"] = rid
-        st.session_state["nav_target"] = "RFP Analyzer"
+        st.session_state["nav_target"] = "RFP Workspace"
         try:
-            router("RFP Analyzer", conn)
+            router("RFP Workspace", conn)
             st.stop()
         except Exception:
             st.rerun()
@@ -19290,6 +19288,61 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
     # Hooks
     if (page or "").strip() == "Proposal Builder":
         _safe_route_call(globals().get("pb_phase_v_section_library", lambda _c: None), conn)
+
+
+
+def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
+    """Combined workspace for RFP analysis and capture tools."""
+    import streamlit as st
+
+    st.header("RFP and Proposal Workspace")
+    st.caption(
+        "Work the full RFP lifecycle in one place: analyze the notice, build your capture file, "
+        "track past performance, and stay organized."
+    )
+
+    view = st.radio(
+        "Choose RFP tool",
+        ["RFP Analyzer", "L/M Checklist", "File Manager", "Past Performance"],
+        horizontal=True,
+        key="rfp_workspace_view",
+    )
+    st.divider()
+
+    if view == "RFP Analyzer":
+        _safe_route_call(globals().get("run_rfp_analyzer"), conn)
+    elif view == "L/M Checklist":
+        # Prefer the streamlined checklist handler, with a fallback.
+        fn = globals().get("run_lm_checklist") or globals().get("run_l_and_m_checklist")
+        _safe_route_call(fn, conn)
+    elif view == "File Manager":
+        _safe_route_call(globals().get("run_file_manager"), conn)
+    elif view == "Past Performance":
+        _safe_route_call(globals().get("run_past_performance"), conn)
+
+
+def run_rfq_tools(conn: "sqlite3.Connection") -> None:
+    """Wrapper hub for RFQ tools."""
+    import streamlit as st
+
+    st.header("RFQ Tools")
+    st.caption(
+        "Generate fast, accurate RFQ responses and packs without leaving the workspace."
+    )
+
+    view = st.radio(
+        "Choose RFQ tool",
+        ["RFQ Pack", "Fast RFQ"],
+        horizontal=True,
+        key="rfq_tools_view",
+    )
+    st.divider()
+
+    if view == "RFQ Pack":
+        _safe_route_call(globals().get("run_rfq_pack"), conn)
+    else:
+        _safe_route_call(globals().get("run_fast_rfq"), conn)
+
 
 def run_start_here(conn: "sqlite3.Connection") -> None:
     """Guided onboarding for new users."""
