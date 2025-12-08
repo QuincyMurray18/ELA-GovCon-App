@@ -18071,7 +18071,6 @@ def nav() -> str:
             "File Manager",
             "Past Performance",
             "White Paper Builder",
-...
             "Proposal Builder",
             "Capability Statement",
         ]),
@@ -27033,4 +27032,3 @@ def _ensure_phase3_schema_plus(conn):
                 pass
     except Exception:
         pass
-
