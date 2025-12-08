@@ -18056,14 +18056,14 @@ def nav() -> str:
 
     # Journeys and grouped pages
     journeys = [
-        ("Start here", [
+        ("Start and learn", [
             "Start here",
             "Help & Docs",
         ]),
-        ("SAM Watch", [
+        ("Search and intel", [
             "SAM Watch",
-            "Top Buyers",
-            "Top Vendors",
+            "Market Intel",
+            "Knowledge Hub",
         ]),
         ("RFP Analyzer", [
             "RFP Analyzer",
@@ -18071,20 +18071,7 @@ def nav() -> str:
             "File Manager",
             "Past Performance",
             "White Paper Builder",
-            "RFQ Pack",
-            "Fast RFQ",
-        ]),
-        ("Knowledge Hub", [
-            "Knowledge Hub",
-        ]),
-        ("Deals and CRM", [
-            "Deals",
-            "Contacts",
-            "Quote Comparison",
-            "Pricing Calculator",
-            "Win Probability",
-        ]),
-        ("Proposal Builder", [
+...
             "Proposal Builder",
             "Capability Statement",
         ]),
