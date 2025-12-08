@@ -305,15 +305,7 @@ def _ensure_selected_rfp_id(conn):
 
 # ---- UI style guide and helpers ----
 """
-Internal UI style guide (keep short and practical):
 
-- Page titles: use a single clear header at the top of each main page.
-- Section headings: use expanders or subheaders to group related controls.
-- Padding: leave a small visual gap between major blocks so content does not feel cramped.
-- Cards and tables: keep titles bold, supporting text in normal weight, and use captions for meta info.
-
-The helpers below are the preferred way to render new UI going forward.
-Older sections can be gradually updated to use them when you touch that area.
 """
 
 def render_page_title(text: str, subtitle: str | None = None) -> None:
