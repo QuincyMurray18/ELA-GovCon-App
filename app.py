@@ -14136,6 +14136,29 @@ def run_pricing_calculator(conn: "sqlite3.Connection") -> None:
     )
 
 # ---------- Win Probability (Phase E) ----------
+
+
+def run_pricing_and_quotes(conn: "sqlite3.Connection") -> None:
+    """Combined workspace for pricing calculator and quote comparison."""
+    import streamlit as st
+
+    st.header("Pricing and Quotes")
+    st.caption(
+        "Use this hub to build should-cost pricing and compare vendor quotes so you can stay competitive and profitable."
+    )
+
+    view = st.radio(
+        "Choose tool",
+        ["Pricing Calculator", "Quote Comparison"],
+        horizontal=True,
+        key="pricing_and_quotes_view",
+    )
+    st.divider()
+
+    if view == "Pricing Calculator":
+        _safe_route_call(globals().get("run_pricing_calculator"), conn)
+    else:
+        _safe_route_call(globals().get("run_quote_comparison"), conn)
 def _price_competitiveness(conn: "sqlite3.Connection", rfp_id: int, our_total: Optional[float]) -> Optional[float]:
     df = pd.read_sql_query(""" SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC; """, conn, params=(rfp_id,))
     if df.empty or our_total is None:
@@ -18097,10 +18120,10 @@ def nav() -> str:
             "RFQ Tools",
             "Capability Statement",
         ]),
-        ("Outreach", [
+        ("Deals, pricing, outreach, subs", [
+            "Deals",
+            "Pricing and Quotes",
             "Outreach",
-        ]),
-        ("Subcontractor Finder", [
             "Subcontractor Finder",
         ]),
         ("Settings and Admin", [
