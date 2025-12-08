@@ -19462,7 +19462,67 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             st.write(days_text)
             st.caption(f"Status: {status_label}")
 
+    
     st.markdown("---")
+
+    # Summary section (main analysis)
+    with st.expander("Summary (AI overview)", expanded=True):
+        # Pull key meta fields for this RFP
+        scope_candidates = []
+        try:
+            for _k in ["scope_summary", "scope", "summary", "synopsis"]:
+                _v = _p3_rfp_meta_get(conn, rfp_id, _k, "")
+                if _v and _v not in scope_candidates:
+                    scope_candidates.append(_v)
+        except Exception:
+            pass
+        scope_text = ""
+        for _v in scope_candidates:
+            _t = str(_v).strip()
+            if _t:
+                scope_text = _t
+                break
+
+        naics = _p3_rfp_meta_get(conn, rfp_id, "naics", "")
+        set_aside = _p3_rfp_meta_get(conn, rfp_id, "set_aside", "")
+        place = _p3_rfp_meta_get(conn, rfp_id, "place_of_performance", "")
+        pop_label = _p3_rfp_meta_get(conn, rfp_id, "pop_structure", "")
+        ordering_years = _p3_rfp_meta_get(conn, rfp_id, "ordering_period_years", "")
+        base_months = _p3_rfp_meta_get(conn, rfp_id, "base_months", "")
+
+        pop_bits = []
+        if pop_label:
+            pop_bits.append(str(pop_label))
+        if ordering_years:
+            try:
+                _oy = int(str(ordering_years))
+                if _oy > 0:
+                    pop_bits.append(f"~{_oy} year ordering period")
+            except Exception:
+                pop_bits.append(str(ordering_years))
+        if base_months:
+            try:
+                _bm = int(str(base_months))
+                if _bm > 0:
+                    pop_bits.append(f"Base period ~{_bm} months")
+            except Exception:
+                pass
+        pop_text = " | ".join(pop_bits)
+
+        if scope_text or naics or set_aside or place or pop_text:
+            if scope_text:
+                st.markdown(f"**Scope:** {scope_text}")
+            else:
+                st.markdown("**Scope:** Not captured yet. Run the RFP Analyzer or update the summary in your notes.")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"**NAICS:** {naics or 'Not captured'}")
+                st.markdown(f"**Set-aside:** {set_aside or 'Not captured'}")
+            with c2:
+                st.markdown(f"**Place of performance:** {place or 'Not captured'}")
+                st.markdown(f"**Base + option years:** {pop_text or 'Not captured'}")
+        else:
+            st.info("Summary will appear here after you run the RFP Analyzer and AI parse for this RFP.")
 
     view = st.radio(
         "Choose RFP tool",
