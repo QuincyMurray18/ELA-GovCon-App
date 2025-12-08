@@ -19699,9 +19699,180 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
                         )
 
     with col_side:
-        # Reserved for future: risk cards, attachments, past performance tiles, etc.
-        # Keeping this minimal now to avoid clutter.
-        st.caption("Right column: reserved for risk indicators, files, and progress views.")
+        # --- Key details card ---
+        st.subheader("Key details")
+        # NAICS and set-aside
+        try:
+            naics_k = (
+                _p3_rfp_meta_get(conn, int(rfp_id), "naics", "")
+                or _p3_rfp_meta_get(conn, int(rfp_id), "primary_naics", "")
+            )
+        except Exception:
+            naics_k = ""
+        try:
+            psc_k = (
+                _p3_rfp_meta_get(conn, int(rfp_id), "psc", "")
+                or _p3_rfp_meta_get(conn, int(rfp_id), "psc_code", "")
+            )
+        except Exception:
+            psc_k = ""
+        try:
+            set_aside_k = (
+                _p3_rfp_meta_get(conn, int(rfp_id), "set_aside", "")
+                or _p3_rfp_meta_get(conn, int(rfp_id), "setaside", "")
+            )
+        except Exception:
+            set_aside_k = ""
+        # Estimated value from meta or deals / notices
+        est_value = _p3_rfp_meta_get(conn, int(rfp_id), "estimated_value", "")
+        try:
+            if not est_value:
+                try:
+                    df_deal_k = safe_read_sql(
+                        conn,
+                        "SELECT value FROM deals WHERE rfp_id=? ORDER BY id LIMIT 1;",
+                        (int(rfp_id),),
+                    )
+                except Exception:
+                    df_deal_k = None
+                if df_deal_k is not None and not df_deal_k.empty:
+                    v = df_deal_k.iloc[0].get("value")
+                    if v not in (None, ""):
+                        try:
+                            est_value = f"${float(v):,.0f}"
+                        except Exception:
+                            est_value = str(v)
+        except Exception:
+            pass
+        # Competition type
+        competition_k = (
+            _p3_rfp_meta_get(conn, int(rfp_id), "competition_type", "")
+            or _p3_rfp_meta_get(conn, int(rfp_id), "type_of_competition", "")
+            or _p3_rfp_meta_get(conn, int(rfp_id), "competition", "")
+        )
+        # Known incumbent from meta or notices
+        incumbent_k = _p3_rfp_meta_get(conn, int(rfp_id), "incumbent", "")
+        if not incumbent_k:
+            try:
+                nid_k = _p3_rfp_meta_get(conn, int(rfp_id), "notice_id", "")
+                if nid_k:
+                    df_n = safe_read_sql(
+                        conn,
+                        "SELECT awardee, award_amount FROM notices WHERE notice_id=? LIMIT 1;",
+                        (nid_k,),
+                    )
+                    if df_n is not None and not df_n.empty:
+                        incumbent_k = str(df_n.iloc[0].get("awardee") or "")
+                        if not est_value:
+                            v2 = df_n.iloc[0].get("award_amount")
+                            if v2 not in (None, ""):
+                                try:
+                                    est_value = f"${float(v2):,.0f}"
+                                except Exception:
+                                    est_value = str(v2)
+            except Exception:
+                pass
+        # Origin (SAM Watch vs manual)
+        origin_k = _p3_rfp_meta_get(conn, int(rfp_id), "origin", "")
+        if not origin_k:
+            nid = _p3_rfp_meta_get(conn, int(rfp_id), "notice_id", "")
+            if nid:
+                origin_k = "SAM Watch"
+            else:
+                try:
+                    df_rf2 = safe_read_sql(
+                        conn, "SELECT sam_url FROM rfps WHERE id=? LIMIT 1;", (int(rfp_id),)
+                    )
+                except Exception:
+                    df_rf2 = None
+                if df_rf2 is not None and not df_rf2.empty and str(df_rf2.iloc[0].get("sam_url") or "").strip():
+                    origin_k = "SAM Watch"
+                else:
+                    origin_k = "Manual upload"
+        # Render compact key details card
+        with st.container():
+            st.caption("NAICS")
+            st.write(naics_k or "Not captured")
+            st.caption("PSC")
+            st.write(psc_k or "Not captured")
+            st.caption("Estimated value")
+            st.write(est_value or "Not captured")
+            st.caption("Set-aside")
+            st.write(set_aside_k or "Not captured")
+            st.caption("Competition type")
+            st.write(competition_k or "Not captured")
+            st.caption("Known incumbent")
+            st.write(incumbent_k or "Not known")
+            st.caption("Origin")
+            st.write(origin_k or "Not set")
+
+        st.markdown("")
+        # --- Files and AI attachments ---
+        st.subheader("Files and AI attachments")
+        # Snapshot of local RFP files
+        files_df = None
+        try:
+            import pandas as _pd2  # local alias to avoid confusion
+        except Exception:
+            _pd2 = None
+        if _pd2 is not None:
+            try:
+                files_df = _pd2.__p_read_sql_query(
+                    "SELECT id, filename, kind FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                    conn,
+                    params=(int(rfp_id),),
+                )
+            except Exception:
+                try:
+                    files_df = _pd2.__p_read_sql_query(
+                        "SELECT id, filename FROM rfp_files WHERE rfp_id=? ORDER BY id;",
+                        conn,
+                        params=(int(rfp_id),),
+                    )
+                except Exception:
+                    files_df = None
+        if files_df is None or files_df.empty:
+            st.caption("No local RFP files have been stored yet for this RFP.")
+        else:
+            df_view = files_df.copy()
+            if "kind" not in df_view.columns:
+                df_view["kind"] = ""
+            def _classify_file(row):
+                k = str(row.get("kind") or "").lower()
+                name = str(row.get("filename") or "").lower()
+                if "amend" in k or "amend" in name:
+                    return "Amendment"
+                if "q&a" in name or "qa" in name or "questions" in name:
+                    return "Q&A"
+                if "form" in k or "form" in name or name.startswith("sf"):
+                    return "Form"
+                if "rfp" in k or "solicitation" in name:
+                    return "RFP main"
+                return "Attachment"
+            try:
+                df_view["Category"] = df_view.apply(_classify_file, axis=1)
+            except Exception:
+                df_view["Category"] = "Attachment"
+            cols_v = [c for c in ["Category", "filename"] if c in df_view.columns]
+            if cols_v:
+                try:
+                    st.dataframe(
+                        df_view[cols_v].rename(columns={"filename": "File"}),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=220,
+                    )
+                except Exception:
+                    st.table(df_view[cols_v].rename(columns={"filename": "File"}))
+            else:
+                st.caption("Files are stored but could not be listed in a compact table.")
+
+        # Detailed AI attachments panel (same as used in Proposal Builder)
+        try:
+            with st.expander("AI attachments (detailed)", expanded=False):
+                render_ai_attachments_panel(conn, int(rfp_id))
+        except Exception:
+            st.caption("AI attachments panel is unavailable for this RFP.")
 
     st.markdown("---")
 
