@@ -11289,6 +11289,31 @@ def run_top_vendors(conn: "sqlite3.Connection") -> None:
         )
 
 
+
+def run_market_intel(conn: "sqlite3.Connection") -> None:
+    """Combined Market Intel hub wrapping Top Buyers and Top Vendors analytics."""
+    import streamlit as st
+
+    st.header("Market Intel")
+    st.caption(
+        "Use this hub to see which agencies are buying in your NAICS and which vendors are winning, "
+        "so you can target real buyers and smart teaming partners."
+    )
+
+    view = st.radio(
+        "Choose view",
+        ["Top Buyers", "Top Vendors"],
+        horizontal=True,
+        key="market_intel_view",
+    )
+    st.divider()
+
+    if view == "Top Buyers":
+        run_top_buyers(conn)
+    else:
+        run_top_vendors(conn)
+
+
 def run_research_tab(conn: "sqlite3.Connection") -> None:
     st.header("Research (FAR/DFARS/Wage/NAICS)")
     url = st.text_input("URL", placeholder="https://www.acquisition.gov/")
