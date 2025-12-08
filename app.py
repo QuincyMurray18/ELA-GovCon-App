@@ -18105,18 +18105,18 @@ def nav() -> str:
             "Market Intel",
             "Knowledge Hub",
         ]),
+        ("Deals, pricing, outreach, subs", [
+            "Deals",
+            "Pricing and Quotes",
+            "Outreach",
+            "Subcontractor Finder",
+        ]),
         ("RFP and proposal workspace", [
             "RFP Workspace",
             "Proposal Builder",
             "White Paper Builder",
             "RFQ Tools",
             "Capability Statement",
-        ]),
-        ("Deals, pricing, outreach, subs", [
-            "Deals",
-            "Pricing and Quotes",
-            "Outreach",
-            "Subcontractor Finder",
         ]),
         ("Admin and assistant", [
             "Ops and Maintenance",
