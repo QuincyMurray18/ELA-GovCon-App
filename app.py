@@ -18105,18 +18105,18 @@ def nav() -> str:
             "Market Intel",
             "Knowledge Hub",
         ]),
-        ("Deals, pricing, outreach, subs", [
-            "Deals",
-            "Pricing and Quotes",
-            "Outreach",
-            "Subcontractor Finder",
-        ]),
         ("RFP and proposal workspace", [
             "RFP Workspace",
             "Proposal Builder",
             "White Paper Builder",
             "RFQ Tools",
             "Capability Statement",
+        ]),
+        ("Deals, pricing, outreach, subs", [
+            "Deals",
+            "Pricing and Quotes",
+            "Outreach",
+            "Subcontractor Finder",
         ]),
         ("Admin and assistant", [
             "Ops and Maintenance",
@@ -19309,11 +19309,160 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
     """Combined workspace for RFP analysis and capture tools."""
     import streamlit as st
 
-    st.header("RFP and Proposal Workspace")
-    st.caption(
-        "Work the full RFP lifecycle in one place: analyze the notice, build your capture file, "
-        "track past performance, and stay organized."
+
+    from datetime import datetime
+    import math
+
+    # Title and subtitle for the workspace
+    try:
+        render_page_title(
+            "RFP Workspace",
+            "Select a saved RFP and see its key details, then drill into analysis, checklists, files, and past performance.",
+        )
+    except Exception:
+        st.header("RFP Workspace")
+        st.caption(
+            "Select a saved RFP and see its key details, then drill into analysis, checklists, files, and past performance.",
+        )
+
+    # Load list of saved RFPs
+    try:
+        df_rf = safe_read_sql(
+            conn,
+            "SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;",
+            (),
+        )
+    except Exception as e:
+        st.error(f"Failed to load RFPs: {e}")
+        return
+
+    if df_rf is None or df_rf.empty:
+        st.info("No saved RFPs yet. Use the RFP Analyzer to ingest an RFP and create a workspace.")
+        return
+
+    # Resolve default RFP id (from session/helper, otherwise latest)
+    current_id = None
+    try:
+        current_id = _ensure_selected_rfp_id(conn)
+    except Exception:
+        current_id = None
+
+    if current_id and int(current_id) in df_rf["id"].tolist():
+        default_index = int(df_rf.index[df_rf["id"] == int(current_id)][0])
+    else:
+        default_index = 0
+
+    rfp_id = st.selectbox(
+        "Working RFP",
+        options=df_rf["id"].tolist(),
+        index=default_index,
+        format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id'] == rid, 'title'].values[0] or 'Untitled'}",
+        key="rfp_workspace_rfp_id",
     )
+    try:
+        rfp_id = int(rfp_id)
+    except Exception:
+        rfp_id = int(df_rf["id"].tolist()[0])
+
+    # Keep selected RFP in session/global for downstream tools
+    st.session_state["current_rfp_id"] = rfp_id
+    try:
+        globals()["selected_rfp_id"] = rfp_id
+    except Exception:
+        pass
+
+    # Build header data
+    title = f"RFP #{rfp_id}"
+    solnum = ""
+    buyer = ""
+    rfp_type = ""
+    due_label = ""
+    days_text = "Not set"
+    status_label = "No due date"
+
+    # Fetch basic header row if available
+    try:
+        df_hdr = safe_read_sql(conn, "SELECT * FROM rfps_t WHERE id=?;", (rfp_id,))
+        if df_hdr is not None and not df_hdr.empty:
+            row = df_hdr.iloc[0].to_dict()
+            title = (row.get("title") or "").strip() or title
+            solnum = (row.get("solnum") or "").strip()
+    except Exception:
+        df_hdr = None
+
+    # Meta: buyer / agency
+    try:
+        buyer = (
+            _p3_rfp_meta_get(conn, rfp_id, "agency", "")
+            or _p3_rfp_meta_get(conn, rfp_id, "buyer", "")
+            or _p3_rfp_meta_get(conn, rfp_id, "agency_path", "")
+        )
+    except Exception:
+        buyer = ""
+
+    # Meta: notice type (RFP/RFQ/IFB/etc.)
+    try:
+        rfp_type = (
+            _p3_rfp_meta_get(conn, rfp_id, "notice_type", "")
+            or _p3_rfp_meta_get(conn, rfp_id, "type", "")
+            or _p3_rfp_meta_get(conn, rfp_id, "category", "")
+        )
+    except Exception:
+        rfp_type = ""
+
+    # Due date and days remaining
+    raw_due = None
+    dt_due = None
+    try:
+        raw_due = _p3_due_date_for_rfp(conn, rfp_id)
+    except Exception:
+        raw_due = None
+
+    if raw_due:
+        try:
+            dt_due = _parse_dt_guess(str(raw_due))
+        except Exception:
+            dt_due = None
+
+    if dt_due:
+        due_label = dt_due.strftime("%b %d, %Y %I:%M %p")
+        now = datetime.utcnow()
+        delta_days = (dt_due - now).total_seconds() / 86400.0
+        days_int = math.floor(delta_days) if delta_days >= 0 else math.ceil(delta_days)
+        days_text = f"{days_int} day" + ("" if abs(days_int) == 1 else "s")
+        if delta_days < -0.01:
+            status_label = "Past due"
+        elif delta_days <= 1:
+            status_label = "Last minute"
+        elif delta_days <= 5:
+            status_label = "Tight window"
+        else:
+            status_label = "On track"
+    elif raw_due:
+        due_label = str(raw_due)
+        status_label = "Due date not parsed"
+
+    # Header layout
+    header = st.container()
+    with header:
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+        with c1:
+            st.subheader(title)
+            st.caption(f"Solicitation: {solnum or 'Not set'}")
+            if buyer:
+                st.caption(buyer)
+        with c2:
+            st.caption("Type")
+            st.write(rfp_type or "Not captured")
+        with c3:
+            st.caption("Due date and time")
+            st.write(due_label or "Not set")
+        with c4:
+            st.caption("Days remaining")
+            st.write(days_text)
+            st.caption(f"Status: {status_label}")
+
+    st.markdown("---")
 
     view = st.radio(
         "Choose RFP tool",
