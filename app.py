@@ -18126,9 +18126,8 @@ def nav() -> str:
             "Outreach",
             "Subcontractor Finder",
         ]),
-        ("Settings and Admin", [
-            "Backup & Data",
-            "My Jobs",
+        ("Admin and assistant", [
+            "Ops and Maintenance",
             "Chat Assistant",
         ]),
     ]
@@ -25140,6 +25139,29 @@ def run_my_jobs(conn: "sqlite3.Connection") -> None:
 
 
 # --- Proposal Template Library UI (lifted earlier to avoid NameError) ---
+def run_ops_and_maintenance(conn: "sqlite3.Connection") -> None:
+    """Combined workspace for ops, backups, and background jobs."""
+    import streamlit as st
+
+    st.header("Ops and Maintenance")
+    st.caption(
+        "Manage backups, migrations, exports, and background jobs for this workspace."
+    )
+
+    view = st.radio(
+        "Choose tool",
+        ["Backup & Data", "My Jobs"],
+        horizontal=True,
+        key="ops_and_maintenance_view",
+    )
+    st.divider()
+
+    if view == "Backup & Data":
+        _safe_route_call(globals().get("run_backup_and_data"), conn)
+    else:
+        _safe_route_call(globals().get("run_my_jobs"), conn)
+
+
 def x7_template_library_ui(conn: "sqlite3.Connection") -> None:
     """Basic Proposal Template Library management UI.
 
