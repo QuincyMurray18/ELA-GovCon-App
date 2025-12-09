@@ -16309,14 +16309,19 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 comp_cols[0].metric("Must items", f"{must_count}")
                                 comp_cols[1].metric("Total requirements", f"{open_items}")
                                 comp_cols[2].metric("Red flags", f"{red_flags}")
-                                if _rfp_id:
-                                    if st.button("Open RFP Workspace", key="detail_open_rfp_ws"):
+                                if st.button("Open RFP Workspace", key="detail_open_rfp_ws"):
+                                    if _rfp_id:
                                         try:
                                             st.session_state["current_rfp_id"] = _rfp_id
                                         except Exception:
                                             pass
-                                        st.session_state["nav_target"] = "RFP Workspace"
-                                        st.rerun()
+                                        try:
+                                            router("RFP Workspace", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
+                                    else:
+                                        st.warning("No RFP linked to this deal yet.")
 
                                 # Subs panel
                                 st.markdown("#### Subs and coverage")
@@ -16363,8 +16368,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                                         pass
                                         except Exception:
                                             pass
-                                        st.session_state["nav_target"] = "Subcontractor Finder"
-                                        st.rerun()
+                                        try:
+                                            router("Subcontractor Finder", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
                                     if st.button("Open RFQ tools", key="detail_open_rfq"):
                                         try:
                                             st.session_state["rfq_default_deal_id"] = _detail_id
@@ -16376,8 +16384,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                                 st.session_state["rfq_default_rfp_id"] = _rfp_id
                                             except Exception:
                                                 pass
-                                        st.session_state["nav_target"] = "RFQ Tools"
-                                        st.rerun()
+                                        try:
+                                            router("RFQ Tools", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
 
                                 # Pricing panel
                                 st.markdown("#### Pricing")
@@ -16482,8 +16493,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                                 st.session_state["current_rfp_id"] = _rfp_id
                                             except Exception:
                                                 pass
-                                        st.session_state["nav_target"] = "Outreach"
-                                        st.rerun()
+                                        try:
+                                            router("Outreach", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
 
                                 # Contacts and notes
                                 st.markdown("#### Contacts and notes")
