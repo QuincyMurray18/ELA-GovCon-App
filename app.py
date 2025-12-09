@@ -19070,8 +19070,7 @@ def run_rfp_analyzer(conn) -> None:
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_create_ingest"):
             try:
-                uploads_new = st.session_state.get('op_new_files') or ups
-                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, uploads_new)
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
                 ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
                 st.session_state['current_rfp_id'] = int(new_id)
                 st.rerun()
@@ -19085,24 +19084,45 @@ def run_rfp_analyzer(conn) -> None:
     st.markdown("**Steps:** 1) Select or create RFP  ›  2) Upload RFP files  ›  3) Run analysis  ›  4) Jump into Proposal Builder.")
 
     # New RFP inline form (always available)
+
     with st.expander("➕ Start a new RFP", expanded=False):
         ctx0 = st.session_state.get("rfp_selected_notice") or {}
-        t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title_main")
-        s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol_main")
-        u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam_main", placeholder="https://sam.gov/")
-        ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
-                               accept_multiple_files=True, key="op_inline_files_main")
+        t0 = st.text_input(
+            "RFP Title",
+            value=str(ctx0.get("Title") or ""),
+            key="op_inline_title_main",
+        )
+        s0 = st.text_input(
+            "Solicitation #",
+            value=str(ctx0.get("Solicitation") or ""),
+            key="op_inline_sol_main",
+        )
+        u0 = st.text_input(
+            "SAM URL",
+            value=str(ctx0.get("SAM Link") or ""),
+            key="op_inline_sam_main",
+            placeholder="https://sam.gov/",
+        )
+        ups = st.file_uploader(
+            "Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)",
+            type=["pdf", "doc", "docx", "txt", "xlsx", "xls", "zip"],
+            accept_multiple_files=True,
+            key="op_inline_files_main",
+        )
         # Keep on RFP Analyzer after selecting files
-        if 'op_inline_files_main' in st.session_state and st.session_state.get('op_inline_files_main'):
-            st.session_state['_force_rfp_analyzer'] = True
-            st.session_state['nav_target'] = 'RFP Analyzer'
+        if "op_inline_files_main" in st.session_state and st.session_state.get("op_inline_files_main"):
+            st.session_state["_force_rfp_analyzer"] = True
+            st.session_state["nav_target"] = "RFP Analyzer"
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_inline_create_main"):
             try:
-                uploads_inline = st.session_state.get('op_inline_files_main') or ups
-                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, uploads_inline)
-                ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
-                st.session_state['current_rfp_id'] = int(new_id)
+                uploads_inline = st.session_state.get("op_inline_files_main") or ups
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, uploads_inline or [])
+                ui_success(
+                    "RFP created and files ingested.",
+                    f"ID #{new_id} — {saved} file(s) saved.",
+                )
+                st.session_state["current_rfp_id"] = int(new_id)
                 st.rerun()
             except Exception as e:
                 logger.exception("Create RFP and ingest failed")
@@ -19964,8 +19984,60 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         except Exception:
             df_rf = None
 
+    # Quick create: start a new RFP from this workspace
+    st.markdown("### Start a new RFP")
+    ctx0 = st.session_state.get("rfp_selected_notice") or {}
+    col_new_left, col_new_right = st.columns([3, 2])
+    with col_new_left:
+        new_title = st.text_input(
+            "RFP title",
+            value=str(ctx0.get("Title") or ""),
+            key="rfp_ws_new_title",
+        )
+        new_solnum = st.text_input(
+            "Solicitation #",
+            value=str(ctx0.get("Solicitation") or ""),
+            key="rfp_ws_new_solnum",
+        )
+        new_sam_url = st.text_input(
+            "SAM.gov URL (optional)",
+            value=str(ctx0.get("SAM Link") or ""),
+            key="rfp_ws_new_sam_url",
+            placeholder="https://sam.gov/",
+        )
+    with col_new_right:
+        new_uploads = st.file_uploader(
+            "Upload RFP documents (PDF/DOCX/TXT/XLSX/ZIP)",
+            type=["pdf", "doc", "docx", "txt", "rtf", "xlsx", "xls", "zip"],
+            accept_multiple_files=True,
+            key="rfp_ws_new_files",
+        )
+    if st.button("Create RFP record and ingest", key="rfp_ws_create"):
+        if not (new_title or new_solnum):
+            st.warning("Please enter at least an RFP title or a solicitation number.")
+        else:
+            try:
+                uploads_effective = st.session_state.get("rfp_ws_new_files") or new_uploads
+                new_id, saved = svc_create_rfp_and_ingest(
+                    conn,
+                    (new_title or "").strip(),
+                    (new_solnum or "").strip(),
+                    (new_sam_url or "").strip(),
+                    uploads_effective or [],
+                )
+                st.success(f"Created RFP #{new_id} and ingested {saved} file(s).")
+                try:
+                    st.session_state["current_rfp_id"] = int(new_id)
+                    globals()["selected_rfp_id"] = int(new_id)
+                except Exception:
+                    st.session_state["current_rfp_id"] = new_id
+                    globals()["selected_rfp_id"] = new_id
+                st.rerun()
+            except Exception as e:
+                st.warning(f"Could not create the RFP and ingest files: {e}")
+
     if df_rf is None or df_rf.empty:
-        st.info("No saved RFPs yet. Use the RFP Analyzer to ingest an RFP and create a workspace.")
+        st.info("No saved RFPs yet. Use the section above to create one.")
         return
 
     # Pick default RFP using helper if available
@@ -19994,13 +20066,19 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             return f"#{rid} — {title} ({sol})"
         return f"#{rid} — {title}"
 
-    rfp_id = st.selectbox(
-        "Working RFP",
-        options=rfp_ids,
-        index=idx_default,
-        format_func=_fmt_rfp,
-        key="rfp_workspace_rfp_id",
-    )
+    sel_col, refresh_col = st.columns([4, 1])
+    with sel_col:
+        rfp_id = st.selectbox(
+            "Working RFP",
+            options=rfp_ids,
+            index=idx_default,
+            format_func=_fmt_rfp,
+            key="rfp_workspace_rfp_id",
+        )
+    with refresh_col:
+        st.markdown(" ")
+        if st.button("Refresh workspace", key="rfp_workspace_refresh"):
+            st.rerun()
 
     # Persist current selection for compatibility
     try:
@@ -20106,6 +20184,41 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             st.caption("Days remaining")
             st.write(days_text)
             st.caption(f"Status: {status_label}")
+
+    # Optional inline edit for core RFP header fields
+    with st.expander("Edit RFP header", expanded=False):
+        edit_title = st.text_input(
+            "RFP title",
+            value=title,
+            key=f"rfp_ws_edit_title_{rfp_id}",
+        )
+        edit_solnum = st.text_input(
+            "Solicitation #",
+            value=solnum,
+            key=f"rfp_ws_edit_solnum_{rfp_id}",
+        )
+        sam_url_current = str(row.get("sam_url") or "")
+        edit_sam_url = st.text_input(
+            "SAM.gov URL",
+            value=sam_url_current,
+            key=f"rfp_ws_edit_sam_url_{rfp_id}",
+            placeholder="https://sam.gov/",
+        )
+        if st.button("Save header", key=f"rfp_ws_save_header_{rfp_id}"):
+            try:
+                ok = _update_rfp_meta(
+                    conn,
+                    int(rfp_id),
+                    title=(edit_title or "").strip(),
+                    solnum=(edit_solnum or "").strip(),
+                    sam_url=(edit_sam_url or "").strip(),
+                )
+                if ok:
+                    st.success("Updated RFP header.")
+                else:
+                    st.info("No changes to save for this RFP header.")
+            except Exception as e:
+                st.warning(f"Could not update RFP header: {e}")
 
     st.markdown("---")
 
@@ -20520,6 +20633,22 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
 
         st.markdown("---")
         st.subheader("Files and attachments")
+
+        more_uploads = st.file_uploader(
+            "Add files to this RFP",
+            type=["pdf", "doc", "docx", "txt", "rtf", "xlsx", "xls", "zip"],
+            accept_multiple_files=True,
+            key=f"rfp_ws_more_files_{rfp_id}",
+        )
+        if st.button("Save files to this RFP", key=f"rfp_ws_more_files_save_{rfp_id}"):
+            if not more_uploads:
+                st.warning("Please choose one or more files to upload.")
+            else:
+                try:
+                    saved_more = data_save_rfp_uploads(conn, int(rfp_id), more_uploads)
+                    st.success(f"Saved {saved_more} additional file(s) to this RFP.")
+                except Exception as e:
+                    st.warning(f"Could not save files for this RFP: {e}")
 
         df_files = None
         try:
