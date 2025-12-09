@@ -26418,19 +26418,54 @@ def run_my_jobs(conn: "sqlite3.Connection") -> None:
         except Exception:
             df["progress_pct"] = df.get("progress", 0.0)
 
-    cols = [c for c in ["id", "type", "status", "progress_pct", "created_at", "started_at", "finished_at", "error_message"] if c in df.columns]
-    if cols:
-        df = df[cols]
+    # Split into basic columns for the main list and full rows for technical details
+    basic_cols = [c for c in ["id", "type", "status", "progress_pct", "created_at", "started_at", "finished_at"] if c in df.columns]
+    if basic_cols:
+        df_basic = df[basic_cols].copy()
+    else:
+        df_basic = df.copy()
 
     st.dataframe(
-        df,
+        df_basic,
         use_container_width=True,
         hide_index=True,
     )
 
-    with st.expander("Details", expanded=False):
-        st.caption("Raw jobs table for debugging or export.")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    # Row level details for technical payload, results, and errors
+    st.subheader("Job details")
+    st.caption("Expand a job to see payload, results, and any error message.")
+    for _, row in df.iterrows():
+        job_id = row.get("id", "")
+        job_type = row.get("type", "")
+        label = f"Job {job_id} — {job_type}" if job_id != "" else f"Job — {job_type}"
+        with st.expander(label, expanded=False):
+            st.write("Status:", row.get("status", ""))
+            st.write("Progress percent:", row.get("progress_pct", row.get("progress", "")))
+            st.write("Created at:", row.get("created_at", ""))
+            st.write("Started at:", row.get("started_at", ""))
+            st.write("Finished at:", row.get("finished_at", ""))
+
+            # Show error if present
+            err = row.get("error_message", "") or row.get("error", "")
+            if err:
+                st.markdown("**Error**")
+                st.code(str(err))
+
+            # Show payload and result JSON if present
+            for field in ["payload_json", "result_json"]:
+                if field in row.index:
+                    raw_val = row.get(field)
+                    if raw_val:
+                        st.markdown(f"**{field}**")
+                        pretty = None
+                        try:
+                            if isinstance(raw_val, str):
+                                pretty = json.dumps(json.loads(raw_val), indent=2)
+                            else:
+                                pretty = json.dumps(raw_val, indent=2, default=str)
+                        except Exception:
+                            pretty = str(raw_val)
+                        st.code(pretty)
 
 
 
