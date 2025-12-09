@@ -18105,12 +18105,6 @@ def nav() -> str:
             "Market Intel",
             "Knowledge Hub",
         ]),
-        ("Deals, pricing, outreach, subs", [
-            "Deals",
-            "Pricing and Quotes",
-            "Outreach",
-            "Subcontractor Finder",
-        ]),
         ("RFP and proposal workspace", [
             "RFP Workspace",
             "Proposal Builder",
@@ -18118,11 +18112,18 @@ def nav() -> str:
             "RFQ Tools",
             "Capability Statement",
         ]),
+        ("Deals, pricing, outreach, subs", [
+            "Deals",
+            "Pricing and Quotes",
+            "Outreach",
+            "Subcontractor Finder",
+        ]),
         ("Admin and assistant", [
             "Ops and Maintenance",
             "Chat Assistant",
         ]),
     ]
+
     # Flat page list for defaults / compatibility
     all_pages = [p for _, plist in journeys for p in plist]
     if default_page not in all_pages:
@@ -19304,97 +19305,133 @@ def router(page: str, conn: "sqlite3.Connection") -> None:
 
 
 
-d
+
 def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
-    """Combined workspace for RFP analysis and capture tools (super page)."""
+    """RFP Workspace super page: per-RFP header, analysis, context, and suggested subs."""
     import streamlit as st
     from datetime import datetime
     import math
     import pandas as pd
+    from contextlib import closing as _closing
 
-    # Top-level title for the workspace
-    try:
+    # High level page title
+    if "render_page_title" in globals():
         render_page_title(
             "RFP and Proposal Workspace",
-            "Work the full RFP lifecycle in one place: analyze the notice, build your capture file, track past performance, and stay organized.",
+            "Work the full RFP lifecycle in one place: analyze the notice, build your capture file, "
+            "track past performance, and stay organized.",
         )
-    except Exception:
+    else:
         st.header("RFP and Proposal Workspace")
         st.caption(
             "Work the full RFP lifecycle in one place: analyze the notice, build your capture file, "
             "track past performance, and stay organized."
         )
 
-    # ---- Resolve and select the working RFP ----
+    # Resolve list of RFPs for the workspace selector
     df_rf = None
-    # Prefer rfps_t, then rfps
-    for sql in (
-        "SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;",
-        "SELECT id, title, solnum, created_at FROM rfps ORDER BY id DESC;",
-    ):
+    try:
+        df_rf = safe_read_sql(
+            conn,
+            "SELECT id, title, solnum, created_at FROM rfps_t ORDER BY id DESC;",
+            (),
+        )
+    except Exception:
         try:
-            df = safe_read_sql(conn, sql, ())
+            df_rf = safe_read_sql(
+                conn,
+                "SELECT id, title, solnum, created_at FROM rfps ORDER BY id DESC;",
+                (),
+            )
         except Exception:
-            df = None
-        if df is not None and not df.empty:
-            df_rf = df
-            break
+            df_rf = None
 
     if df_rf is None or df_rf.empty:
         st.info("No saved RFPs yet. Use the RFP Analyzer to ingest an RFP and create a workspace.")
         return
 
-    current_rid = _ensure_selected_rfp_id(conn)
-    options = df_rf["id"].tolist()
+    # Pick default RFP using helper if available
+    default_rid = None
     try:
-        default_index = options.index(int(current_rid)) if current_rid in options else 0
+        default_rid = _ensure_selected_rfp_id(conn)
     except Exception:
-        default_index = 0
+        default_rid = None
+
+    rfp_ids = df_rf["id"].tolist()
+    idx_default = 0
+    if default_rid and default_rid in rfp_ids:
+        try:
+            idx_default = rfp_ids.index(default_rid)
+        except ValueError:
+            idx_default = 0
+
+    def _fmt_rfp(rid: int) -> str:
+        try:
+            row = df_rf[df_rf["id"] == rid].iloc[0]
+        except Exception:
+            return f"RFP #{rid}"
+        title = (str(row.get("title") or "")).strip() or f"RFP #{rid}"
+        sol = (str(row.get("solnum") or "")).strip()
+        if sol:
+            return f"#{rid} — {title} ({sol})"
+        return f"#{rid} — {title}"
 
     rfp_id = st.selectbox(
         "Working RFP",
-        options=options,
-        index=default_index,
-        format_func=lambda rid: f"#{rid} — {df_rf.loc[df_rf['id'] == rid, 'title'].values[0] or 'Untitled'}",
+        options=rfp_ids,
+        index=idx_default,
+        format_func=_fmt_rfp,
         key="rfp_workspace_rfp_id",
     )
-    try:
-        rfp_id = int(rfp_id)
-    except Exception:
-        rfp_id = int(options[0])
 
-    # Keep selection available for other pages
-    st.session_state["current_rfp_id"] = rfp_id
+    # Persist current selection for compatibility
     try:
-        globals()["selected_rfp_id"] = rfp_id
+        st.session_state["current_rfp_id"] = int(rfp_id)
+    except Exception:
+        pass
+    try:
+        globals()["selected_rfp_id"] = int(rfp_id)
     except Exception:
         pass
 
-    # ---- Header: core RFP details, due date, and status ----
+    # Load header row for this RFP
+    df_hdr = None
     try:
-        rfp_row = df_rf.loc[df_rf["id"] == rfp_id].iloc[0].to_dict()
+        df_hdr = safe_read_sql(conn, "SELECT * FROM rfps_t WHERE id=?;", (int(rfp_id),))
     except Exception:
-        rfp_row = {}
+        try:
+            df_hdr = safe_read_sql(conn, "SELECT * FROM rfps WHERE id=?;", (int(rfp_id),))
+        except Exception:
+            df_hdr = None
 
-    title = (rfp_row.get("title") or "").strip() or f"RFP #{rfp_id}"
-    solnum = (rfp_row.get("solnum") or "").strip()
+    row = (df_hdr.iloc[0].to_dict() if df_hdr is not None and not df_hdr.empty else {})
+    title = (str(row.get("title") or "")).strip() or f"RFP #{rfp_id}"
+    solnum = (str(row.get("solnum") or "")).strip()
+
+    # Meta helpers
+    def _meta(key: str, default: str = "") -> str:
+        try:
+            return _p3_rfp_meta_get(conn, int(rfp_id), key, default)
+        except Exception:
+            return default
 
     buyer = (
-        _p3_rfp_meta_get(conn, rfp_id, "agency", "")
-        or _p3_rfp_meta_get(conn, rfp_id, "buyer", "")
-        or _p3_rfp_meta_get(conn, rfp_id, "agency_path", "")
+        _meta("agency", "")
+        or _meta("buyer", "")
+        or _meta("agency_path", "")
     )
-
     rfp_type = (
-        _p3_rfp_meta_get(conn, rfp_id, "notice_type", "")
-        or _p3_rfp_meta_get(conn, rfp_id, "type", "")
-        or _p3_rfp_meta_get(conn, rfp_id, "category", "")
+        _meta("notice_type", "")
+        or _meta("type", "")
+        or _meta("category", "")
     )
 
-    raw_due = _p3_due_date_for_rfp(conn, rfp_id)
-    due_label = ""
-    days_text = ""
-    status_label = ""
+    raw_due = ""
+    try:
+        raw_due = _p3_due_date_for_rfp(conn, int(rfp_id)) or ""
+    except Exception:
+        raw_due = ""
+
     dt_due = None
     if raw_due:
         try:
@@ -19402,35 +19439,37 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         except Exception:
             dt_due = None
 
-        if dt_due:
-            try:
-                due_label = dt_due.strftime("%b %d, %Y %I:%M %p")
-            except Exception:
-                due_label = str(raw_due)
+    due_label = ""
+    days_text = "N/A"
+    status_label = "No due date"
 
-            try:
-                now = datetime.utcnow()
-                delta_days = (dt_due - now).total_seconds() / 86400.0
-                days_int = math.floor(delta_days) if delta_days >= 0 else math.ceil(delta_days)
-                if abs(days_int) == 0:
-                    days_text = "Due today"
-                else:
-                    days_text = f"{days_int} day" + ("" if abs(days_int) == 1 else "s")
-                if delta_days < -0.01:
-                    status_label = "Past due"
-                elif delta_days <= 1:
-                    status_label = "Last minute"
-                elif delta_days <= 5:
-                    status_label = "Tight window"
-                else:
-                    status_label = "On track"
-            except Exception:
-                days_text = ""
-        else:
+    if dt_due:
+        try:
+            due_label = dt_due.strftime("%b %d, %Y %I:%M %p")
+        except Exception:
             due_label = str(raw_due)
-            status_label = "Due date not parsed"
 
-    st.markdown("---")
+        try:
+            now = datetime.utcnow()
+            delta_days = (dt_due - now).total_seconds() / 86400.0
+            days_int = math.floor(delta_days) if delta_days >= 0 else math.ceil(delta_days)
+            days_text = f"{days_int} day" + ("" if abs(days_int) == 1 else "s")
+            if delta_days < -0.01:
+                status_label = "Past due"
+            elif delta_days <= 1:
+                status_label = "Last minute"
+            elif delta_days <= 5:
+                status_label = "Tight window"
+            else:
+                status_label = "On track"
+        except Exception:
+            days_text = "N/A"
+            status_label = "Due date not parsed"
+    elif raw_due:
+        due_label = str(raw_due)
+        status_label = "Due date not parsed"
+
+    # RFP header block
     header = st.container()
     with header:
         c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
@@ -19447,442 +19486,383 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             st.write(due_label or "Not set")
         with c4:
             st.caption("Days remaining")
-            st.write(days_text or "—")
-            if status_label:
-                st.caption(f"Status: {status_label}")
+            st.write(days_text)
+            st.caption(f"Status: {status_label}")
 
-    # ---- Two-column workspace layout ----
+    st.markdown("---")
+
+    # Two-column layout: main analysis (left) and context/resources (right)
     col_main, col_side = st.columns([3, 2])
 
-    # ---------------- Left column: main analysis ----------------
+    # ---- Left column: Summary, L/M snapshot, requirements, suggested subs ----
     with col_main:
         # Summary section
-        try:
-            summary_scope = (
-                _p3_rfp_meta_get(conn, rfp_id, "scope_summary", "")
-                or _p3_rfp_meta_get(conn, rfp_id, "scope", "")
-                or _p3_rfp_meta_get(conn, rfp_id, "summary", "")
-                or _p3_rfp_meta_get(conn, rfp_id, "synopsis", "")
+        with st.expander("Summary (AI overview)", expanded=True):
+            scope = (
+                _meta("scope_summary", "")
+                or _meta("scope", "")
+                or _meta("summary", "")
+                or _meta("synopsis", "")
             )
-        except Exception:
-            summary_scope = ""
-
-        summary_naics = (
-            _p3_rfp_meta_get(conn, rfp_id, "naics", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "primary_naics", "")
-        )
-        summary_set_aside = (
-            _p3_rfp_meta_get(conn, rfp_id, "set_aside", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "setaside", "")
-        )
-        summary_pop = (
-            _p3_rfp_meta_get(conn, rfp_id, "place_of_performance", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "pop_city_state", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "pop_state", "")
-        )
-        summary_pop_structure = (
-            _p3_rfp_meta_get(conn, rfp_id, "pop_structure", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "ordering_period_years", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "base_months", "")
-        )
-
-        try:
-            sec = render_section(
-                "Summary (AI overview)",
-                "High-level overview of scope, NAICS, set-aside, place of performance, and base plus option years.",
-                expanded=True,
-            )
-        except Exception:
-            sec = st.expander("Summary (AI overview)", expanded=True)
-
-        with sec:
-            if summary_scope:
-                st.write(summary_scope)
+            if scope:
+                st.write(scope)
             else:
                 st.info("Summary will appear here after you run the RFP Analyzer and AI parse for this RFP.")
 
-            c1s, c2s = st.columns(2)
-            with c1s:
+            c1, c2 = st.columns(2)
+            with c1:
+                naics = _meta("naics", "") or _meta("primary_naics", "")
+                set_aside = _meta("set_aside", "") or _meta("setaside", "")
                 st.caption("NAICS")
-                st.write(summary_naics or "Not captured")
+                st.write(naics or "Not captured")
                 st.caption("Set-aside")
-                st.write(summary_set_aside or "Not captured")
-            with c2s:
+                st.write(set_aside or "Not captured")
+            with c2:
+                pop = (
+                    _meta("place_of_performance", "")
+                    or _meta("pop_city_state", "")
+                    or _meta("pop_state", "")
+                )
+                pop_struct = _meta("pop_structure", "")
                 st.caption("Place of performance")
-                st.write(summary_pop or "Not captured")
+                st.write(pop or "Not captured")
                 st.caption("Base + option years")
-                st.write(summary_pop_structure or "Not captured")
+                st.write(pop_struct or "Not captured")
 
-        # L/M checklist snapshot (must/shall items)
+        # L/M Checklist snapshot (must/shall)
+        st.subheader("L/M Checklist — must/shall requirements")
+        df_mx = None
         try:
-            sec_lm = render_section(
-                "L/M Checklist — must/shall requirements",
-                "Snapshot of mandatory requirements and their current status.",
-                expanded=False,
-            )
+            df_mx = _load_compliance_matrix(conn, int(rfp_id))
         except Exception:
-            sec_lm = st.expander("L/M Checklist — must/shall requirements", expanded=False)
+            df_mx = None
 
-        with sec_lm:
-            try:
-                df_mx = _load_compliance_matrix(conn, int(rfp_id))
-            except Exception:
-                df_mx = None
+        if df_mx is not None and not df_mx.empty:
+            df_must = df_mx.copy()
+            if "is_must" in df_must.columns:
+                try:
+                    df_must = df_must[df_must["is_must"] == 1]
+                except Exception:
+                    pass
 
-            if df_mx is None or df_mx.empty:
-                st.info("No L/M items found for this RFP yet. Run the L/M extractor from RFP Analyzer.")
-            else:
-                df = df_mx.copy()
-                if "is_must" in df.columns:
-                    df = df[df["is_must"] == 1]
-                if df.empty:
-                    st.info("No items flagged as MUST/SHALL yet.")
-                else:
-                    # Derive a simple category from the text
-                    def _lm_category(text: str) -> str:
-                        t = (text or "").lower()
-                        if "evaluation" in t or "award" in t:
-                            return "Evaluation (M)"
-                        if "proposal" in t or "submit" in t or "submission" in t:
-                            return "Instructions (L)"
-                        return "Other"
+            if df_must is not None and not df_must.empty:
+                # Category heuristic
+                def _cat_from_text(txt: str) -> str:
+                    t = (txt or "").lower()
+                    if any(w in t for w in ["evaluation factor", "evaluation criteria", "basis for award"]):
+                        return "Evaluation (M)"
+                    if any(w in t for w in ["proposal shall include", "submit", "instruction", "page limit"]):
+                        return "Instructions (L)"
+                    return "Other"
 
-                    df["Category"] = df["item_text"].apply(_lm_category)
+                # Status normalization
+                def _lm_display_status(raw: str) -> str:
+                    r = (raw or "").strip().lower()
+                    if not r or r in {"open", "todo", "not started"}:
+                        return "Not started"
+                    if r in {"draft", "drafted", "in progress"}:
+                        return "Drafted"
+                    if r in {"verified", "complete", "completed", "done", "closed"}:
+                        return "Verified"
+                    if r in {"n/a", "na", "not applicable", "skip"}:
+                        return "Not applicable"
+                    return raw or "Not started"
 
-                    def _lm_status_display(raw: str) -> str:
-                        s = (raw or "").strip().lower()
-                        if s in ("", "open", "todo", "not started"):
-                            return "Not started"
-                        if s in ("draft", "drafted", "in progress"):
-                            return "Drafted"
-                        if s in ("complete", "completed", "verified", "done", "closed"):
-                            return "Verified"
-                        if s in ("n/a", "not applicable", "skip"):
-                            return "Not applicable"
-                        return raw or "Not started"
+                df_must = df_must.copy()
+                df_must["Category"] = df_must.get("item_text", df_must.get("text", "")).apply(_cat_from_text)
+                df_must["Requirement"] = df_must.get("item_text", df_must.get("text", ""))
+                df_must["Status"] = df_must.get("status", "").apply(_lm_display_status)
 
-                    df["StatusDisplay"] = df.get("status", "").apply(_lm_status_display)
-
-                    # Placeholder for proposal section linkage; keep column for future wiring
-                    if "proposal_section" not in df.columns:
-                        df["proposal_section"] = ""
-
-                    view_cols = ["Category", "item_text", "StatusDisplay", "proposal_section"]
-                    view = df[view_cols].rename(
-                        columns={
-                            "item_text": "Requirement",
-                            "StatusDisplay": "Status",
-                            "proposal_section": "Proposal section",
-                        }
-                    )
+                show_cols = [c for c in ["Category", "Requirement", "Status"] if c in df_must.columns]
+                if show_cols:
                     try:
-                        _styled_dataframe(
-                            view,
+                        st.dataframe(
+                            df_must[show_cols],
                             use_container_width=True,
-                            hide_index=True,
+                            height=min(320, 40 + 24 * len(df_must)),
                         )
                     except Exception:
-                        st.dataframe(view, use_container_width=True)
+                        st.table(df_must[show_cols])
+            else:
+                st.caption("No 'must/shall' items are flagged yet in the L/M checklist.")
+        else:
+            st.caption("L/M checklist not available yet for this RFP.")
 
-        # Requirement navigator (shall/must sentences)
-        try:
-            sec_nav = render_section(
-                "Requirement navigator (shall/must sentences)",
-                "Quick scan of sentences in the RFP that contain 'shall' or 'must'.",
-                expanded=False,
-            )
-        except Exception:
-            sec_nav = st.expander("Requirement navigator (shall/must sentences)", expanded=False)
-
-        with sec_nav:
+        # Requirement navigator
+        with st.expander("Requirement navigator (sentences with 'shall'/'must')", expanded=False):
             try:
                 full_text = _collect_full_text(conn, int(rfp_id))
             except Exception:
                 full_text = ""
-
-            if not str(full_text or "").strip():
-                st.info("No full-text content available yet. Upload RFP files or run the analyzer to populate text.")
+            if not full_text:
+                st.caption("No full text available yet. Add files to this RFP and run the Analyzer.")
             else:
                 try:
                     reqs = _find_requirements(full_text)
                 except Exception:
                     reqs = []
-
                 if not reqs:
-                    st.info("No 'shall'/'must' requirements were detected yet.")
+                    st.caption("No sentences with 'shall' or 'must' were detected in the RFP text.")
                 else:
-                    for idx, sent in enumerate(reqs[:100]):
+                    for i, sent in enumerate(reqs[:100]):
                         st.checkbox(
                             sent,
-                            key=f"req_nav_{rfp_id}_{idx}",
+                            key=f"rfp_reqnav_{rfp_id}_{i}",
                         )
 
         # Suggested subs for this RFP
-        try:
-            sec_subs = render_section(
-                "Suggested subs for this RFP",
-                "Vendors from Subcontractor Finder that match this RFP's NAICS and work-type tags.",
-                expanded=False,
-            )
-        except Exception:
-            sec_subs = st.expander("Suggested subs for this RFP", expanded=False)
+        st.subheader("Suggested subs for this RFP")
 
-        with sec_subs:
-            # NAICS and work-type tags
-            req_naics = (
-                _p3_rfp_meta_get(conn, rfp_id, "naics", "")
-                or _p3_rfp_meta_get(conn, rfp_id, "primary_naics", "")
-            )
-            st.caption(f"NAICS for this RFP: {req_naics or 'not set'}")
+        naics_req = _meta("naics", "") or _meta("primary_naics", "")
+        st.caption(f"NAICS for this RFP: {naics_req or 'not set'}")
 
-            default_tags = _p3_rfp_meta_get(conn, rfp_id, "work_type_tags", "")
-            tags_val = st.text_input(
-                "Work type tags (comma-separated)",
-                value=default_tags,
-                key=f"rfp_{rfp_id}_work_type_tags",
-                help="Example: janitorial, grounds, HVAC, snow removal",
-            )
+        default_tags = _meta("work_type_tags", "")
+        tags = st.text_input(
+            "Work type tags (comma-separated)",
+            value=default_tags,
+            key=f"rfp_{rfp_id}_work_type_tags",
+            help="Example: janitorial, grounds, HVAC, snow removal",
+        )
 
-            if tags_val != default_tags and st.button("Save RFP tags", key=f"save_tags_{rfp_id}"):
-                try:
-                    _p3_rfp_meta_set(conn, rfp_id, "work_type_tags", tags_val)
-                    st.success("Saved work type tags for this RFP.")
-                except Exception as e:
-                    st.error(f"Could not save work type tags: {e}")
-
-            # Suggested vendors from Subcontractor Finder
+        if tags != default_tags and st.button("Save RFP tags", key=f"save_rfp_tags_{rfp_id}"):
             try:
-                df_suggest = _get_suggested_subs(conn, req_naics, tags_val, limit=20)
+                _p3_rfp_meta_set(conn, int(rfp_id), "work_type_tags", tags or "")
+                st.success("Saved work type tags for this RFP.")
             except Exception:
-                df_suggest = None
+                st.warning("Could not save tags for this RFP.")
 
-            if df_suggest is None or df_suggest.empty:
-                st.info("No matching vendors yet. Seed vendors with capabilities in Subcontractor Finder or adjust NAICS/tags.")
-            else:
-                cols_pref = [
-                    "name",
-                    "city",
-                    "state",
-                    "primary_naics",
-                    "capability_tags",
-                    "naics_match",
-                    "tag_match_count",
-                    "rank_score",
-                ]
-                show_cols = [c for c in cols_pref if c in df_suggest.columns]
-                view = df_suggest[show_cols] if show_cols else df_suggest
-                st.dataframe(
-                    view,
-                    use_container_width=True,
-                    height=min(360, 40 + 24 * len(df_suggest)),
+        df_subs = None
+        try:
+            df_subs = _get_suggested_subs(conn, naics_req, tags)
+        except Exception:
+            df_subs = None
+
+        if df_subs is None or df_subs.empty:
+            st.caption("No matching vendors yet. Seed vendors with capabilities in Subcontractor Finder or adjust NAICS/tags for this RFP.")
+        else:
+            df_show = df_subs.copy()
+            preferred_cols = [
+                "name",
+                "city",
+                "state",
+                "primary_naics",
+                "naics_match",
+                "tag_match_count",
+                "rank_score",
+                "capability_tags",
+            ]
+            show_cols = [c for c in preferred_cols if c in df_show.columns]
+            if show_cols:
+                try:
+                    st.dataframe(
+                        df_show[show_cols],
+                        use_container_width=True,
+                        height=min(320, 40 + 24 * len(df_show)),
+                    )
+                except Exception:
+                    st.table(df_show[show_cols])
+
+            # Selection and actions
+            if "id" in df_show.columns:
+                id_to_label = {}
+                for _, r in df_show.iterrows():
+                    vid = r.get("id")
+                    if vid is None:
+                        continue
+                    name = str(r.get("name") or "").strip() or f"Vendor {vid}"
+                    city = str(r.get("city") or "").strip()
+                    state = str(r.get("state") or "").strip()
+                    loc = ", ".join([p for p in [city, state] if p])
+                    label = f"{name} ({loc})" if loc else name
+                    id_to_label[int(vid)] = label
+
+                selected_ids = st.multiselect(
+                    "Select vendors to take action on",
+                    options=list(id_to_label.keys()),
+                    format_func=lambda v: id_to_label.get(int(v), str(v)),
+                    key=f"rfp_subs_select_{rfp_id}",
                 )
 
-                if "id" in df_suggest.columns:
-                    # Build label map for multiselect
-                    label_map = {}
-                    for _, row in df_suggest.iterrows():
-                        vid = row.get("id")
-                        try:
-                            vid_int = int(vid)
-                        except Exception:
-                            continue
-                        name = str(row.get("name") or "Vendor")
-                        city = str(row.get("city") or "").strip()
-                        state = str(row.get("state") or "").strip()
-                        loc = ", ".join([p for p in [city, state] if p])
-                        label = f"{name} ({loc})" if loc else name
-                        label_map[vid_int] = label
-
-                    sel_ids = st.multiselect(
-                        "Select vendors to take action on",
-                        options=[int(v) for v in df_suggest["id"].tolist() if pd.notna(v)],
-                        format_func=lambda vid: label_map.get(int(vid), str(vid)),
-                        key=f"subs_sel_{rfp_id}",
-                    )
-
-                    c_sub_a, c_sub_b = st.columns(2)
-                    with c_sub_a:
-                        if st.button("Assign as subs for this RFP", key=f"btn_assign_subs_{rfp_id}"):
-                            if not sel_ids:
-                                st.info("Select at least one vendor first.")
-                            else:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("Assign as subs for this RFP", key=f"btn_assign_subs_{rfp_id}"):
+                        if not selected_ids:
+                            st.warning("Select at least one vendor first.")
+                        else:
+                            assigned_ok = False
+                            try:
+                                with _closing(conn.cursor()) as cur:
+                                    # Ensure join table exists (simple schema)
+                                    cur.execute(
+                                        """
+                                        CREATE TABLE IF NOT EXISTS rfp_subs(
+                                            id INTEGER PRIMARY KEY,
+                                            rfp_id INTEGER,
+                                            vendor_id INTEGER,
+                                            role TEXT
+                                        );
+                                        """
+                                    )
+                                    for vid in selected_ids:
+                                        cur.execute(
+                                            """
+                                            INSERT OR IGNORE INTO rfp_subs(rfp_id, vendor_id, role)
+                                            VALUES(?,?,COALESCE(
+                                                (SELECT role FROM rfp_subs WHERE rfp_id=? AND vendor_id=?),
+                                                'sub'
+                                            ));
+                                            """,
+                                            (int(rfp_id), int(vid), int(rfp_id), int(vid)),
+                                        )
+                                conn.commit()
+                                assigned_ok = True
+                            except Exception:
                                 assigned_ok = False
+
+                            if not assigned_ok:
+                                # Fallback to meta-based storage
                                 try:
-                                    with conn:
-                                        for vid in sel_ids:
-                                            conn.execute(
-                                                "INSERT OR IGNORE INTO rfp_subs (rfp_id, vendor_id, role) "
-                                                "VALUES (?,?, COALESCE((SELECT role FROM rfp_subs WHERE rfp_id=? AND vendor_id=?),'sub'));",
-                                                (int(rfp_id), int(vid), int(rfp_id), int(vid)),
-                                            )
-                                    assigned_ok = True
+                                    existing = _meta("assigned_sub_vendor_ids", "")
+                                    existing_ids = {int(x) for x in str(existing or "").split(",") if x.strip().isdigit()}
+                                    existing_ids.update(int(v) for v in selected_ids)
+                                    value = ",".join(str(v) for v in sorted(existing_ids))
+                                    _p3_rfp_meta_set(conn, int(rfp_id), "assigned_sub_vendor_ids", value)
+                                    st.success("Assigned selected vendors as subs for this RFP (meta-based).")
                                 except Exception:
-                                    assigned_ok = False
-
-                                if not assigned_ok:
-                                    # Fallback to rfp_meta list
-                                    try:
-                                        existing = _p3_rfp_meta_get(conn, rfp_id, "assigned_sub_vendor_ids", "")
-                                        existing_ids = {s.strip() for s in str(existing or "").split(",") if s.strip()}
-                                        for vid in sel_ids:
-                                            existing_ids.add(str(int(vid)))
-                                        new_val = ",".join(sorted(existing_ids))
-                                        _p3_rfp_meta_set(conn, rfp_id, "assigned_sub_vendor_ids", new_val)
-                                        st.success(f"Tracked {len(sel_ids)} subs for this RFP.")
-                                    except Exception as e:
-                                        st.error(f"Could not assign subs: {e}")
-                                else:
-                                    st.success(f"Assigned {len(sel_ids)} vendor(s) as subs for this RFP.")
-
-                    with c_sub_b:
-                        if st.button("Add selected to RFQ targets", key=f"btn_rfq_targets_{rfp_id}"):
-                            if not sel_ids:
-                                st.info("Select at least one vendor first.")
+                                    st.error("Could not assign subs for this RFP.")
                             else:
-                                try:
-                                    existing = _p3_rfp_meta_get(conn, rfp_id, "rfq_target_vendor_ids", "")
-                                    ids_set = {s.strip() for s in str(existing or "").split(",") if s.strip()}
-                                    for vid in sel_ids:
-                                        ids_set.add(str(int(vid)))
-                                    new_val = ",".join(sorted(ids_set))
-                                    _p3_rfp_meta_set(conn, rfp_id, "rfq_target_vendor_ids", new_val)
-                                    st.success("Added selected vendors to RFQ target list for this RFP.")
-                                except Exception as e:
-                                    st.error(f"Could not update RFQ target list: {e}")
+                                st.success("Assigned selected vendors as subs for this RFP.")
 
-    # ---------------- Right column: context and resources ----------------
+                with col_b:
+                    if st.button("Add selected to RFQ targets", key=f"btn_add_rfq_targets_{rfp_id}"):
+                        if not selected_ids:
+                            st.warning("Select at least one vendor first.")
+                        else:
+                            try:
+                                existing = _meta("rfq_target_vendor_ids", "")
+                                existing_ids = {int(x) for x in str(existing or "").split(",") if x.strip().isdigit()}
+                                existing_ids.update(int(v) for v in selected_ids)
+                                value = ",".join(str(v) for v in sorted(existing_ids))
+                                _p3_rfp_meta_set(conn, int(rfp_id), "rfq_target_vendor_ids", value)
+                                st.success("Added selected vendors to RFQ target list for this RFP.")
+                            except Exception:
+                                st.error("Could not update RFQ target list for this RFP.")
+
+    # ---- Right column: key details and files / AI attachments ----
     with col_side:
-        # Key details card
-        naics = summary_naics
-        psc = (
-            _p3_rfp_meta_get(conn, rfp_id, "psc", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "psc_code", "")
-        )
-        est_value = _p3_rfp_meta_get(conn, rfp_id, "estimated_value", "")
-        set_aside = summary_set_aside
-        competition = (
-            _p3_rfp_meta_get(conn, rfp_id, "competition_type", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "type_of_competition", "")
-            or _p3_rfp_meta_get(conn, rfp_id, "competition", "")
-        )
-        incumbent = _p3_rfp_meta_get(conn, rfp_id, "incumbent", "")
+        st.subheader("Key details")
 
-        origin = _p3_rfp_meta_get(conn, rfp_id, "origin", "")
+        naics = _meta("naics", "") or _meta("primary_naics", "")
+        psc = _meta("psc", "") or _meta("psc_code", "")
+        est_val = _meta("estimated_value", "")
+        set_aside = _meta("set_aside", "") or _meta("setaside", "")
+        comp_type = (
+            _meta("competition_type", "")
+            or _meta("type_of_competition", "")
+            or _meta("competition", "")
+        )
+        incumbent = _meta("incumbent", "")
+        origin = _meta("origin", "")
         if not origin:
-            # Infer origin from linkage to SAM Watch when possible
-            notice_id = _p3_rfp_meta_get(conn, rfp_id, "notice_id", "")
-            sam_url = ""
-            try:
-                cur = conn.execute("SELECT sam_url FROM rfps WHERE id=?;", (int(rfp_id),))
-                row = cur.fetchone()
-                if row:
-                    sam_url = row[0] or ""
-            except Exception:
-                sam_url = ""
-            if notice_id or sam_url:
+            if _meta("notice_id", "") or _meta("sam_url", ""):
                 origin = "SAM Watch"
             else:
                 origin = "Manual upload"
 
-        st.markdown("**Key details**")
         st.caption("NAICS")
         st.write(naics or "Not captured")
         st.caption("PSC")
         st.write(psc or "Not captured")
         st.caption("Estimated value")
-        st.write(est_value or "Not set")
+        st.write(est_val or "Not captured")
         st.caption("Set-aside")
         st.write(set_aside or "Not captured")
         st.caption("Competition type")
-        st.write(competition or "Not captured")
+        st.write(comp_type or "Not captured")
         st.caption("Known incumbent")
         st.write(incumbent or "Not captured")
         st.caption("Origin")
-        st.write(origin or "Not captured")
+        st.write(origin)
 
         st.markdown("---")
-        st.markdown("**Files and AI attachments**")
+        st.subheader("Files and attachments")
 
-        # Files snapshot
         df_files = None
         try:
-            cur = conn.execute(
+            df_files = safe_read_sql(
+                conn,
                 "SELECT id, filename, kind FROM rfp_files WHERE rfp_id=? ORDER BY id;",
                 (int(rfp_id),),
             )
-            rows = cur.fetchall()
-            cols = [d[0] for d in cur.description] if cur.description else []
-            df_files = pd.DataFrame(rows, columns=cols)
         except Exception:
             try:
-                cur = conn.execute(
+                df_files = safe_read_sql(
+                    conn,
                     "SELECT id, filename FROM rfp_files WHERE rfp_id=? ORDER BY id;",
                     (int(rfp_id),),
                 )
-                rows = cur.fetchall()
-                cols = [d[0] for d in cur.description] if cur.description else []
-                df_files = pd.DataFrame(rows, columns=cols)
             except Exception:
                 df_files = None
 
         if df_files is None or df_files.empty:
-            st.caption("No local RFP files stored yet for this RFP.")
+            st.caption("No local RFP files have been stored yet for this RFP.")
         else:
-            df_view = df_files.copy()
+            df_f = df_files.copy()
 
-            def _classify_file(row):
+            def _file_category(row) -> str:
                 name = str(row.get("filename") or "").lower()
-                kind = str(row.get("kind") or "").lower() if "kind" in row else ""
-                if "amend" in name or "amend" in kind:
+                kind_val = str(row.get("kind") or "").lower() if "kind" in row.index else ""
+                text = " ".join([name, kind_val])
+                if "amend" in text:
                     return "Amendment"
-                if "q&a" in name or "qa" in name or "questions" in name:
+                if "q&a" in text or "qa" in text or "questions" in text:
                     return "Q&A"
-                if "form" in name or "form" in kind or name.startswith("sf"):
+                if text.startswith("sf") or "form" in text:
                     return "Form"
-                if "rfp" in kind or "solicitation" in name:
+                if "solicitation" in text or "rfp" in text:
                     return "RFP main"
                 return "Attachment"
 
-            df_view["Category"] = df_view.apply(_classify_file, axis=1)
-            cols_show = [c for c in ["Category", "filename"] if c in df_view.columns]
-            df_show = df_view[cols_show].rename(columns={"filename": "File"})
             try:
-                st.dataframe(
-                    df_show,
-                    use_container_width=True,
-                    height=min(260, 40 + 24 * len(df_show)),
-                )
+                df_f["Category"] = df_f.apply(_file_category, axis=1)
             except Exception:
-                st.table(df_show)
+                df_f["Category"] = "Attachment"
 
-        # AI attachments control panel
-        try:
-            with st.expander("AI attachments for this RFP", expanded=False):
+            show_cols = [c for c in ["Category", "filename"] if c in df_f.columns]
+            if show_cols:
+                try:
+                    st.dataframe(
+                        df_f[show_cols],
+                        use_container_width=True,
+                        height=min(260, 40 + 24 * len(df_f)),
+                    )
+                except Exception:
+                    st.table(df_f[show_cols])
+
+        with st.expander("AI attachments (detailed)", expanded=False):
+            try:
                 render_ai_attachments_panel(conn, int(rfp_id))
-        except Exception:
-            # Keep workspace usable even if AI panel is not available
-            pass
+            except Exception:
+                st.caption("AI attachments panel is not available in this environment.")
 
-    # ---- Deep-dive tools (keep existing behavior) ----
     st.markdown("---")
+
+    # Deep-dive tools preserved for now
     view = st.radio(
-        "Deep dive tools",
+        "Choose RFP tool",
         ["RFP Analyzer", "L/M Checklist", "File Manager", "Past Performance"],
         horizontal=True,
         key="rfp_workspace_view",
     )
-    st.divider()
 
     if view == "RFP Analyzer":
         _safe_route_call(globals().get("run_rfp_analyzer"), conn)
     elif view == "L/M Checklist":
-        fn = globals().get("run_lm_checklist") or globals().get("run_l_and_m_checklist")
-        _safe_route_call(fn, conn)
+        _safe_route_call(globals().get("run_lm_checklist") or globals().get("run_l_and_m_checklist"), conn)
     elif view == "File Manager":
         _safe_route_call(globals().get("run_file_manager"), conn)
     elif view == "Past Performance":
         _safe_route_call(globals().get("run_past_performance"), conn)
-
 
 def run_rfq_tools(conn: "sqlite3.Connection") -> None:
     """Wrapper hub for RFQ tools."""
