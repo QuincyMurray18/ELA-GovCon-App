@@ -15740,7 +15740,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
                             "SELECT d.id, d.title, d.agency, COALESCE(d.status, d.stage, '') AS status, "
-                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, COALESCE(d.owner, '') AS owner, "
+                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, d.rfp_id, COALESCE(d.owner, '') AS owner, "
                             "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
                             "COALESCE(c.name, '') AS co_name, "
                             "COALESCE(c.email, '') AS co_email, "
@@ -15755,7 +15755,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     else:
                         df_k = pd.read_sql_query(
                             "SELECT d.id, d.title, d.agency, COALESCE(d.status, d.stage, '') AS status, "
-                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, COALESCE(d.owner, '') AS owner, "
+                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, d.rfp_id, COALESCE(d.owner, '') AS owner, "
                             "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
                             "COALESCE(c.name, '') AS co_name, "
                             "COALESCE(c.email, '') AS co_email, "
@@ -15770,8 +15770,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     # Fallback to view without owner_user column or contacts_t
                     try:
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner, "
-                            "0 AS co_contact_id, '' AS co_name, '' AS co_email, '' AS co_phone "
+                            "SELECT id, title, agency, status, value, rfp_deadline, rfp_id, '' AS owner, "\
+                            "0 AS co_contact_id, '' AS co_name, '' AS co_email, '' AS co_phone "\
                             "FROM deals_t ORDER BY id DESC;",
                             conn,
                             params=(),
@@ -15782,6 +15782,79 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if df_k is None or df_k.empty:
                     st.caption("No deals to display")
                 else:
+                    # Precompute simple status sets for Kanban icons (compliance, subs, pricing, outreach)
+                    try:
+                        import pandas as _pd
+                        _kb_deal_rfp = {}
+                        try:
+                            _df_links = _pd.read_sql_query(
+                                "SELECT id, rfp_id FROM deals_t;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_deal_rfp = {
+                                int(r["id"]): int(r["rfp_id"])
+                                for _, r in _df_links.iterrows()
+                                if r.get("rfp_id") not in (None, "", 0)
+                            }
+                        except Exception:
+                            _kb_deal_rfp = {}
+                        _kb_comp_set = set()
+                        _kb_price_set = set()
+                        _kb_subs_set = set()
+                        _kb_outreach_set = set()
+                        try:
+                            _df_cf = _pd.read_sql_query(
+                                "SELECT DISTINCT rfp_id FROM compliance_requirements;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_comp_set = {
+                                int(x) for x in _df_cf["rfp_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                        try:
+                            _df_pr = _pd.read_sql_query(
+                                "SELECT DISTINCT rfp_id FROM pricing_scenarios;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_price_set = {
+                                int(x) for x in _df_pr["rfp_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                        try:
+                            _df_q = _pd.read_sql_query(
+                                "SELECT DISTINCT rfp_id FROM quotes;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_subs_set = {
+                                int(x) for x in _df_q["rfp_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                        try:
+                            _df_ol = _pd.read_sql_query(
+                                "SELECT DISTINCT deal_id FROM outreach_log WHERE deal_id IS NOT NULL;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_outreach_set = {
+                                int(x)
+                                for x in _df_ol["deal_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                    except Exception:
+                        _kb_deal_rfp = {}
+                        _kb_comp_set = set()
+                        _kb_price_set = set()
+                        _kb_subs_set = set()
+                        _kb_outreach_set = set()
+
                     # Preload contacts for Kanban contact dropdowns
                     try:
                         df_contacts_k = pd.read_sql_query(
@@ -15816,6 +15889,40 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
                                     st.caption(str(r.get("agency") or ""))
+
+                                    # Compact stats line: value + win probability
+                                    try:
+                                        _val = float(r.get("value") or 0.0)
+                                    except Exception:
+                                        _val = 0.0
+                                    try:
+                                        _prob = float(_stage_probability(str(r.get("status") or "")))
+                                    except Exception:
+                                        _prob = 0.0
+                                    st.caption(f"Value: ${_val:,.0f} · Win prob: {_prob:,.0f}%")
+
+                                    # Small status icons: compliance, subs, pricing, outreach
+                                    try:
+                                        _rfp_id = 0
+                                        try:
+                                            _rfp_id = int(r.get("rfp_id") or 0)
+                                        except Exception:
+                                            _rfp_id = 0
+                                        if (not _rfp_id) and '_kb_deal_rfp' in locals():
+                                            _rfp_id = int(_kb_deal_rfp.get(did) or 0)
+                                        _has_comp = '_kb_comp_set' in locals() and _rfp_id in _kb_comp_set
+                                        _has_subs = '_kb_subs_set' in locals() and _rfp_id in _kb_subs_set
+                                        _has_price = '_kb_price_set' in locals() and _rfp_id in _kb_price_set
+                                        _has_outreach = '_kb_outreach_set' in locals() and did in _kb_outreach_set
+                                        _icons = []
+                                        _icons.append(("✅" if _has_comp else "⬜") + " C")
+                                        _icons.append(("✅" if _has_subs else "⬜") + " S")
+                                        _icons.append(("✅" if _has_price else "⬜") + " P")
+                                        _icons.append(("✅" if _has_outreach else "⬜") + " O")
+                                        st.caption(" ".join(_icons))
+                                    except Exception:
+                                        pass
+
                                     # Contact display and selector for this deal
                                     co_name = str(r.get("co_name") or "").strip()
                                     co_email = str(r.get("co_email") or "").strip()
@@ -15945,7 +16052,23 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         else:
                                             _deadline_display = str(_raw_deadline or "").strip()
                                         if _deadline_display:
-                                            st.caption(f"Full deadline: {_deadline_display}")
+                                            # Show due date and days remaining / past due
+                                            try:
+                                                _days_delta = None
+                                                if _dt_val is not None:
+                                                    _days_delta = (_dt_val.date() - _dt.date.today()).days
+                                                if _days_delta is None:
+                                                    st.caption(f"Due: {_deadline_display}")
+                                                else:
+                                                    if _days_delta > 0:
+                                                        _status_txt = f"{_days_delta} days left"
+                                                    elif _days_delta == 0:
+                                                        _status_txt = "Due today"
+                                                    else:
+                                                        _status_txt = f"{abs(_days_delta)} days past due"
+                                                    st.caption(f"Due: {_deadline_display} · {_status_txt}")
+                                            except Exception:
+                                                st.caption(f"Due: {_deadline_display}")
                                     except Exception:
                                         pass
 # Editable value
