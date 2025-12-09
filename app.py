@@ -15533,6 +15533,131 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             df["days_since_last_activity"] = _pd.Series([None] * len(df))
                     else:
                         df["days_since_last_activity"] = None
+
+                    # --- Deals Control Center: top filters + quick stats ---
+                    try:
+                        import pandas as _pd
+                        import datetime as _dt
+
+                        # Start from the current pipeline DataFrame
+                        _df_cc = df.copy()
+
+                        # Bring in owner / NAICS metadata from deals_t
+                        try:
+                            df_meta = _pd.read_sql_query(
+                                "SELECT id, COALESCE(owner, '') AS owner, COALESCE(naics, '') AS naics FROM deals_t;",
+                                conn,
+                                params=(),
+                            )
+                        except Exception:
+                            df_meta = None
+                        if df_meta is not None and not df_meta.empty:
+                            try:
+                                _df_cc = _df_cc.merge(df_meta, on="id", how="left", suffixes=("", "_meta"))
+                            except Exception:
+                                pass
+
+                        # Normalize deadline for date filtering
+                        _df_cc["_deadline_dt"] = _pd.to_datetime(_df_cc.get("rfp_deadline"), errors="coerce").dt.date
+
+                        # Filter options
+                        owners = []
+                        if "owner" in _df_cc.columns:
+                            try:
+                                owners = sorted({str(o).strip() for o in _df_cc["owner"].dropna().tolist() if str(o).strip()})
+                            except Exception:
+                                owners = []
+                        buyers = []
+                        if "agency" in _df_cc.columns:
+                            try:
+                                buyers = sorted({str(a).strip() for a in _df_cc["agency"].dropna().tolist() if str(a).strip()})
+                            except Exception:
+                                buyers = []
+
+                        f_owner, f_stage, f_buyer, f_naics, f_due = st.columns([1.2, 1.2, 1.2, 1.0, 1.4])
+                        with f_owner:
+                            owner_opts = ["All owners"] + owners if owners else ["All owners"]
+                            owner_choice = st.selectbox("Owner", owner_opts, key="deals_cc_owner")
+                        with f_stage:
+                            stage_sel = st.multiselect("Stage", STAGES_ORDERED, key="deals_cc_stage")
+                        with f_buyer:
+                            buyer_sel = st.multiselect("Buyer / Agency", buyers, key="deals_cc_buyer")
+                        with f_naics:
+                            naics_text = st.text_input("NAICS contains", value="", key="deals_cc_naics")
+                        with f_due:
+                            default_start = _dt.date.today() - _dt.timedelta(days=365)
+                            default_end = _dt.date.today() + _dt.timedelta(days=365)
+                            due_range = st.date_input(
+                                "Due date range",
+                                value=(default_start, default_end),
+                                key="deals_cc_due_range",
+                            )
+
+                        df_view = _df_cc
+                        if owner_choice != "All owners" and "owner" in df_view.columns:
+                            df_view = df_view[df_view["owner"].fillna("") == owner_choice]
+                        if stage_sel:
+                            df_view = df_view[df_view["status"].isin(stage_sel)]
+                        if buyer_sel:
+                            df_view = df_view[df_view["agency"].isin(buyer_sel)]
+                        if naics_text.strip() and "naics" in df_view.columns:
+                            df_view = df_view[df_view["naics"].fillna("").str.contains(naics_text.strip(), case=False)]
+
+                        if isinstance(due_range, (list, tuple)) and len(due_range) == 2:
+                            d0, d1 = due_range
+                            if d0 and d1:
+                                df_view = df_view[
+                                    (df_view["_deadline_dt"].notna())
+                                    & (df_view["_deadline_dt"] >= d0)
+                                    & (df_view["_deadline_dt"] <= d1)
+                                ]
+
+                        m1, m2, m3, m4 = st.columns(4)
+                        if df_view is None or df_view.empty:
+                            with m1:
+                                st.metric("Active deals", "0")
+                            with m2:
+                                st.metric("Weighted pipeline", "$0")
+                            with m3:
+                                st.metric("Due in next 7 days", "0")
+                            with m4:
+                                st.metric("Avg win probability", "0%")
+                        else:
+                            # Compute weighted pipeline and win probability
+                            try:
+                                value_series = df_view.get("value", _pd.Series([], dtype="float64")).fillna(0).astype(float)
+                                prob_series = df_view.get("status", _pd.Series([], dtype="object")).map(
+                                    lambda s: _stage_probability(str(s))
+                                )
+                            except Exception:
+                                value_series = _pd.Series([], dtype="float64")
+                                prob_series = _pd.Series([], dtype="float64")
+                            weighted_pipeline = float((value_series * prob_series / 100.0).sum())
+
+                            upcoming = df_view["_deadline_dt"]
+                            today_cc = _dt.date.today()
+                            mask_7 = (upcoming.notna()) & (
+                                (upcoming >= today_cc) & (upcoming <= today_cc + _dt.timedelta(days=7))
+                            )
+                            deals_next7 = int(mask_7.sum())
+                            try:
+                                avg_prob = float(prob_series.mean())
+                            except Exception:
+                                avg_prob = 0.0
+                            if avg_prob != avg_prob:  # NaN check
+                                avg_prob = 0.0
+
+                            with m1:
+                                st.metric("Active deals", f"{len(df_view):,}")
+                            with m2:
+                                st.metric("Weighted pipeline", f"${weighted_pipeline:,.0f}")
+                            with m3:
+                                st.metric("Due in next 7 days", f"{deals_next7:,}")
+                            with m4:
+                                st.metric("Avg win probability", f"{avg_prob:,.0f}%")
+                    except Exception as _e:
+                        st.warning(f"Deals control center summary unavailable: {_e}")
+
                     # SLA-style color coding via emoji labels
                     import pandas as _pd
                     def _sla_label(days, green, yellow):
