@@ -8903,6 +8903,15 @@ def data_save_rfp_uploads(conn, rfp_id: int, uploads) -> int:
 
 # === Service layer: RFP Analyzer =============================================
 def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploads):
+    # Ensure RFP ingest/file schema exists before we try to save uploads
+    try:
+        if "_ensure_phase3_schema_plus" in globals():
+            _ensure_phase3_schema_plus(conn)
+        elif "_ensure_phase3_schema" in globals():
+            _ensure_phase3_schema(conn)
+    except Exception:
+        pass
+
     """Create an RFP record, ingest uploads, and run the One-Page analysis.
 
     Returns (rfp_id, saved_count). Analysis errors are logged but do not block
@@ -20088,6 +20097,16 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
     import pandas as pd
     from contextlib import closing as _closing
 
+    # Ensure RFP ingest/file schema is available so uploads don't fail
+    try:
+        if "_ensure_phase3_schema_plus" in globals():
+            _ensure_phase3_schema_plus(conn)
+        elif "_ensure_phase3_schema" in globals():
+            _ensure_phase3_schema(conn)
+    except Exception:
+        pass
+
+
     # High level page title
     if "render_page_title" in globals():
         render_page_title(
@@ -28819,7 +28838,7 @@ def x7_list_proposals(conn: "sqlite3.Connection", rfp_id: int):
 def _ensure_phase3_schema_plus(conn):
     """Wrapper around _ensure_phase3_schema that also ensures rfp_files.text column exists."""
     try:
-        _ensure_phase3_schema_plus(conn)
+        _ensure_phase3_schema(conn)
     except Exception:
         pass
     try:
