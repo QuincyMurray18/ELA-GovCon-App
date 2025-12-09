@@ -15183,7 +15183,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
     else:
         deal_owner_ctx = "All"
     st.session_state["deal_owner_ctx"] = deal_owner_ctx
-    tabs = st.tabs(["Activities", "Tasks", "Pipeline"])
+    tabs = st.tabs(["Activities", "Tasks", "Pipeline", "Contacts"])
 
     # Ensure Deals schema and CRM wiring are in sync
     try:
@@ -17049,6 +17049,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     cols_order = [c for c in ["When", "Type", "Subject", "Notes", "Contact"] if c in df_act.columns]
                     _styled_dataframe(df_act[cols_order], use_container_width=True, hide_index=True)
 
+
+
+    # --- Contacts
+    with tabs[3]:
+        run_contacts(conn)
 
 def _ensure_files_table(conn: "sqlite3.Connection") -> None:
     try:
