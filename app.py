@@ -8762,16 +8762,20 @@ def compute_sha256(data: bytes) -> str:
 
 
 def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, file_bytes: bytes) -> dict:
-    """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats."""
+    """Dedup by sha256. Store bytes and basic stats. Return dict with id and stats.
+
+    This version is tolerant of older databases where rfp_files.text does not exist.
+    """
     mime = _detect_mime_light(name)
     sha = compute_sha256(file_bytes)
     with closing(conn.cursor()) as cur:
-        # Dedup
+        # Dedup by sha so we do not store the same blob repeatedly
         cur.execute("SELECT id, pages FROM rfp_files WHERE sha256=?;", (sha,))
         row = cur.fetchone()
         if row:
-            rid = int(row[0]); pages = int(row[1]) if row[1] is not None else None
-            # if not linked to RFP yet, link now; if linked to a different RFP, duplicate row for this RFP
+            rid = int(row[0])
+            pages = int(row[1]) if row[1] is not None else None
+            # If not linked to RFP yet, link now; if linked to a different RFP, duplicate row for this RFP
             if rfp_id is not None:
                 try:
                     cur.execute("SELECT rfp_id FROM rfp_files WHERE id=?;", (rid,))
@@ -8783,23 +8787,67 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                     try:
                         cur.execute("UPDATE rfp_files SET rfp_id=? WHERE id=?;", (int(rfp_id), rid))
                         conn.commit()
-                        return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
+                        return {
+                            "id": rid,
+                            "sha256": sha,
+                            "filename": name,
+                            "mime": mime,
+                            "pages": pages,
+                            "dedup": True,
+                            "ocr_pages": 0,
+                        }
                     except Exception:
-                        pass
+                        try:
+                            logger.exception("save_rfp_file_db: failed to link existing row to rfp_id")
+                        except Exception:
+                            pass
                 elif existing_rfp != int(rfp_id):
+                    # Duplicate the row for this new RFP, being careful about legacy schemas without text column
                     try:
-                        cur.execute(
-                            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, text, created_at) "
-                            "SELECT ?, ?, mime, sha256, pages, bytes, text, datetime('now') FROM rfp_files WHERE id=?;",
-                            (int(rfp_id), name, rid)
-                        )
+                        try:
+                            cur.execute(
+                                "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, text, created_at) "
+                                "SELECT ?, ?, mime, sha256, pages, bytes, text, datetime('now') FROM rfp_files WHERE id=?;",
+                                (int(rfp_id), name, rid),
+                            )
+                        except sqlite3.OperationalError as e:
+                            if "has no column named text" in str(e):
+                                # Legacy DB: no text column; duplicate without it
+                                cur.execute(
+                                    "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
+                                    "SELECT ?, ?, mime, sha256, pages, bytes, datetime('now') FROM rfp_files WHERE id=?;",
+                                    (int(rfp_id), name, rid),
+                                )
+                            else:
+                                raise
                         new_rid = cur.lastrowid
                         conn.commit()
-                        return {"id": int(new_rid), "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
+                        return {
+                            "id": int(new_rid),
+                            "sha256": sha,
+                            "filename": name,
+                            "mime": mime,
+                            "pages": pages,
+                            "dedup": True,
+                            "ocr_pages": 0,
+                        }
                     except Exception:
-                        pass
-            return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages, "dedup": True, "ocr_pages": 0}
-        # New insert
+                        try:
+                            logger.exception("save_rfp_file_db: failed to duplicate existing row for new rfp_id")
+                        except Exception:
+                            pass
+            # If we reach here we just reuse the existing row
+            return {
+                "id": rid,
+                "sha256": sha,
+                "filename": name,
+                "mime": mime,
+                "pages": pages,
+                "dedup": True,
+                "ocr_pages": 0,
+            }
+
+        # New insert path
         index_bytes = file_bytes
         try:
             if file_bytes is not None and len(file_bytes) > MAX_RFP_INDEX_BYTES:
@@ -8816,16 +8864,35 @@ def save_rfp_file_db(conn: "sqlite3.Connection", rfp_id: int | None, name: str, 
                 full_text = "\n\n".join([str(p or "") for p in pages_text])
         except Exception:
             full_text = ""
-        cur.execute(
-            "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-            (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes), full_text)
-        )
+
+        # Insert, tolerant of missing text column on legacy DBs
+        try:
+            cur.execute(
+                "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, text, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+                (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes), full_text),
+            )
+        except sqlite3.OperationalError as e:
+            if "has no column named text" in str(e):
+                cur.execute(
+                    "INSERT INTO rfp_files(rfp_id, filename, mime, sha256, pages, bytes, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, datetime('now'));",
+                    (int(rfp_id) if rfp_id is not None else None, name, mime, sha, pages or 0, sqlite3.Binary(file_bytes)),
+                )
+            else:
+                raise
+
         rid = cur.lastrowid
         conn.commit()
-        return {"id": rid, "sha256": sha, "filename": name, "mime": mime, "pages": pages or 0, "dedup": False, "ocr_pages": ocr_count}
-
-
-# === Data layer: RFP records ==================================================
+        return {
+            "id": rid,
+            "sha256": sha,
+            "filename": name,
+            "mime": mime,
+            "pages": pages or 0,
+            "dedup": False,
+            "ocr_pages": ocr_count,
+        }
 def data_insert_rfp(conn, title: str, solnum: str, sam_url: str) -> int:
     """Insert an RFP shell row and return its id."""
     from contextlib import closing as _closing
