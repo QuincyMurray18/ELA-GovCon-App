@@ -19962,9 +19962,54 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         except Exception:
             df_rf = None
 
+
+    def _render_new_rfp_inline():
+        # Inline creator for a new RFP record + uploads, mirroring RFP Analyzer flow
+        with st.expander("➕ Start a new RFP", expanded=(df_rf is None or df_rf.empty)):
+            ctx0 = st.session_state.get("rfp_selected_notice") or {}
+            t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="rfp_ws_new_title")
+            s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="rfp_ws_new_sol")
+            u0 = st.text_input(
+                "SAM URL",
+                value=str(
+                    ctx0.get("SAM Link")
+                    or ctx0.get("link")
+                    or ctx0.get("URL")
+                    or ""
+                ),
+                key="rfp_ws_new_sam",
+                placeholder="https://sam.gov/",
+            )
+            ups = st.file_uploader(
+                "Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)",
+                type=["pdf","docx","txt","xlsx","zip"],
+                accept_multiple_files=True,
+                key="rfp_ws_new_files",
+            )
+            st.markdown("### Primary action: Create RFP record and ingest")
+            if st.button("Create RFP record and ingest", key="rfp_ws_new_create"):
+                try:
+                    new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
+                    ui_success(
+                        "RFP created and files ingested.",
+                        f"ID #{new_id} — {saved} file(s) saved.",
+                    )
+                    st.session_state["current_rfp_id"] = int(new_id)
+                    st.rerun()
+                except Exception as e:
+                    logger.exception("Create RFP and ingest failed from workspace")
+                    ui_error(
+                        "Could not create the RFP and ingest files.",
+                        str(e),
+                    )
+
     if df_rf is None or df_rf.empty:
-        st.info("No saved RFPs yet. Use the RFP Analyzer to ingest an RFP and create a workspace.")
+        st.info("No saved RFPs yet. Start by creating one below.")
+        _render_new_rfp_inline()
         return
+
+    # New RFP quick create (optional when RFPs already exist)
+    _render_new_rfp_inline()
 
     # Pick default RFP using helper if available
     default_rid = None
@@ -20020,9 +20065,46 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         except Exception:
             df_hdr = None
 
+    
     row = (df_hdr.iloc[0].to_dict() if df_hdr is not None and not df_hdr.empty else {})
     title = (str(row.get("title") or "")).strip() or f"RFP #{rfp_id}"
     solnum = (str(row.get("solnum") or "")).strip()
+    sam_url_val = (str(row.get("sam_url") or "")).strip()
+
+    # Quick edit of core RFP header fields
+    with st.expander("✏️ Edit RFP header", expanded=False):
+        new_title = st.text_input(
+            "RFP Title",
+            value=title,
+            key=f"rfp_ws_edit_title_{rfp_id}",
+        )
+        new_sol = st.text_input(
+            "Solicitation #",
+            value=solnum,
+            key=f"rfp_ws_edit_sol_{rfp_id}",
+        )
+        new_sam = st.text_input(
+            "SAM URL",
+            value=sam_url_val,
+            key=f"rfp_ws_edit_sam_{rfp_id}",
+            placeholder="https://sam.gov/",
+        )
+        if st.button("Save header", key=f"rfp_ws_edit_save_{rfp_id}"):
+            try:
+                _update_rfp_meta(
+                    conn,
+                    int(rfp_id),
+                    title=(new_title or "").strip(),
+                    solnum=(new_sol or "").strip(),
+                    sam_url=(new_sam or "").strip(),
+                )
+                st.success("RFP header updated.")
+            except Exception as e:
+                try:
+                    logger.exception("Update RFP header failed in workspace")
+                except Exception:
+                    pass
+                st.error("Could not update RFP header.")
 
     # Meta helpers
     def _meta(key: str, default: str = "") -> str:
@@ -20517,7 +20599,31 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         st.write(origin)
 
         st.markdown("---")
+
         st.subheader("Files and attachments")
+
+        # Upload additional files directly into this RFP workspace
+        with st.container(border=True):
+            uploads_ws = st.file_uploader(
+                "Upload RFP documents (PDF/DOCX/TXT/XLSX/ZIP)",
+                type=["pdf","doc","docx","txt","rtf","zip","xlsx","xls"],
+                accept_multiple_files=True,
+                key=f"rfp_ws_uploads_{rfp_id}",
+            )
+            save_clicked_ws = st.button(
+                "Save files to this RFP",
+                key=f"rfp_ws_uploads_save_{rfp_id}",
+            )
+            if uploads_ws and save_clicked_ws:
+                try:
+                    saved_ws = data_save_rfp_uploads(conn, int(rfp_id), uploads_ws)
+                    st.success(f"Saved {saved_ws} file(s) to this RFP.")
+                except Exception as e:
+                    try:
+                        logger.exception("Workspace RFP file upload failed")
+                    except Exception:
+                        pass
+                    st.error("Could not save uploaded files for this RFP.")
 
         df_files = None
         try:
