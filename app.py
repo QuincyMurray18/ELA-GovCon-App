@@ -19748,6 +19748,121 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
                             except Exception:
                                 st.error("Could not update RFQ target list for this RFP.")
 
+        # Past performance fit for this RFP
+        st.subheader("Past performance fit")
+
+        try:
+            rid_int_pp = int(rfp_id)
+        except Exception:
+            rid_int_pp = None
+
+        if rid_int_pp:
+            # Load past performance projects
+            try:
+                df_pp = safe_read_sql(conn, "SELECT * FROM past_perf ORDER BY id DESC;", ())
+            except Exception:
+                df_pp = None
+
+            if df_pp is None or df_pp.empty:
+                st.caption("No past performance projects saved yet. Use Past Performance Library to add projects.")
+            else:
+                # Build RFP context for relevance scoring
+                try:
+                    ctx = _load_rfp_context_struct(conn, rid_int_pp)
+                    if isinstance(ctx, dict):
+                        df_rfp_ctx = ctx.get("rfp", pd.DataFrame())
+                        rfp_title_ctx = ""
+                        if _df_nonempty(df_rfp_ctx) and "title" in df_rfp_ctx.columns:
+                            rfp_title_ctx = str(df_rfp_ctx.iloc[0].get("title") or "")
+                        rfp_secs_ctx = ctx.get("sections", pd.DataFrame())
+                    else:
+                        rfp_title_ctx = ""
+                        rfp_secs_ctx = pd.DataFrame()
+                except Exception:
+                    rfp_title_ctx = ""
+                    rfp_secs_ctx = pd.DataFrame()
+
+                # Score each project
+                scores = []
+                for _, row_pp in df_pp.iterrows():
+                    try:
+                        scores.append(_pp_score_one(row_pp.to_dict(), rfp_title_ctx, rfp_secs_ctx))
+                    except Exception:
+                        scores.append(0)
+
+                if scores:
+                    df_pp_view = df_pp.copy()
+                    df_pp_view["Relevance"] = scores
+                    df_pp_view = df_pp_view.sort_values("Relevance", ascending=False)
+                    top_n = 5
+                    df_pp_top = df_pp_view.head(top_n)
+
+                    cols_show = [c for c in [
+                        "project_title",
+                        "customer",
+                        "naics",
+                        "role",
+                        "value",
+                        "pop_start",
+                        "pop_end",
+                        "Relevance",
+                    ] if c in df_pp_top.columns]
+
+                    st.caption("Top matching projects for this RFP")
+                    if cols_show:
+                        st.dataframe(df_pp_top[cols_show], use_container_width=True)
+                    else:
+                        st.dataframe(df_pp_top, use_container_width=True)
+
+                    # Quick link to use projects in Proposal Builder
+                    if "id" in df_pp_top.columns:
+                        id_to_label_pp = {}
+                        for _, rrow in df_pp_top.iterrows():
+                            pid = int(rrow["id"])
+                            lab = str(rrow.get("project_title") or f"Project #{pid}")
+                            cust = str(rrow.get("customer") or "")
+                            if cust:
+                                lab = f"{lab} — {cust}"
+                            id_to_label_pp[pid] = lab
+
+                        chosen_ids = st.multiselect(
+                            "Select past performance projects to push to Proposal Builder",
+                            options=list(id_to_label_pp.keys()),
+                            format_func=lambda pid: id_to_label_pp.get(int(pid), str(pid)),
+                            key=f"pp_fit_select_{rfp_id}",
+                        )
+
+                        if st.button("Use in Proposal Builder → Past Performance", key=f"pp_fit_push_{rfp_id}"):
+                            if not chosen_ids:
+                                st.warning("Select at least one past performance project first.")
+                            else:
+                                blocks = []
+                                for pid in chosen_ids:
+                                    try:
+                                        row_dict = df_pp[df_pp["id"] == int(pid)].iloc[0].to_dict()
+                                    except Exception:
+                                        continue
+                                    try:
+                                        blk = _pp_writeup_block(row_dict)
+                                    except Exception:
+                                        title_pp = row_dict.get("project_title") or f"Project #{pid}"
+                                        cust_pp = row_dict.get("customer") or ""
+                                        blk = f"**{title_pp}** — {cust_pp}"
+                                    blocks.append(blk)
+                                if blocks:
+                                    new_md = "\n\n".join(blocks)
+                                    prev_md = st.session_state.get("pb_section_Past Performance", "")
+                                    if prev_md:
+                                        value_md = prev_md.rstrip() + "\n\n" + new_md
+                                    else:
+                                        value_md = new_md
+                                    st.session_state["pb_section_Past Performance"] = value_md
+                                    st.success("Sent selected projects to Proposal Builder → Past Performance.")
+                else:
+                    st.caption("Could not compute relevance scores for past performance projects.")
+        else:
+            st.caption("Select an RFP to see matching past performance.")
+
     # ---- Right column: key details and files / AI attachments ----
     with col_side:
         st.subheader("Key details")
