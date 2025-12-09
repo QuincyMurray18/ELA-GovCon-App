@@ -20109,39 +20109,40 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
     # ---- Left column: Summary, L/M snapshot, requirements, suggested subs ----
     with col_main:
         # Summary section
-        with st.expander("Summary (AI overview)", expanded=True):
-            scope = (
-                _meta("scope_summary", "")
-                or _meta("scope", "")
-                or _meta("summary", "")
-                or _meta("synopsis", "")
+        st.subheader("Summary (AI overview)")
+        scope = (
+            _meta("scope_summary", "")
+            or _meta("scope", "")
+            or _meta("summary", "")
+            or _meta("synopsis", "")
+        )
+        if scope:
+            st.write(scope)
+        else:
+            st.info("Summary will appear here after you run the RFP Analyzer and AI parse for this RFP.")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            naics = _meta("naics", "") or _meta("primary_naics", "")
+            set_aside = _meta("set_aside", "") or _meta("setaside", "")
+            st.caption("NAICS")
+            st.write(naics or "Not captured")
+            st.caption("Set-aside")
+            st.write(set_aside or "Not captured")
+        with c2:
+            pop = (
+                _meta("place_of_performance", "")
+                or _meta("pop_city_state", "")
+                or _meta("pop_state", "")
             )
-            if scope:
-                st.write(scope)
-            else:
-                st.info("Summary will appear here after you run the RFP Analyzer and AI parse for this RFP.")
+            pop_struct = _meta("pop_structure", "")
+            st.caption("Place of performance")
+            st.write(pop or "Not captured")
+            st.caption("Base + option years")
+            st.write(pop_struct or "Not captured")
 
-            c1, c2 = st.columns(2)
-            with c1:
-                naics = _meta("naics", "") or _meta("primary_naics", "")
-                set_aside = _meta("set_aside", "") or _meta("setaside", "")
-                st.caption("NAICS")
-                st.write(naics or "Not captured")
-                st.caption("Set-aside")
-                st.write(set_aside or "Not captured")
-            with c2:
-                pop = (
-                    _meta("place_of_performance", "")
-                    or _meta("pop_city_state", "")
-                    or _meta("pop_state", "")
-                )
-                pop_struct = _meta("pop_structure", "")
-                st.caption("Place of performance")
-                st.write(pop or "Not captured")
-                st.caption("Base + option years")
-                st.write(pop_struct or "Not captured")
 
-        # L/M Checklist snapshot (must/shall)
+# L/M Checklist snapshot (must/shall)
         st.subheader("L/M Checklist — must/shall requirements")
         df_mx = None
         try:
@@ -20566,11 +20567,11 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
                 except Exception:
                     st.table(df_f[show_cols])
 
-        with st.expander("AI attachments (detailed)", expanded=False):
-            try:
-                render_ai_attachments_panel(conn, int(rfp_id))
-            except Exception:
-                st.caption("AI attachments panel is not available in this environment.")
+        st.subheader("AI attachments")
+        try:
+            render_ai_attachments_panel(conn, int(rfp_id))
+        except Exception:
+            st.caption("AI attachments panel is not available in this environment.")
 
     st.markdown("---")
 
@@ -20590,6 +20591,22 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         _safe_route_call(globals().get("run_file_manager"), conn)
     elif view == "Past Performance":
         _safe_route_call(globals().get("run_past_performance"), conn)
+    # Danger zone – delete this RFP
+    st.markdown("---")
+    with st.expander("🔴 Danger zone – delete this RFP", expanded=False):
+        st.markdown(
+            "<span style='color:red; font-weight:bold;'>This will permanently remove this RFP and its related files and analyzer records.</span>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Delete this RFP", type="secondary", key="rfp_workspace_delete"):
+            try:
+                _delete_rfp_everywhere(conn, int(rfp_id))
+                st.session_state.pop("current_rfp_id", None)
+                st.success(f"Deleted RFP #{int(rfp_id)}.")
+                st.rerun()
+            except Exception:
+                st.error("Could not delete this RFP. Please try again or delete from the RFP Analyzer page.")
+
 
 def run_rfq_tools(conn: "sqlite3.Connection") -> None:
     """Wrapper hub for RFQ tools."""
