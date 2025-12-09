@@ -15975,6 +15975,20 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         contact_new = None if sel_co is None else int(sel_co)
                                     else:
                                         contact_new = None
+
+                                    # Open detailed panel for this deal
+                                    if st.button("Details", key=f"k_detail_{did}"):
+                                        st.session_state["deals_detail_id"] = did
+                                        st.session_state["deals_detail_stage"] = str(r.get("status") or "")
+                                        st.session_state["deals_detail_title"] = str(r.get("title") or "")
+                                        st.session_state["deals_detail_agency"] = str(r.get("agency") or "")
+                                        st.session_state["deals_detail_owner"] = str(r.get("owner") or "")
+                                        st.session_state["deals_detail_value"] = float(r.get("value") or 0.0)
+                                        st.session_state["deals_detail_deadline"] = str(r.get("rfp_deadline") or "")
+                                        st.session_state["deals_detail_rfp_id"] = int(r.get("rfp_id") or 0)
+                                        st.session_state["deals_detail_contact_id"] = int(r.get("co_contact_id") or 0)
+                                        st.rerun()
+
                                     import datetime as _dt
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
@@ -16170,6 +16184,247 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             _update_deal_row(ns2, ns2)
                                             st.rerun()
                     st.subheader("Summary by Stage")
+                    # Deal detail panel (View 2)
+                    _detail_id = st.session_state.get("deals_detail_id")
+                    if _detail_id:
+                        st.markdown("---")
+                        st.subheader("Deal detail")
+                        try:
+                            import pandas as _pd
+                            from contextlib import closing as _closing
+                            with _closing(conn.cursor()) as _cur:
+                                _cur.execute(
+                                    "SELECT id, title, agency, status, stage, value, rfp_deadline, owner, co_contact_id, rfp_id "
+                                    "FROM deals_t WHERE id=?;",
+                                    (_detail_id,),
+                                )
+                                row = _cur.fetchone()
+                            if row:
+                                # Convert row to dict
+                                cols = ["id","title","agency","status","stage","value","rfp_deadline","owner","co_contact_id","rfp_id"]
+                                drow = {k: row[i] for i, k in enumerate(cols)}
+                                _rfp_id = int(drow.get("rfp_id") or 0)
+                                _owner = str(drow.get("owner") or "")
+                                _stage = str(drow.get("status") or drow.get("stage") or "")
+                                try:
+                                    _value = float(drow.get("value") or 0.0)
+                                except Exception:
+                                    _value = 0.0
+                                _deadline_txt = str(drow.get("rfp_deadline") or "")
+                                _contact_id = int(drow.get("co_contact_id") or 0)
+
+                                # Load contact if present
+                                _contact = None
+                                if _contact_id:
+                                    try:
+                                        df_cc = _pd.read_sql_query(
+                                            "SELECT name, email, phone, org, title FROM contacts_t WHERE id=?;",
+                                            conn,
+                                            params=(_contact_id,),
+                                        )
+                                        if not df_cc.empty:
+                                            _contact = df_cc.iloc[0].to_dict()
+                                    except Exception:
+                                        _contact = None
+
+                                # Summary section
+                                c1, c2, c3 = st.columns(3)
+                                with c1:
+                                    st.markdown(f"**#{_detail_id} · {str(drow.get('title') or '')}**")
+                                    st.caption(str(drow.get("agency") or ""))
+                                    st.caption(f"Stage: {_stage}")
+                                with c2:
+                                    st.caption(f"Owner: {_owner or 'Unassigned'}")
+                                    st.caption(f"Value: ${_value:,.0f}")
+                                    st.caption(f"Due: {_deadline_txt or 'Not set'}")
+                                with c3:
+                                    if _contact:
+                                        st.caption("Key contact")
+                                        st.caption(str(_contact.get("name") or ""))
+                                        st.caption(str(_contact.get("email") or ""))
+                                        if _contact.get("phone"):
+                                            st.caption(str(_contact.get("phone")))
+                                    else:
+                                        st.caption("Key contact: None linked")
+
+                                # Precompute health dimensions using existing sets if available
+                                try:
+                                    _prob = float(_stage_probability(_stage))
+                                except Exception:
+                                    _prob = 0.0
+                                # Compliance / subs / pricing / outreach flags
+                                _has_comp = '_kb_comp_set' in locals() and _rfp_id in _kb_comp_set
+                                _has_subs = '_kb_subs_set' in locals() and _rfp_id in _kb_subs_set
+                                _has_price = '_kb_price_set' in locals() and _rfp_id in _kb_price_set
+                                _has_outreach = False
+                                try:
+                                    _df_out = _pd.read_sql_query(
+                                        "SELECT COUNT(*) AS n FROM outreach_log WHERE deal_id=?;",
+                                        conn,
+                                        params=(_detail_id,),
+                                    )
+                                    _has_outreach = bool(int(_df_out.iloc[0]["n"] or 0))
+                                except Exception:
+                                    _has_outreach = '_kb_outreach_set' in locals() and _detail_id in _kb_outreach_set
+
+                                _dims = [_has_comp, _has_subs, _has_price, _has_outreach]
+                                _coverage = sum(1 for x in _dims if x) / 4.0 if _dims else 0.0
+                                _health_score = 0.5 * _prob + 50.0 * _coverage
+
+                                # Health panel
+                                st.markdown("#### Health and win probability")
+                                h1, h2, h3, h4 = st.columns(4)
+                                with h1:
+                                    st.metric("Win probability", f"{_prob:,.0f}%")
+                                with h2:
+                                    st.metric("Health score", f"{_health_score:,.0f}/100")
+                                with h3:
+                                    st.metric("Signals complete", f"{int(_coverage*4)}/4")
+                                with h4:
+                                    st.caption(
+                                        ("✅ Compliance " if _has_comp else "⬜ Compliance ")
+                                        + ("· ✅ Subs " if _has_subs else "· ⬜ Subs ")
+                                        + ("· ✅ Pricing " if _has_price else "· ⬜ Pricing ")
+                                    )
+
+                                # Compliance panel
+                                st.markdown("#### Compliance")
+                                comp_cols = st.columns(3)
+                                must_count = open_items = red_flags = 0
+                                if _rfp_id:
+                                    try:
+                                        df_req = _pd.read_sql_query(
+                                            "SELECT must_flag, text FROM compliance_requirements WHERE rfp_id=?;",
+                                            conn,
+                                            params=(_rfp_id,),
+                                        )
+                                        if not df_req.empty:
+                                            must_count = int(df_req["must_flag"].fillna(0).sum())
+                                            open_items = int(len(df_req))
+                                            red_flags = int(
+                                                df_req["text"].fillna("").str.contains("red flag", case=False).sum()
+                                            )
+                                    except Exception:
+                                        pass
+                                comp_cols[0].metric("Must items", f"{must_count}")
+                                comp_cols[1].metric("Total requirements", f"{open_items}")
+                                comp_cols[2].metric("Red flags", f"{red_flags}")
+
+                                # Subs panel
+                                st.markdown("#### Subs and coverage")
+                                subs_cols = st.columns(3)
+                                subs_count = 0
+                                try:
+                                    df_rfq = _pd.read_sql_query(
+                                        "SELECT COUNT(*) AS n FROM fast_rfq_quotes WHERE deal_id=?;",
+                                        conn,
+                                        params=(_detail_id,),
+                                    )
+                                    subs_count = int(df_rfq.iloc[0]["n"] or 0)
+                                except Exception:
+                                    subs_count = 0
+                                subs_cols[0].metric("Quotes / subs", f"{subs_count}")
+                                subs_cols[1].caption("Coverage by task: see RFQ tools")
+                                with subs_cols[2]:
+                                    st.caption("Quick links")
+                                    st.button("Open Sub Finder", key="detail_open_subs")
+                                    st.button("Open RFQ tools", key="detail_open_rfq")
+
+                                # Pricing panel
+                                st.markdown("#### Pricing")
+                                price_cols = st.columns(3)
+                                total_price = None
+                                margin_pct = None
+                                price_status = "Not set"
+                                if _rfp_id:
+                                    try:
+                                        df_tot = _pd.read_sql_query(
+                                            "SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC;",
+                                            conn,
+                                            params=(_rfp_id,),
+                                        )
+                                        if not df_tot.empty:
+                                            total_price = float(df_tot.iloc[0]["total"] or 0.0)
+                                            price_status = f"Best quote: {df_tot.iloc[0]['vendor']}"
+                                    except Exception:
+                                        pass
+                                    try:
+                                        df_sc = _pd.read_sql_query(
+                                            "SELECT our_total, target_margin FROM pricing_scenarios WHERE rfp_id=? ORDER BY id DESC LIMIT 1;",
+                                            conn,
+                                            params=(_rfp_id,),
+                                        )
+                                        if not df_sc.empty:
+                                            if df_sc.iloc[0].get("our_total") is not None:
+                                                total_price = float(df_sc.iloc[0]["our_total"])
+                                            if df_sc.iloc[0].get("target_margin") is not None:
+                                                margin_pct = float(df_sc.iloc[0]["target_margin"])
+                                    except Exception:
+                                        pass
+                                price_cols[0].metric("Total price", f"${total_price:,.0f}" if total_price is not None else "—")
+                                price_cols[1].metric("Target margin", f"{margin_pct:,.1f}%" if margin_pct is not None else "—")
+                                price_cols[2].caption(price_status)
+
+                                # Outreach panel
+                                st.markdown("#### Outreach")
+                                o1, o2 = st.columns([2, 1])
+                                recent = None
+                                try:
+                                    recent = _pd.read_sql_query(
+                                        "SELECT to_email, subject, status, created_at FROM outreach_log WHERE deal_id=? "
+                                        "ORDER BY created_at DESC LIMIT 5;",
+                                        conn,
+                                        params=(_detail_id,),
+                                    )
+                                except Exception:
+                                    recent = None
+                                with o1:
+                                    if recent is None or recent.empty:
+                                        st.caption("No outreach logged yet for this deal.")
+                                    else:
+                                        st.dataframe(recent, use_container_width=True, hide_index=True)
+                                with o2:
+                                    st.caption("Next planned touch")
+                                    try:
+                                        df_tasks = _pd.read_sql_query(
+                                            "SELECT title, due_date FROM tasks WHERE deal_id=? ORDER BY due_date ASC LIMIT 1;",
+                                            conn,
+                                            params=(_detail_id,),
+                                        )
+                                        if not df_tasks.empty:
+                                            st.caption(str(df_tasks.iloc[0]["title"] or ""))
+                                            st.caption(str(df_tasks.iloc[0]["due_date"] or ""))
+                                        else:
+                                            st.caption("None scheduled")
+                                    except Exception:
+                                        st.caption("None scheduled")
+                                    st.button("Open Outreach for this deal", key="detail_open_outreach")
+
+                                # Contacts and notes
+                                st.markdown("#### Contacts and notes")
+                                n1, n2 = st.columns([2, 1])
+                                with n1:
+                                    try:
+                                        df_act = _pd.read_sql_query(
+                                            "SELECT ts, type, subject, notes FROM activities WHERE deal_id=? "
+                                            "ORDER BY ts DESC LIMIT 10;",
+                                            conn,
+                                            params=(_detail_id,),
+                                        )
+                                        if df_act is None or df_act.empty:
+                                            st.caption("No internal notes / decision log yet.")
+                                        else:
+                                            st.dataframe(df_act, use_container_width=True, hide_index=True)
+                                    except Exception:
+                                        st.caption("No internal notes / decision log yet.")
+                                with n2:
+                                    st.caption("Key fields")
+                                    st.caption(f"CO / POC ID: {_contact_id or 'None'}")
+                                    st.caption(f"RFP ID: {_rfp_id or 'None'}")
+                            else:
+                                st.caption("Selected deal not found.")
+                        except Exception as _e_dd:
+                            st.warning(f"Could not load deal detail: {_e_dd}")
                     summary = df.groupby("status").agg(
                         deals=("id","count"),
                         value=("value","sum"),
