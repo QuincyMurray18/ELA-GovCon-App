@@ -15557,8 +15557,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             except Exception:
                                 pass
 
-                        # Normalize deadline for date filtering
-                        _df_cc["_deadline_dt"] = _pd.to_datetime(_df_cc.get("rfp_deadline"), errors="coerce").dt.date
+# Normalize deadline for date filtering as datetime64 (no plain date) to avoid mixed-type comparisons
+_df_cc["_deadline_dt"] = _pd.to_datetime(
+    _df_cc.get("rfp_deadline"),
+    errors="coerce"
+).dt.normalize()
 
                         # Filter options
                         owners = []
@@ -15606,10 +15609,12 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         if isinstance(due_range, (list, tuple)) and len(due_range) == 2:
                             d0, d1 = due_range
                             if d0 and d1:
+                                d0_ts = _pd.to_datetime(d0).normalize()
+                                d1_ts = _pd.to_datetime(d1).normalize()
                                 df_view = df_view[
                                     (df_view["_deadline_dt"].notna())
-                                    & (df_view["_deadline_dt"] >= d0)
-                                    & (df_view["_deadline_dt"] <= d1)
+                                    & (df_view["_deadline_dt"] >= d0_ts)
+                                    & (df_view["_deadline_dt"] <= d1_ts)
                                 ]
 
                         m1, m2, m3, m4 = st.columns(4)
@@ -15635,9 +15640,9 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             weighted_pipeline = float((value_series * prob_series / 100.0).sum())
 
                             upcoming = df_view["_deadline_dt"]
-                            today_cc = _dt.date.today()
+                            today_cc = _pd.Timestamp.today().normalize()
                             mask_7 = (upcoming.notna()) & (
-                                (upcoming >= today_cc) & (upcoming <= today_cc + _dt.timedelta(days=7))
+                                (upcoming >= today_cc) & (upcoming <= today_cc + _pd.Timedelta(days=7))
                             )
                             deals_next7 = int(mask_7.sum())
                             try:
