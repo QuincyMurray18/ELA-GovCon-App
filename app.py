@@ -12421,11 +12421,11 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
     except Exception:
         tpl_df = pd.DataFrame(columns=["id", "name", "template_type", "default_section", "is_active", "created_at"])
 
-    with st.expander("Template library (proposal templates)", expanded=False):
-        x7_template_library_ui(conn)
+    st.subheader("Template library (proposal templates)")
+    x7_template_library_ui(conn)
 
-    with st.expander("Snippet library (reusable snippets)", expanded=False):
-        x7_snippet_library_ui(conn)
+    st.subheader("Snippet library (reusable snippets)")
+    x7_snippet_library_ui(conn)
 
     left, right = st.columns([3, 2])
     with left:
@@ -12511,13 +12511,13 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
             pass
         # Optional: auto-fill all selected sections from templates.
         if isinstance(tpl_df, pd.DataFrame) and not tpl_df.empty and selected:
-            with st.expander("Auto-fill sections from templates", expanded=False):
-                st.caption(
-                    "For each section, this will use the first active template whose default_section "
-                    "matches the section name. If no exact match is found, it will fall back to any "
-                    "active 'section' template."
-                )
-                if st.button("Apply templates to all sections", key="pb_apply_templates_all"):
+            st.markdown("**Apply templates to selected sections**")
+            st.caption(
+                "For each section, this will use the first active template whose default_section "
+                "matches the section name. If no exact match is found, it will fall back to any "
+                "active 'section' template."
+            )
+            if st.button("Apply templates to all sections", key="pb_apply_templates_all"):
                     for sec in selected:
                         try:
                             _sec_label = str(sec).strip().lower()
@@ -12719,8 +12719,8 @@ def run_proposal_builder(conn: "sqlite3.Connection") -> None:
         st.subheader("Guidance and limits")
         # Surface AI attachments for the selected RFP so you do not need to re-upload files here.
         try:
-            with st.expander("AI attachments for this RFP", expanded=False):
-                render_ai_attachments_panel(conn, int(rfp_id))
+            st.markdown("**AI attachments for this RFP**")
+            render_ai_attachments_panel(conn, int(rfp_id))
         except Exception:
             # Keep Proposal Builder usable even if the AI attachments panel is unavailable.
             pass
