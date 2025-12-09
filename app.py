@@ -15533,6 +15533,136 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             df["days_since_last_activity"] = _pd.Series([None] * len(df))
                     else:
                         df["days_since_last_activity"] = None
+
+                    # --- Deals Control Center: top filters + quick stats ---
+                    try:
+                        import pandas as _pd
+                        import datetime as _dt
+
+                        # Start from the current pipeline DataFrame
+                        _df_cc = df.copy()
+
+                        # Bring in owner / NAICS metadata from deals_t
+                        try:
+                            df_meta = _pd.read_sql_query(
+                                "SELECT id, COALESCE(owner, '') AS owner, COALESCE(naics, '') AS naics FROM deals_t;",
+                                conn,
+                                params=(),
+                            )
+                        except Exception:
+                            df_meta = None
+                        if df_meta is not None and not df_meta.empty:
+                            try:
+                                _df_cc = _df_cc.merge(df_meta, on="id", how="left", suffixes=("", "_meta"))
+                            except Exception:
+                                pass
+
+                        # Normalize deadline for date filtering as datetime64 (no plain date) to avoid mixed-type comparisons
+                        _df_cc["_deadline_dt"] = _pd.to_datetime(
+                            _df_cc.get("rfp_deadline"),
+                            errors="coerce"
+                        ).dt.normalize()
+
+                        # Filter options
+                        owners = []
+                        if "owner" in _df_cc.columns:
+                            try:
+                                owners = sorted({str(o).strip() for o in _df_cc["owner"].dropna().tolist() if str(o).strip()})
+                            except Exception:
+                                owners = []
+                        buyers = []
+                        if "agency" in _df_cc.columns:
+                            try:
+                                buyers = sorted({str(a).strip() for a in _df_cc["agency"].dropna().tolist() if str(a).strip()})
+                            except Exception:
+                                buyers = []
+
+                        f_owner, f_stage, f_buyer, f_naics, f_due = st.columns([1.2, 1.2, 1.2, 1.0, 1.4])
+                        with f_owner:
+                            owner_opts = ["All owners"] + owners if owners else ["All owners"]
+                            owner_choice = st.selectbox("Owner", owner_opts, key="deals_cc_owner")
+                        with f_stage:
+                            stage_sel = st.multiselect("Stage", STAGES_ORDERED, key="deals_cc_stage")
+                        with f_buyer:
+                            buyer_sel = st.multiselect("Buyer / Agency", buyers, key="deals_cc_buyer")
+                        with f_naics:
+                            naics_text = st.text_input("NAICS contains", value="", key="deals_cc_naics")
+                        with f_due:
+                            default_start = _dt.date.today() - _dt.timedelta(days=365)
+                            default_end = _dt.date.today() + _dt.timedelta(days=365)
+                            due_range = st.date_input(
+                                "Due date range",
+                                value=(default_start, default_end),
+                                key="deals_cc_due_range",
+                            )
+
+                        df_view = _df_cc
+                        if owner_choice != "All owners" and "owner" in df_view.columns:
+                            df_view = df_view[df_view["owner"].fillna("") == owner_choice]
+                        if stage_sel:
+                            df_view = df_view[df_view["status"].isin(stage_sel)]
+                        if buyer_sel:
+                            df_view = df_view[df_view["agency"].isin(buyer_sel)]
+                        if naics_text.strip() and "naics" in df_view.columns:
+                            df_view = df_view[df_view["naics"].fillna("").str.contains(naics_text.strip(), case=False)]
+
+                        if isinstance(due_range, (list, tuple)) and len(due_range) == 2:
+                            d0, d1 = due_range
+                            if d0 and d1:
+                                d0_ts = _pd.to_datetime(d0).normalize()
+                                d1_ts = _pd.to_datetime(d1).normalize()
+                                df_view = df_view[
+                                    (df_view["_deadline_dt"].notna())
+                                    & (df_view["_deadline_dt"] >= d0_ts)
+                                    & (df_view["_deadline_dt"] <= d1_ts)
+                                ]
+
+                        m1, m2, m3, m4 = st.columns(4)
+                        if df_view is None or df_view.empty:
+                            with m1:
+                                st.metric("Active deals", "0")
+                            with m2:
+                                st.metric("Weighted pipeline", "$0")
+                            with m3:
+                                st.metric("Due in next 7 days", "0")
+                            with m4:
+                                st.metric("Avg win probability", "0%")
+                        else:
+                            # Compute weighted pipeline and win probability
+                            try:
+                                value_series = df_view.get("value", _pd.Series([], dtype="float64")).fillna(0).astype(float)
+                                prob_series = df_view.get("status", _pd.Series([], dtype="object")).map(
+                                    lambda s: _stage_probability(str(s))
+                                )
+                            except Exception:
+                                value_series = _pd.Series([], dtype="float64")
+                                prob_series = _pd.Series([], dtype="float64")
+                            weighted_pipeline = float((value_series * prob_series / 100.0).sum())
+
+                            upcoming = df_view["_deadline_dt"]
+                            today_cc = _pd.Timestamp.today().normalize()
+                            mask_7 = (upcoming.notna()) & (
+                                (upcoming >= today_cc) & (upcoming <= today_cc + _pd.Timedelta(days=7))
+                            )
+                            deals_next7 = int(mask_7.sum())
+                            try:
+                                avg_prob = float(prob_series.mean())
+                            except Exception:
+                                avg_prob = 0.0
+                            if avg_prob != avg_prob:  # NaN check
+                                avg_prob = 0.0
+
+                            with m1:
+                                st.metric("Active deals", f"{len(df_view):,}")
+                            with m2:
+                                st.metric("Weighted pipeline", f"${weighted_pipeline:,.0f}")
+                            with m3:
+                                st.metric("Due in next 7 days", f"{deals_next7:,}")
+                            with m4:
+                                st.metric("Avg win probability", f"{avg_prob:,.0f}%")
+                    except Exception as _e:
+                        st.warning(f"Deals control center summary unavailable: {_e}")
+
                     # SLA-style color coding via emoji labels
                     import pandas as _pd
                     def _sla_label(days, green, yellow):
@@ -15610,7 +15740,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         # Filter by logical owner_user while respecting tenant scoping via deals_t
                         df_k = pd.read_sql_query(
                             "SELECT d.id, d.title, d.agency, COALESCE(d.status, d.stage, '') AS status, "
-                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, COALESCE(d.owner, '') AS owner, "
+                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, d.rfp_id, COALESCE(d.owner, '') AS owner, "
                             "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
                             "COALESCE(c.name, '') AS co_name, "
                             "COALESCE(c.email, '') AS co_email, "
@@ -15625,7 +15755,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     else:
                         df_k = pd.read_sql_query(
                             "SELECT d.id, d.title, d.agency, COALESCE(d.status, d.stage, '') AS status, "
-                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, COALESCE(d.owner, '') AS owner, "
+                            "COALESCE(d.value, 0) AS value, d.rfp_deadline, d.rfp_id, COALESCE(d.owner, '') AS owner, "
                             "COALESCE(d.co_contact_id, 0) AS co_contact_id, "
                             "COALESCE(c.name, '') AS co_name, "
                             "COALESCE(c.email, '') AS co_email, "
@@ -15640,8 +15770,8 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     # Fallback to view without owner_user column or contacts_t
                     try:
                         df_k = pd.read_sql_query(
-                            "SELECT id, title, agency, status, value, rfp_deadline, '' AS owner, "
-                            "0 AS co_contact_id, '' AS co_name, '' AS co_email, '' AS co_phone "
+                            "SELECT id, title, agency, status, value, rfp_deadline, rfp_id, '' AS owner, "\
+                            "0 AS co_contact_id, '' AS co_name, '' AS co_email, '' AS co_phone "\
                             "FROM deals_t ORDER BY id DESC;",
                             conn,
                             params=(),
@@ -15652,6 +15782,79 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if df_k is None or df_k.empty:
                     st.caption("No deals to display")
                 else:
+                    # Precompute simple status sets for Kanban icons (compliance, subs, pricing, outreach)
+                    try:
+                        import pandas as _pd
+                        _kb_deal_rfp = {}
+                        try:
+                            _df_links = _pd.read_sql_query(
+                                "SELECT id, rfp_id FROM deals_t;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_deal_rfp = {
+                                int(r["id"]): int(r["rfp_id"])
+                                for _, r in _df_links.iterrows()
+                                if r.get("rfp_id") not in (None, "", 0)
+                            }
+                        except Exception:
+                            _kb_deal_rfp = {}
+                        _kb_comp_set = set()
+                        _kb_price_set = set()
+                        _kb_subs_set = set()
+                        _kb_outreach_set = set()
+                        try:
+                            _df_cf = _pd.read_sql_query(
+                                "SELECT DISTINCT rfp_id FROM compliance_requirements;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_comp_set = {
+                                int(x) for x in _df_cf["rfp_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                        try:
+                            _df_pr = _pd.read_sql_query(
+                                "SELECT DISTINCT rfp_id FROM pricing_scenarios;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_price_set = {
+                                int(x) for x in _df_pr["rfp_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                        try:
+                            _df_q = _pd.read_sql_query(
+                                "SELECT DISTINCT rfp_id FROM quotes;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_subs_set = {
+                                int(x) for x in _df_q["rfp_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                        try:
+                            _df_ol = _pd.read_sql_query(
+                                "SELECT DISTINCT deal_id FROM outreach_log WHERE deal_id IS NOT NULL;",
+                                conn,
+                                params=(),
+                            )
+                            _kb_outreach_set = {
+                                int(x)
+                                for x in _df_ol["deal_id"].dropna().tolist()
+                            }
+                        except Exception:
+                            pass
+                    except Exception:
+                        _kb_deal_rfp = {}
+                        _kb_comp_set = set()
+                        _kb_price_set = set()
+                        _kb_subs_set = set()
+                        _kb_outreach_set = set()
+
                     # Preload contacts for Kanban contact dropdowns
                     try:
                         df_contacts_k = pd.read_sql_query(
@@ -15686,6 +15889,40 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
                                     st.caption(str(r.get("agency") or ""))
+
+                                    # Compact stats line: value + win probability
+                                    try:
+                                        _val = float(r.get("value") or 0.0)
+                                    except Exception:
+                                        _val = 0.0
+                                    try:
+                                        _prob = float(_stage_probability(str(r.get("status") or "")))
+                                    except Exception:
+                                        _prob = 0.0
+                                    st.caption(f"Value: ${_val:,.0f} · Win prob: {_prob:,.0f}%")
+
+                                    # Small status icons: compliance, subs, pricing, outreach
+                                    try:
+                                        _rfp_id = 0
+                                        try:
+                                            _rfp_id = int(r.get("rfp_id") or 0)
+                                        except Exception:
+                                            _rfp_id = 0
+                                        if (not _rfp_id) and '_kb_deal_rfp' in locals():
+                                            _rfp_id = int(_kb_deal_rfp.get(did) or 0)
+                                        _has_comp = '_kb_comp_set' in locals() and _rfp_id in _kb_comp_set
+                                        _has_subs = '_kb_subs_set' in locals() and _rfp_id in _kb_subs_set
+                                        _has_price = '_kb_price_set' in locals() and _rfp_id in _kb_price_set
+                                        _has_outreach = '_kb_outreach_set' in locals() and did in _kb_outreach_set
+                                        _icons = []
+                                        _icons.append(("✅" if _has_comp else "⬜") + " C")
+                                        _icons.append(("✅" if _has_subs else "⬜") + " S")
+                                        _icons.append(("✅" if _has_price else "⬜") + " P")
+                                        _icons.append(("✅" if _has_outreach else "⬜") + " O")
+                                        st.caption(" ".join(_icons))
+                                    except Exception:
+                                        pass
+
                                     # Contact display and selector for this deal
                                     co_name = str(r.get("co_name") or "").strip()
                                     co_email = str(r.get("co_email") or "").strip()
@@ -15738,6 +15975,20 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         contact_new = None if sel_co is None else int(sel_co)
                                     else:
                                         contact_new = None
+
+                                    # Open detailed panel for this deal
+                                    if st.button("Details", key=f"k_detail_{did}"):
+                                        st.session_state["deals_detail_id"] = did
+                                        st.session_state["deals_detail_stage"] = str(r.get("status") or "")
+                                        st.session_state["deals_detail_title"] = str(r.get("title") or "")
+                                        st.session_state["deals_detail_agency"] = str(r.get("agency") or "")
+                                        st.session_state["deals_detail_owner"] = str(r.get("owner") or "")
+                                        st.session_state["deals_detail_value"] = float(r.get("value") or 0.0)
+                                        st.session_state["deals_detail_deadline"] = str(r.get("rfp_deadline") or "")
+                                        st.session_state["deals_detail_rfp_id"] = int(r.get("rfp_id") or 0)
+                                        st.session_state["deals_detail_contact_id"] = int(r.get("co_contact_id") or 0)
+                                        st.rerun()
+
                                     import datetime as _dt
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
@@ -15815,7 +16066,23 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         else:
                                             _deadline_display = str(_raw_deadline or "").strip()
                                         if _deadline_display:
-                                            st.caption(f"Full deadline: {_deadline_display}")
+                                            # Show due date and days remaining / past due
+                                            try:
+                                                _days_delta = None
+                                                if _dt_val is not None:
+                                                    _days_delta = (_dt_val.date() - _dt.date.today()).days
+                                                if _days_delta is None:
+                                                    st.caption(f"Due: {_deadline_display}")
+                                                else:
+                                                    if _days_delta > 0:
+                                                        _status_txt = f"{_days_delta} days left"
+                                                    elif _days_delta == 0:
+                                                        _status_txt = "Due today"
+                                                    else:
+                                                        _status_txt = f"{abs(_days_delta)} days past due"
+                                                    st.caption(f"Due: {_deadline_display} · {_status_txt}")
+                                            except Exception:
+                                                st.caption(f"Due: {_deadline_display}")
                                     except Exception:
                                         pass
 # Editable value
@@ -15917,6 +16184,346 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             _update_deal_row(ns2, ns2)
                                             st.rerun()
                     st.subheader("Summary by Stage")
+                    # Deal detail panel (View 2)
+                    _detail_id = st.session_state.get("deals_detail_id")
+                    if _detail_id:
+                        st.markdown("---")
+                        st.subheader("Deal detail")
+                        try:
+                            import pandas as _pd
+                            from contextlib import closing as _closing
+                            with _closing(conn.cursor()) as _cur:
+                                _cur.execute(
+                                    "SELECT id, title, agency, status, stage, value, rfp_deadline, owner, co_contact_id, rfp_id "
+                                    "FROM deals_t WHERE id=?;",
+                                    (_detail_id,),
+                                )
+                                row = _cur.fetchone()
+                            if row:
+                                # Convert row to dict
+                                cols = ["id","title","agency","status","stage","value","rfp_deadline","owner","co_contact_id","rfp_id"]
+                                drow = {k: row[i] for i, k in enumerate(cols)}
+                                _rfp_id = int(drow.get("rfp_id") or 0)
+                                _owner = str(drow.get("owner") or "")
+                                _stage = str(drow.get("status") or drow.get("stage") or "")
+                                try:
+                                    _value = float(drow.get("value") or 0.0)
+                                except Exception:
+                                    _value = 0.0
+                                _deadline_txt = str(drow.get("rfp_deadline") or "")
+                                _contact_id = int(drow.get("co_contact_id") or 0)
+
+                                # Load contact if present
+                                _contact = None
+                                if _contact_id:
+                                    try:
+                                        df_cc = _pd.read_sql_query(
+                                            "SELECT name, email, phone, org, title FROM contacts_t WHERE id=?;",
+                                            conn,
+                                            params=(_contact_id,),
+                                        )
+                                        if not df_cc.empty:
+                                            _contact = df_cc.iloc[0].to_dict()
+                                    except Exception:
+                                        _contact = None
+
+                                # Summary section
+                                c1, c2, c3 = st.columns(3)
+                                with c1:
+                                    st.markdown(f"**#{_detail_id} · {str(drow.get('title') or '')}**")
+                                    st.caption(str(drow.get("agency") or ""))
+                                    st.caption(f"Stage: {_stage}")
+                                with c2:
+                                    st.caption(f"Owner: {_owner or 'Unassigned'}")
+                                    st.caption(f"Value: ${_value:,.0f}")
+                                    st.caption(f"Due: {_deadline_txt or 'Not set'}")
+                                with c3:
+                                    if _contact:
+                                        st.caption("Key contact")
+                                        st.caption(str(_contact.get("name") or ""))
+                                        st.caption(str(_contact.get("email") or ""))
+                                        if _contact.get("phone"):
+                                            st.caption(str(_contact.get("phone")))
+                                    else:
+                                        st.caption("Key contact: None linked")
+
+                                # Precompute health dimensions using existing sets if available
+                                try:
+                                    _prob = float(_stage_probability(_stage))
+                                except Exception:
+                                    _prob = 0.0
+                                # Compliance / subs / pricing / outreach flags
+                                _has_comp = '_kb_comp_set' in locals() and _rfp_id in _kb_comp_set
+                                _has_subs = '_kb_subs_set' in locals() and _rfp_id in _kb_subs_set
+                                _has_price = '_kb_price_set' in locals() and _rfp_id in _kb_price_set
+                                _has_outreach = False
+                                try:
+                                    _df_out = _pd.read_sql_query(
+                                        "SELECT COUNT(*) AS n FROM outreach_log WHERE deal_id=?;",
+                                        conn,
+                                        params=(_detail_id,),
+                                    )
+                                    _has_outreach = bool(int(_df_out.iloc[0]["n"] or 0))
+                                except Exception:
+                                    _has_outreach = '_kb_outreach_set' in locals() and _detail_id in _kb_outreach_set
+
+                                _dims = [_has_comp, _has_subs, _has_price, _has_outreach]
+                                _coverage = sum(1 for x in _dims if x) / 4.0 if _dims else 0.0
+                                _health_score = 0.5 * _prob + 50.0 * _coverage
+
+                                # Health panel
+                                st.markdown("#### Health and win probability")
+                                h1, h2, h3, h4 = st.columns(4)
+                                with h1:
+                                    st.metric("Win probability", f"{_prob:,.0f}%")
+                                with h2:
+                                    st.metric("Health score", f"{_health_score:,.0f}/100")
+                                with h3:
+                                    st.metric("Signals complete", f"{int(_coverage*4)}/4")
+                                with h4:
+                                    st.caption(
+                                        ("✅ Compliance " if _has_comp else "⬜ Compliance ")
+                                        + ("· ✅ Subs " if _has_subs else "· ⬜ Subs ")
+                                        + ("· ✅ Pricing " if _has_price else "· ⬜ Pricing ")
+                                    )
+
+                                # Compliance panel
+                                st.markdown("#### Compliance")
+                                comp_cols = st.columns(3)
+                                must_count = open_items = red_flags = 0
+                                if _rfp_id:
+                                    try:
+                                        df_req = _pd.read_sql_query(
+                                            "SELECT must_flag, text FROM compliance_requirements WHERE rfp_id=?;",
+                                            conn,
+                                            params=(_rfp_id,),
+                                        )
+                                        if not df_req.empty:
+                                            must_count = int(df_req["must_flag"].fillna(0).sum())
+                                            open_items = int(len(df_req))
+                                            red_flags = int(
+                                                df_req["text"].fillna("").str.contains("red flag", case=False).sum()
+                                            )
+                                    except Exception:
+                                        pass
+                                comp_cols[0].metric("Must items", f"{must_count}")
+                                comp_cols[1].metric("Total requirements", f"{open_items}")
+                                comp_cols[2].metric("Red flags", f"{red_flags}")
+                                if st.button("Open RFP Workspace", key="detail_open_rfp_ws"):
+                                    if _rfp_id:
+                                        try:
+                                            st.session_state["current_rfp_id"] = _rfp_id
+                                        except Exception:
+                                            pass
+                                        try:
+                                            router("RFP Workspace", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
+                                    else:
+                                        st.warning("No RFP linked to this deal yet.")
+
+                                # Subs panel
+                                st.markdown("#### Subs and coverage")
+                                subs_cols = st.columns(3)
+                                subs_count = 0
+                                try:
+                                    df_rfq = _pd.read_sql_query(
+                                        "SELECT COUNT(*) AS n FROM fast_rfq_quotes WHERE deal_id=?;",
+                                        conn,
+                                        params=(_detail_id,),
+                                    )
+                                    subs_count = int(df_rfq.iloc[0]["n"] or 0)
+                                except Exception:
+                                    subs_count = 0
+                                subs_cols[0].metric("Quotes / subs", f"{subs_count}")
+                                subs_cols[1].caption("Coverage by task: see RFQ tools")
+                                with subs_cols[2]:
+                                    st.caption("Quick links")
+                                    if st.button("Open Sub Finder", key="detail_open_subs"):
+                                        try:
+                                            st.session_state["current_rfp_id"] = _rfp_id
+                                        except Exception:
+                                            pass
+                                        # Try to seed NAICS and state filters for Sub Finder from rfp_meta
+                                        try:
+                                            import re as _re
+                                            df_meta = _pd.read_sql_query(
+                                                "SELECT key, value FROM rfp_meta WHERE rfp_id=?;",
+                                                conn,
+                                                params=(int(_rfp_id),),
+                                            )
+                                            if df_meta is not None and not df_meta.empty:
+                                                _meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()}
+                                                _naics = _meta.get("naics") or _meta.get("NAICS")
+                                                if _naics:
+                                                    st.session_state["sub_default_naics"] = str(_naics)
+                                                _place = _meta.get("place_of_performance") or _meta.get("Place of Performance")
+                                                if _place:
+                                                    try:
+                                                        m = _re.search(r"\b([A-Z]{2})\b", str(_place).upper())
+                                                        if m:
+                                                            st.session_state["sub_default_state"] = m.group(1)
+                                                    except Exception:
+                                                        pass
+                                        except Exception:
+                                            pass
+                                        try:
+                                            router("Subcontractor Finder", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
+                                    if st.button("Open RFQ tools", key="detail_open_rfq"):
+                                        try:
+                                            st.session_state["rfq_default_deal_id"] = _detail_id
+                                        except Exception:
+                                            pass
+                                        if _rfp_id:
+                                            try:
+                                                st.session_state["current_rfp_id"] = _rfp_id
+                                                st.session_state["rfq_default_rfp_id"] = _rfp_id
+                                            except Exception:
+                                                pass
+                                        try:
+                                            router("RFQ Tools", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
+
+                                # Pricing panel
+                                st.markdown("#### Pricing")
+                                price_cols = st.columns(3)
+                                total_price = None
+                                margin_pct = None
+                                price_status = "Not set"
+                                if _rfp_id:
+                                    try:
+                                        df_tot = _pd.read_sql_query(
+                                            "SELECT vendor, total FROM quote_totals WHERE rfp_id=? ORDER BY total ASC;",
+                                            conn,
+                                            params=(_rfp_id,),
+                                        )
+                                        if not df_tot.empty:
+                                            total_price = float(df_tot.iloc[0]["total"] or 0.0)
+                                            price_status = f"Best quote: {df_tot.iloc[0]['vendor']}"
+                                    except Exception:
+                                        pass
+                                    try:
+                                        df_sc = _pd.read_sql_query(
+                                            "SELECT our_total, target_margin FROM pricing_scenarios WHERE rfp_id=? ORDER BY id DESC LIMIT 1;",
+                                            conn,
+                                            params=(_rfp_id,),
+                                        )
+                                        if not df_sc.empty:
+                                            if df_sc.iloc[0].get("our_total") is not None:
+                                                total_price = float(df_sc.iloc[0]["our_total"])
+                                            if df_sc.iloc[0].get("target_margin") is not None:
+                                                margin_pct = float(df_sc.iloc[0]["target_margin"])
+                                    except Exception:
+                                        pass
+                                price_cols[0].metric("Total price", f"${total_price:,.0f}" if total_price is not None else "—")
+                                price_cols[1].metric("Target margin", f"{margin_pct:,.1f}%" if margin_pct is not None else "—")
+                                price_cols[2].caption(price_status)
+
+                                # Outreach panel
+                                st.markdown("#### Outreach")
+                                o1, o2 = st.columns([2, 1])
+                                recent = None
+                                try:
+                                    recent = _pd.read_sql_query(
+                                        "SELECT to_email, subject, status, created_at FROM outreach_log WHERE deal_id=? "
+                                        "ORDER BY created_at DESC LIMIT 5;",
+                                        conn,
+                                        params=(_detail_id,),
+                                    )
+                                except Exception:
+                                    recent = None
+                                with o1:
+                                    if recent is None or recent.empty:
+                                        st.caption("No outreach logged yet for this deal.")
+                                    else:
+                                        st.dataframe(recent, use_container_width=True, hide_index=True)
+                                with o2:
+                                    st.caption("Next planned touch")
+                                    try:
+                                        df_tasks = _pd.read_sql_query(
+                                            "SELECT title, due_date FROM tasks WHERE deal_id=? ORDER BY due_date ASC LIMIT 1;",
+                                            conn,
+                                            params=(_detail_id,),
+                                        )
+                                        if not df_tasks.empty:
+                                            st.caption(str(df_tasks.iloc[0]["title"] or ""))
+                                            st.caption(str(df_tasks.iloc[0]["due_date"] or ""))
+                                        else:
+                                            st.caption("None scheduled")
+                                    except Exception:
+                                        st.caption("None scheduled")
+                                    if st.button("Open Outreach for this deal", key="detail_open_outreach"):
+                                        try:
+                                            st.session_state["outreach_from_deal_id"] = _detail_id
+                                            if _rfp_id:
+                                                st.session_state["outreach_from_rfp_id"] = _rfp_id
+                                        except Exception:
+                                            pass
+                                        # Seed Outreach vendor filters from RFP meta if available
+                                        try:
+                                            import re as _re
+                                            df_meta = _pd.read_sql_query(
+                                                "SELECT key, value FROM rfp_meta WHERE rfp_id=?;",
+                                                conn,
+                                                params=(int(_rfp_id),),
+                                            )
+                                            if df_meta is not None and not df_meta.empty:
+                                                _meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()}
+                                                _naics = _meta.get("naics") or _meta.get("NAICS")
+                                                if _naics:
+                                                    st.session_state["o3_f_naics"] = str(_naics)
+                                                _place = _meta.get("place_of_performance") or _meta.get("Place of Performance")
+                                                if _place:
+                                                    try:
+                                                        m = _re.search(r"\b([A-Z]{2})\b", str(_place).upper())
+                                                        if m:
+                                                            st.session_state["o3_f_state"] = m.group(1)
+                                                    except Exception:
+                                                        pass
+                                        except Exception:
+                                            pass
+                                        if _rfp_id:
+                                            try:
+                                                st.session_state["current_rfp_id"] = _rfp_id
+                                            except Exception:
+                                                pass
+                                        try:
+                                            router("Outreach", conn)
+                                            st.stop()
+                                        except Exception:
+                                            st.rerun()
+
+                                # Contacts and notes
+                                st.markdown("#### Contacts and notes")
+                                n1, n2 = st.columns([2, 1])
+                                with n1:
+                                    try:
+                                        df_act = _pd.read_sql_query(
+                                            "SELECT ts, type, subject, notes FROM activities WHERE deal_id=? "
+                                            "ORDER BY ts DESC LIMIT 10;",
+                                            conn,
+                                            params=(_detail_id,),
+                                        )
+                                        if df_act is None or df_act.empty:
+                                            st.caption("No internal notes / decision log yet.")
+                                        else:
+                                            st.dataframe(df_act, use_container_width=True, hide_index=True)
+                                    except Exception:
+                                        st.caption("No internal notes / decision log yet.")
+                                with n2:
+                                    st.caption("Key fields")
+                                    st.caption(f"CO / POC ID: {_contact_id or 'None'}")
+                                    st.caption(f"RFP ID: {_rfp_id or 'None'}")
+                            else:
+                                st.caption("Selected deal not found.")
+                        except Exception as _e_dd:
+                            st.warning(f"Could not load deal detail: {_e_dd}")
                     summary = df.groupby("status").agg(
                         deals=("id","count"),
                         value=("value","sum"),
@@ -21282,6 +21889,34 @@ def run_outreach(conn):
 
     st.header("Outreach")
     st.caption("Use this page to send targeted email campaigns to agencies and vendors and track your outreach work.")
+    # If we were launched from Deals detail, show quick context
+    try:
+        _from_deal = st.session_state.get("outreach_from_deal_id")
+        _from_rfp = st.session_state.get("outreach_from_rfp_id")
+    except Exception:
+        _from_deal = None
+        _from_rfp = None
+    if _from_deal or _from_rfp:
+        with st.expander("Context from Deals", expanded=True):
+            try:
+                import pandas as _pd
+                if _from_deal:
+                    df_d = _pd.read_sql_query(
+                        "SELECT id, title, agency FROM deals_t WHERE id=?;",
+                        conn,
+                        params=(int(_from_deal),),
+                    )
+                else:
+                    df_d = _pd.DataFrame()
+            except Exception:
+                df_d = None
+            if df_d is not None and not df_d.empty:
+                row = df_d.iloc[0]
+                st.caption(f"Deal #{int(row['id'])} — {row.get('title') or ''} ({row.get('agency') or ''})")
+            elif _from_deal:
+                st.caption(f"Deal #{_from_deal}")
+            if _from_rfp:
+                st.caption(f"Linked RFP ID: {_from_rfp}")
     st.markdown("**Primary action on this page:** build or pick a template, then use Mail Merge and Send to deliver batch emails.")
     with st.expander("Advanced: Compliance & Unsubscribe (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
