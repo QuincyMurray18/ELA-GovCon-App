@@ -13143,7 +13143,8 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
     except Exception:
         has_vendor_caps = False
 
-    with st.expander("Filters", expanded=True):
+    with st.container():
+        st.subheader("Filters")
         c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
         with c1:
             f_naics = st.text_input("NAICS", value=default_naics, key="filter_naics")
@@ -13158,7 +13159,8 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             f_capability = st.text_input("Capability keyword (tags)", key="filter_capability") if has_vendor_caps else ""
         st.caption("Use CSV import or add vendors manually. Internet seeding can be added later.")
 
-    with st.expander("Import Vendors (CSV)", expanded=False):
+    with st.container():
+        st.subheader("Import Vendors (CSV)")
         st.caption("Headers: name, email, phone, city, state, naics, cage, uei, website, notes")
         up = st.file_uploader("Upload vendor CSV", type=["csv"], key="vendor_csv")
         if up and st.button("Import CSV"):
@@ -13196,7 +13198,8 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
-    with st.expander("Add Vendor", expanded=False):
+    with st.container():
+        st.subheader("Add Vendor")
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
             v_name = st.text_input("Company name", key="add_name")
@@ -13378,7 +13381,8 @@ def run_subcontractor_finder(conn: "sqlite3.Connection") -> None:
 
             # Capacity and past performance UI per vendor
             vid = int(row["id"])
-            with st.expander("Capacity and past performance", expanded=False):
+            with st.container():
+                st.markdown("**Capacity and past performance**")
                 # Latest capacity snapshot
                 existing_cap = None
                 try:
@@ -21950,23 +21954,23 @@ def run_outreach(conn):
 
     # Sender accounts (O4)
     try:
-        with st.expander("Sender accounts", expanded=True):
-                o4_sender_accounts_ui(conn)
+        st.subheader("Sender accounts")
+        o4_sender_accounts_ui(conn)
     except Exception as e:
         st.warning(f"O4 sender UI unavailable: {e}")
 
     # Templates (O2)
     try:
         _tpl_picker_prefill(conn)
-        with st.expander("Templates", expanded=False):
-            render_outreach_templates(conn)
+        st.subheader("Templates")
+        render_outreach_templates(conn)
     except Exception:
         pass
 
     # Mail merge + send (O3)
     try:
-        with st.expander("Mail Merge & Send", expanded=True):
-            render_outreach_mailmerge(conn)
+        st.subheader("Mail Merge & Send")
+        render_outreach_mailmerge(conn)
     except Exception as e:
         ui_error("Mail merge panel error.", str(e))
 
@@ -24283,14 +24287,15 @@ def render_subfinder_s1d(conn):
                 except Exception as e:
                     st.warning(f"Save failed: {e}")
 
-    # Render card-based expanders
-    with st.expander("S1D: Add places to Vendors (cards)", expanded=True):
-        _cards_add_places(conn)
+    # Render card-based utilities
+    st.subheader("S1D: Add places to Vendors (cards)")
+    _cards_add_places(conn)
 
-    with st.expander("S1D: Quick edit Vendors (cards)", expanded=False):
-        _cards_quick_edit_vendors(conn)
+    st.subheader("S1D: Quick edit Vendors (cards)")
+    _cards_quick_edit_vendors(conn)
     # === END S1D CARDS ===
-# === End S1D ================================================================
+# === End S1D ==========================
+======================================
 
 def _wrap_run_subfinder():
     g = globals()
