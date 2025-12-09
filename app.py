@@ -10477,6 +10477,7 @@ def _sam_refresh_results_from_job(conn) -> None:
         if rows:
             try:
                 st.session_state["sam_results_df"] = _pd.DataFrame(rows)
+                st.session_state["sam_last_job_id"] = 0
                 st.session_state["sam_page"] = 1
                 st.session_state.pop("sam_selected_idx", None)
             except Exception:
