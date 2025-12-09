@@ -19070,7 +19070,8 @@ def run_rfp_analyzer(conn) -> None:
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_create_ingest"):
             try:
-                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
+                uploads_new = st.session_state.get('op_new_files') or ups
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, uploads_new)
                 ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
                 st.session_state['current_rfp_id'] = int(new_id)
                 st.rerun()
@@ -19098,7 +19099,8 @@ def run_rfp_analyzer(conn) -> None:
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_inline_create_main"):
             try:
-                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
+                uploads_inline = st.session_state.get('op_inline_files_main') or ups
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, uploads_inline)
                 ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
                 st.session_state['current_rfp_id'] = int(new_id)
                 st.rerun()
@@ -19944,49 +19946,7 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             "track past performance, and stay organized."
         )
 
-    
-    # Start a new RFP directly from this workspace
-    st.markdown("### Start a new RFP")
-    new_c1, new_c2 = st.columns([3, 2])
-    with new_c1:
-        new_title = st.text_input("RFP title", key="rfp_ws_new_title")
-        new_solnum = st.text_input("Solicitation #", key="rfp_ws_new_solnum")
-        new_sam_url = st.text_input("SAM.gov URL (optional)", key="rfp_ws_new_sam_url")
-    with new_c2:
-        new_uploads = st.file_uploader(
-            "Upload RFP documents (PDF/DOCX/TXT/XLSX/ZIP)",
-            type=["pdf", "doc", "docx", "txt", "rtf", "zip", "xlsx", "xls"],
-            accept_multiple_files=True,
-            key="rfp_ws_new_uploads",
-        )
-
-    if st.button("Create RFP record and ingest", key="rfp_ws_new_create"):
-        if not (new_title or new_solnum):
-            st.error("Please provide at least a title or solicitation number.")
-        else:
-            try:
-                new_rfp_id, saved_files = svc_create_rfp_and_ingest(
-                    conn,
-                    (new_title or "").strip(),
-                    (new_solnum or "").strip(),
-                    (new_sam_url or "").strip(),
-                    new_uploads or [],
-                )
-                st.success(
-                    f"Created RFP #{new_rfp_id} and ingested {saved_files} file(s)."
-                )
-                try:
-                    st.session_state["current_rfp_id"] = int(new_rfp_id)
-                except Exception:
-                    pass
-                try:
-                    globals()["selected_rfp_id"] = int(new_rfp_id)
-                except Exception:
-                    pass
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error creating RFP: {e}")
-# Resolve list of RFPs for the workspace selector
+    # Resolve list of RFPs for the workspace selector
     df_rf = None
     try:
         df_rf = safe_read_sql(
@@ -20004,22 +19964,20 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         except Exception:
             df_rf = None
 
-    
-    has_rf = df_rf is not None and not df_rf.empty
-    if not has_rf:
-        st.info("No saved RFPs yet. Start by creating one below.")
+    if df_rf is None or df_rf.empty:
+        st.info("No saved RFPs yet. Use the RFP Analyzer to ingest an RFP and create a workspace.")
+        return
 
     # Pick default RFP using helper if available
     default_rid = None
-    if has_rf:
-        try:
-            default_rid = _ensure_selected_rfp_id(conn)
-        except Exception:
-            default_rid = None
+    try:
+        default_rid = _ensure_selected_rfp_id(conn)
+    except Exception:
+        default_rid = None
 
-    rfp_ids = df_rf["id"].tolist() if has_rf else []
+    rfp_ids = df_rf["id"].tolist()
     idx_default = 0
-    if has_rf and default_rid and default_rid in rfp_ids:
+    if default_rid and default_rid in rfp_ids:
         try:
             idx_default = rfp_ids.index(default_rid)
         except ValueError:
@@ -20036,21 +19994,13 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             return f"#{rid} — {title} ({sol})"
         return f"#{rid} — {title}"
 
-        rfp_id = None
-    if has_rf:
-        rfp_id = st.selectbox(
-            "Working RFP",
-            options=rfp_ids,
-            index=idx_default,
-            format_func=_fmt_rfp,
-            key="rfp_workspace_rfp_id",
-        )
-    else:
-        rfp_id = None
-
-    # Simple refresh control for the workspace
-    if st.button("Refresh workspace", key="rfp_workspace_refresh"):
-        st.rerun()
+    rfp_id = st.selectbox(
+        "Working RFP",
+        options=rfp_ids,
+        index=idx_default,
+        format_func=_fmt_rfp,
+        key="rfp_workspace_rfp_id",
+    )
 
     # Persist current selection for compatibility
     try:
@@ -20061,10 +20011,6 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         globals()["selected_rfp_id"] = int(rfp_id)
     except Exception:
         pass
-
-    if not has_rf or rfp_id is None:
-        return
-
 
     # Load header row for this RFP
     df_hdr = None
@@ -20161,42 +20107,6 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             st.write(days_text)
             st.caption(f"Status: {status_label}")
 
-
-    # Optional: quick edit of RFP header fields
-    with st.expander("Edit RFP header", expanded=False):
-        ed_c1, ed_c2, ed_c3 = st.columns([3, 2, 2])
-        with ed_c1:
-            edit_title = st.text_input(
-                "RFP title",
-                value=title,
-                key=f"rfp_ws_edit_title_{rfp_id}",
-            )
-        with ed_c2:
-            edit_solnum = st.text_input(
-                "Solicitation #",
-                value=solnum,
-                key=f"rfp_ws_edit_solnum_{rfp_id}",
-            )
-        with ed_c3:
-            existing_sam = str(row.get("sam_url") or "")
-            edit_sam_url = st.text_input(
-                "SAM.gov URL",
-                value=existing_sam,
-                key=f"rfp_ws_edit_samurl_{rfp_id}",
-            )
-
-        if st.button("Save header", key=f"rfp_ws_edit_save_{rfp_id}"):
-            try:
-                _update_rfp_meta(
-                    conn,
-                    int(rfp_id),
-                    title=(edit_title or "").strip(),
-                    solnum=(edit_solnum or "").strip(),
-                    sam_url=(edit_sam_url or "").strip(),
-                )
-                st.success("Updated RFP header.")
-            except Exception as e:
-                st.error(f"Error updating RFP header: {e}")
     st.markdown("---")
 
     # Two-column layout: main analysis (left) and context/resources (right)
@@ -20610,29 +20520,6 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
 
         st.markdown("---")
         st.subheader("Files and attachments")
-
-        # Upload additional files for the current RFP
-        up_c1, up_c2 = st.columns([3, 1])
-        with up_c1:
-            more_uploads = st.file_uploader(
-                "Add files to this RFP",
-                type=["pdf", "doc", "docx", "txt", "rtf", "zip", "xlsx", "xls"],
-                accept_multiple_files=True,
-                key=f"rfp_ws_more_uploads_{rfp_id}",
-            )
-        with up_c2:
-            st.write("")  # vertical spacing
-            st.write("")
-            if st.button("Save files to this RFP", key=f"rfp_ws_more_save_{rfp_id}"):
-                if not more_uploads:
-                    st.warning("Please choose one or more files before saving.")
-                else:
-                    try:
-                        saved_more = data_save_rfp_uploads(conn, int(rfp_id), more_uploads)
-                        st.success(f"Saved {saved_more} additional file(s) to this RFP.")
-                    except Exception as e:
-                        st.error(f"Error saving files: {e}")
-
 
         df_files = None
         try:
