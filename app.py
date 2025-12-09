@@ -8903,13 +8903,102 @@ def data_save_rfp_uploads(conn, rfp_id: int, uploads) -> int:
 
 # === Service layer: RFP Analyzer =============================================
 def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploads):
-    """Create an RFP record, ingest uploads, and run the One‑Page analysis.
+    """Create an RFP record, ingest uploads, and run the One-Page analysis.
 
     Returns (rfp_id, saved_count). Analysis errors are logged but do not block
     RFP creation so you always keep the record and uploaded files.
     """
+    # First create the shell RFP record
     new_id = data_insert_rfp(conn, title, solnum, sam_url)
-    saved = data_save_rfp_uploads(conn, new_id, uploads)
+
+    # Try the normal bulk save helper
+    saved = 0
+    try:
+        saved = data_save_rfp_uploads(conn, new_id, uploads)
+    except Exception:
+        # Do not block record creation if the helper fails
+        try:
+            logger.exception("svc_create_rfp_and_ingest: data_save_rfp_uploads failed")
+        except Exception:
+            pass
+
+    # Fallback: if we had uploads but nothing got saved, do a direct save loop
+    try:
+        if saved == 0 and uploads:
+            manual_saved = 0
+            import io as _io
+            import zipfile as _zip
+
+            for f in uploads:
+                try:
+                    name = (getattr(f, "name", "upload") or "").strip()
+                    b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+                except Exception:
+                    try:
+                        logger.exception("svc_create_rfp_and_ingest: failed to read upload bytes (fallback)")
+                    except Exception:
+                        pass
+                    name, b = "upload", b""
+
+                if not b:
+                    continue
+
+                # Light ZIP support in the fallback path
+                if name.lower().endswith(".zip"):
+                    try:
+                        zf = _zip.ZipFile(_io.BytesIO(b))
+                        for zname in zf.namelist()[:80]:
+                            if zname.endswith("/"):
+                                continue
+                            try:
+                                save_rfp_file_db(
+                                    conn,
+                                    int(new_id),
+                                    zname.split("/")[-1],
+                                    zf.read(zname),
+                                )
+                                manual_saved += 1
+                            except Exception:
+                                try:
+                                    logger.exception(
+                                        "svc_create_rfp_and_ingest: failed to save file from ZIP (fallback)"
+                                    )
+                                except Exception:
+                                    pass
+                    except Exception:
+                        try:
+                            logger.exception(
+                                "svc_create_rfp_and_ingest: failed to expand ZIP upload (fallback)"
+                            )
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        save_rfp_file_db(
+                            conn,
+                            int(new_id),
+                            name or getattr(f, "name", "upload"),
+                            b,
+                        )
+                        manual_saved += 1
+                    except Exception:
+                        try:
+                            logger.exception(
+                                "svc_create_rfp_and_ingest: failed to save direct upload (fallback)"
+                            )
+                        except Exception:
+                            pass
+
+            if manual_saved:
+                saved = manual_saved
+    except Exception:
+        try:
+            logger.exception(
+                "svc_create_rfp_and_ingest: fallback upload handling failed"
+            )
+        except Exception:
+            pass
+
     # Immediately run the same ingest/analyze pipeline used by the toolbar button
     try:
         ensure_jobs_schema(conn)
@@ -8929,11 +9018,14 @@ def svc_create_rfp_and_ingest(conn, title: str, solnum: str, sam_url: str, uploa
             payload=payload,
             created_by=_user_name or None,
         )
-    except Exception as e:
+    except Exception:
         try:
-            logger.exception("svc_create_rfp_and_ingest: enqueue analyze job failed")
+            logger.exception(
+                "svc_create_rfp_and_ingest: enqueue analyze job failed"
+            )
         except Exception:
             pass
+
     return new_id, saved
 
 
@@ -19084,45 +19176,23 @@ def run_rfp_analyzer(conn) -> None:
     st.markdown("**Steps:** 1) Select or create RFP  ›  2) Upload RFP files  ›  3) Run analysis  ›  4) Jump into Proposal Builder.")
 
     # New RFP inline form (always available)
-
     with st.expander("➕ Start a new RFP", expanded=False):
         ctx0 = st.session_state.get("rfp_selected_notice") or {}
-        t0 = st.text_input(
-            "RFP Title",
-            value=str(ctx0.get("Title") or ""),
-            key="op_inline_title_main",
-        )
-        s0 = st.text_input(
-            "Solicitation #",
-            value=str(ctx0.get("Solicitation") or ""),
-            key="op_inline_sol_main",
-        )
-        u0 = st.text_input(
-            "SAM URL",
-            value=str(ctx0.get("SAM Link") or ""),
-            key="op_inline_sam_main",
-            placeholder="https://sam.gov/",
-        )
-        ups = st.file_uploader(
-            "Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)",
-            type=["pdf", "doc", "docx", "txt", "xlsx", "xls", "zip"],
-            accept_multiple_files=True,
-            key="op_inline_files_main",
-        )
+        t0 = st.text_input("RFP Title", value=str(ctx0.get("Title") or ""), key="op_inline_title_main")
+        s0 = st.text_input("Solicitation #", value=str(ctx0.get("Solicitation") or ""), key="op_inline_sol_main")
+        u0 = st.text_input("SAM URL", value=str(ctx0.get("SAM Link") or ""), key="op_inline_sam_main", placeholder="https://sam.gov/")
+        ups = st.file_uploader("Upload RFP files (PDF/DOCX/TXT/XLSX/ZIP)", type=["pdf","docx","txt","xlsx","zip"],
+                               accept_multiple_files=True, key="op_inline_files_main")
         # Keep on RFP Analyzer after selecting files
-        if "op_inline_files_main" in st.session_state and st.session_state.get("op_inline_files_main"):
-            st.session_state["_force_rfp_analyzer"] = True
-            st.session_state["nav_target"] = "RFP Analyzer"
+        if 'op_inline_files_main' in st.session_state and st.session_state.get('op_inline_files_main'):
+            st.session_state['_force_rfp_analyzer'] = True
+            st.session_state['nav_target'] = 'RFP Analyzer'
         st.markdown("### Primary action: Create RFP record and ingest")
         if st.button("Create RFP record and ingest", key="op_inline_create_main"):
             try:
-                uploads_inline = st.session_state.get("op_inline_files_main") or ups
-                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, uploads_inline or [])
-                ui_success(
-                    "RFP created and files ingested.",
-                    f"ID #{new_id} — {saved} file(s) saved.",
-                )
-                st.session_state["current_rfp_id"] = int(new_id)
+                new_id, saved = svc_create_rfp_and_ingest(conn, t0, s0, u0, ups)
+                ui_success("RFP created and files ingested.", f"ID #{new_id} — {saved} file(s) saved.")
+                st.session_state['current_rfp_id'] = int(new_id)
                 st.rerun()
             except Exception as e:
                 logger.exception("Create RFP and ingest failed")
@@ -19350,31 +19420,97 @@ def run_rfp_analyzer(conn) -> None:
         st.subheader("➕ Add files to this RFP")
         uploads = st.file_uploader(
             "Upload RFP documents (PDF/DOCX/TXT/ZIP/XLSX)",
-            type=["pdf","doc","docx","txt","rtf","zip","xlsx","xls"],
+            type=["pdf", "doc", "docx", "txt", "rtf", "zip", "xlsx", "xls"],
             accept_multiple_files=True,
             key="onepage_uploads_alt",
         )
-        save_clicked = st.button("Save files to this RFP", key="onepage_uploads_alt_save")
+        save_clicked = st.button(
+            "Save files to this RFP",
+            key="onepage_uploads_alt_save",
+        )
+
         if uploads and save_clicked:
             saved = 0
-            for f in uploads:
-                try:
-                    b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
-                    save_rfp_file_db(
-                        conn,
-                        int(_ensure_selected_rfp_id(conn)),
-                        getattr(f, "name", "upload"),
-                        b,
+            import io as _io
+            import zipfile as _zip
+
+            try:
+                rfp_id = int(_ensure_selected_rfp_id(conn))
+            except Exception:
+                rfp_id = 0
+
+            if not rfp_id:
+                st.error("Select an RFP first.")
+            else:
+                for f in uploads:
+                    try:
+                        name = (getattr(f, "name", "upload") or "").strip()
+                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+                    except Exception:
+                        try:
+                            logger.exception("RFP Workspace: failed to read upload bytes (AI attachments panel)")
+                        except Exception:
+                            pass
+                        name, b = "upload", b""
+
+                    if not b:
+                        continue
+
+                    if name.lower().endswith(".zip"):
+                        try:
+                            zf = _zip.ZipFile(_io.BytesIO(b))
+                            for zname in zf.namelist()[:80]:
+                                if zname.endswith("/"):
+                                    continue
+                                try:
+                                    save_rfp_file_db(
+                                        conn,
+                                        rfp_id,
+                                        zname.split("/")[-1],
+                                        zf.read(zname),
+                                    )
+                                    saved += 1
+                                except Exception:
+                                    try:
+                                        logger.exception(
+                                            "RFP Workspace: failed to save file from ZIP (AI attachments panel)"
+                                        )
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            try:
+                                logger.exception(
+                                    "RFP Workspace: failed to expand ZIP upload (AI attachments panel)"
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            save_rfp_file_db(
+                                conn,
+                                rfp_id,
+                                name or getattr(f, "name", "upload"),
+                                b,
+                            )
+                            saved += 1
+                        except Exception:
+                            try:
+                                logger.exception(
+                                    "RFP Workspace: failed to save direct upload (AI attachments panel)"
+                                )
+                            except Exception:
+                                pass
+
+                if saved > 0:
+                    st.success(f"Saved {saved} file(s) to this RFP.")
+                    try:
+                        y1_index_rfp(conn, rfp_id, rebuild=False)
+                    except Exception:
+                        pass
+                else:
+                    st.info(
+                        "No new files were saved. They may already be linked or were empty."
                     )
-                    saved += 1
-                except Exception:
-                    pass
-            if saved > 0:
-                st.success(f"Saved {saved} file(s).")
-                try:
-                    y1_index_rfp(conn, int(_ensure_selected_rfp_id(conn)), rebuild=False)
-                except Exception:
-                    pass
 
     # Build pages and render One-Page
     try:
@@ -19966,7 +20102,49 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             "track past performance, and stay organized."
         )
 
-    # Resolve list of RFPs for the workspace selector
+    
+    # Start a new RFP directly from this workspace
+    st.markdown("### Start a new RFP")
+    new_c1, new_c2 = st.columns([3, 2])
+    with new_c1:
+        new_title = st.text_input("RFP title", key="rfp_ws_new_title")
+        new_solnum = st.text_input("Solicitation #", key="rfp_ws_new_solnum")
+        new_sam_url = st.text_input("SAM.gov URL (optional)", key="rfp_ws_new_sam_url")
+    with new_c2:
+        new_uploads = st.file_uploader(
+            "Upload RFP documents (PDF/DOCX/TXT/XLSX/ZIP)",
+            type=["pdf", "doc", "docx", "txt", "rtf", "zip", "xlsx", "xls"],
+            accept_multiple_files=True,
+            key="rfp_ws_new_uploads",
+        )
+
+    if st.button("Create RFP record and ingest", key="rfp_ws_new_create"):
+        if not (new_title or new_solnum):
+            st.error("Please provide at least a title or solicitation number.")
+        else:
+            try:
+                new_rfp_id, saved_files = svc_create_rfp_and_ingest(
+                    conn,
+                    (new_title or "").strip(),
+                    (new_solnum or "").strip(),
+                    (new_sam_url or "").strip(),
+                    new_uploads or [],
+                )
+                st.success(
+                    f"Created RFP #{new_rfp_id} and ingested {saved_files} file(s)."
+                )
+                try:
+                    st.session_state["current_rfp_id"] = int(new_rfp_id)
+                except Exception:
+                    pass
+                try:
+                    globals()["selected_rfp_id"] = int(new_rfp_id)
+                except Exception:
+                    pass
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error creating RFP: {e}")
+# Resolve list of RFPs for the workspace selector
     df_rf = None
     try:
         df_rf = safe_read_sql(
@@ -19984,72 +20162,22 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         except Exception:
             df_rf = None
 
-    # Quick create: start a new RFP from this workspace
-    st.markdown("### Start a new RFP")
-    ctx0 = st.session_state.get("rfp_selected_notice") or {}
-    col_new_left, col_new_right = st.columns([3, 2])
-    with col_new_left:
-        new_title = st.text_input(
-            "RFP title",
-            value=str(ctx0.get("Title") or ""),
-            key="rfp_ws_new_title",
-        )
-        new_solnum = st.text_input(
-            "Solicitation #",
-            value=str(ctx0.get("Solicitation") or ""),
-            key="rfp_ws_new_solnum",
-        )
-        new_sam_url = st.text_input(
-            "SAM.gov URL (optional)",
-            value=str(ctx0.get("SAM Link") or ""),
-            key="rfp_ws_new_sam_url",
-            placeholder="https://sam.gov/",
-        )
-    with col_new_right:
-        new_uploads = st.file_uploader(
-            "Upload RFP documents (PDF/DOCX/TXT/XLSX/ZIP)",
-            type=["pdf", "doc", "docx", "txt", "rtf", "xlsx", "xls", "zip"],
-            accept_multiple_files=True,
-            key="rfp_ws_new_files",
-        )
-    if st.button("Create RFP record and ingest", key="rfp_ws_create"):
-        if not (new_title or new_solnum):
-            st.warning("Please enter at least an RFP title or a solicitation number.")
-        else:
-            try:
-                uploads_effective = st.session_state.get("rfp_ws_new_files") or new_uploads
-                new_id, saved = svc_create_rfp_and_ingest(
-                    conn,
-                    (new_title or "").strip(),
-                    (new_solnum or "").strip(),
-                    (new_sam_url or "").strip(),
-                    uploads_effective or [],
-                )
-                st.success(f"Created RFP #{new_id} and ingested {saved} file(s).")
-                try:
-                    st.session_state["current_rfp_id"] = int(new_id)
-                    globals()["selected_rfp_id"] = int(new_id)
-                except Exception:
-                    st.session_state["current_rfp_id"] = new_id
-                    globals()["selected_rfp_id"] = new_id
-                st.rerun()
-            except Exception as e:
-                st.warning(f"Could not create the RFP and ingest files: {e}")
-
-    if df_rf is None or df_rf.empty:
-        st.info("No saved RFPs yet. Use the section above to create one.")
-        return
+    
+    has_rf = df_rf is not None and not df_rf.empty
+    if not has_rf:
+        st.info("No saved RFPs yet. Start by creating one below.")
 
     # Pick default RFP using helper if available
     default_rid = None
-    try:
-        default_rid = _ensure_selected_rfp_id(conn)
-    except Exception:
-        default_rid = None
+    if has_rf:
+        try:
+            default_rid = _ensure_selected_rfp_id(conn)
+        except Exception:
+            default_rid = None
 
-    rfp_ids = df_rf["id"].tolist()
+    rfp_ids = df_rf["id"].tolist() if has_rf else []
     idx_default = 0
-    if default_rid and default_rid in rfp_ids:
+    if has_rf and default_rid and default_rid in rfp_ids:
         try:
             idx_default = rfp_ids.index(default_rid)
         except ValueError:
@@ -20066,8 +20194,8 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             return f"#{rid} — {title} ({sol})"
         return f"#{rid} — {title}"
 
-    sel_col, refresh_col = st.columns([4, 1])
-    with sel_col:
+        rfp_id = None
+    if has_rf:
         rfp_id = st.selectbox(
             "Working RFP",
             options=rfp_ids,
@@ -20075,10 +20203,12 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             format_func=_fmt_rfp,
             key="rfp_workspace_rfp_id",
         )
-    with refresh_col:
-        st.markdown(" ")
-        if st.button("Refresh workspace", key="rfp_workspace_refresh"):
-            st.rerun()
+    else:
+        rfp_id = None
+
+    # Simple refresh control for the workspace
+    if st.button("Refresh workspace", key="rfp_workspace_refresh"):
+        st.rerun()
 
     # Persist current selection for compatibility
     try:
@@ -20089,6 +20219,10 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         globals()["selected_rfp_id"] = int(rfp_id)
     except Exception:
         pass
+
+    if not has_rf or rfp_id is None:
+        return
+
 
     # Load header row for this RFP
     df_hdr = None
@@ -20185,41 +20319,42 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
             st.write(days_text)
             st.caption(f"Status: {status_label}")
 
-    # Optional inline edit for core RFP header fields
+
+    # Optional: quick edit of RFP header fields
     with st.expander("Edit RFP header", expanded=False):
-        edit_title = st.text_input(
-            "RFP title",
-            value=title,
-            key=f"rfp_ws_edit_title_{rfp_id}",
-        )
-        edit_solnum = st.text_input(
-            "Solicitation #",
-            value=solnum,
-            key=f"rfp_ws_edit_solnum_{rfp_id}",
-        )
-        sam_url_current = str(row.get("sam_url") or "")
-        edit_sam_url = st.text_input(
-            "SAM.gov URL",
-            value=sam_url_current,
-            key=f"rfp_ws_edit_sam_url_{rfp_id}",
-            placeholder="https://sam.gov/",
-        )
-        if st.button("Save header", key=f"rfp_ws_save_header_{rfp_id}"):
+        ed_c1, ed_c2, ed_c3 = st.columns([3, 2, 2])
+        with ed_c1:
+            edit_title = st.text_input(
+                "RFP title",
+                value=title,
+                key=f"rfp_ws_edit_title_{rfp_id}",
+            )
+        with ed_c2:
+            edit_solnum = st.text_input(
+                "Solicitation #",
+                value=solnum,
+                key=f"rfp_ws_edit_solnum_{rfp_id}",
+            )
+        with ed_c3:
+            existing_sam = str(row.get("sam_url") or "")
+            edit_sam_url = st.text_input(
+                "SAM.gov URL",
+                value=existing_sam,
+                key=f"rfp_ws_edit_samurl_{rfp_id}",
+            )
+
+        if st.button("Save header", key=f"rfp_ws_edit_save_{rfp_id}"):
             try:
-                ok = _update_rfp_meta(
+                _update_rfp_meta(
                     conn,
                     int(rfp_id),
                     title=(edit_title or "").strip(),
                     solnum=(edit_solnum or "").strip(),
                     sam_url=(edit_sam_url or "").strip(),
                 )
-                if ok:
-                    st.success("Updated RFP header.")
-                else:
-                    st.info("No changes to save for this RFP header.")
+                st.success("Updated RFP header.")
             except Exception as e:
-                st.warning(f"Could not update RFP header: {e}")
-
+                st.error(f"Error updating RFP header: {e}")
     st.markdown("---")
 
     # Two-column layout: main analysis (left) and context/resources (right)
@@ -20634,21 +20769,102 @@ def run_rfp_workspace(conn: "sqlite3.Connection") -> None:
         st.markdown("---")
         st.subheader("Files and attachments")
 
-        more_uploads = st.file_uploader(
-            "Add files to this RFP",
-            type=["pdf", "doc", "docx", "txt", "rtf", "xlsx", "xls", "zip"],
-            accept_multiple_files=True,
-            key=f"rfp_ws_more_files_{rfp_id}",
-        )
-        if st.button("Save files to this RFP", key=f"rfp_ws_more_files_save_{rfp_id}"):
+                # Upload additional files for the current RFP
+        up_c1, up_c2 = st.columns([3, 1])
+        with up_c1:
+            more_uploads = st.file_uploader(
+                "Add files to this RFP",
+                type=["pdf", "doc", "docx", "txt", "rtf", "zip", "xlsx", "xls"],
+                accept_multiple_files=True,
+                key=f"rfp_ws_more_uploads_{rfp_id}",
+            )
+        with up_c2:
+            st.write("")  # vertical spacing
+            st.write("")
+            save_more_clicked = st.button(
+                "Save files to this RFP",
+                key=f"rfp_ws_more_save_{rfp_id}",
+            )
+
+        if save_more_clicked:
             if not more_uploads:
-                st.warning("Please choose one or more files to upload.")
+                st.warning("Please choose one or more files before saving.")
             else:
-                try:
-                    saved_more = data_save_rfp_uploads(conn, int(rfp_id), more_uploads)
+                saved_more = 0
+                import io as _io
+                import zipfile as _zip
+
+                for f in more_uploads:
+                    try:
+                        name = (getattr(f, "name", "upload") or "").strip()
+                        b = f.getbuffer().tobytes() if hasattr(f, "getbuffer") else f.read()
+                    except Exception:
+                        try:
+                            logger.exception("RFP Workspace: failed to read upload bytes")
+                        except Exception:
+                            pass
+                        name, b = "upload", b""
+
+                    if not b:
+                        continue
+
+                    if name.lower().endswith(".zip"):
+                        # ZIP support, mirroring the One-Page analyzer behavior
+                        try:
+                            zf = _zip.ZipFile(_io.BytesIO(b))
+                            for zname in zf.namelist()[:80]:
+                                if zname.endswith("/"):
+                                    continue
+                                try:
+                                    save_rfp_file_db(
+                                        conn,
+                                        int(rfp_id),
+                                        zname.split("/")[-1],
+                                        zf.read(zname),
+                                    )
+                                    saved_more += 1
+                                except Exception:
+                                    try:
+                                        logger.exception(
+                                            "RFP Workspace: failed to save file from ZIP"
+                                        )
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            try:
+                                logger.exception(
+                                    "RFP Workspace: failed to expand ZIP upload"
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            save_rfp_file_db(
+                                conn,
+                                int(rfp_id),
+                                name or getattr(f, "name", "upload"),
+                                b,
+                            )
+                            saved_more += 1
+                        except Exception:
+                            try:
+                                logger.exception(
+                                    "RFP Workspace: failed to save direct upload"
+                                )
+                            except Exception:
+                                pass
+
+                if saved_more > 0:
                     st.success(f"Saved {saved_more} additional file(s) to this RFP.")
-                except Exception as e:
-                    st.warning(f"Could not save files for this RFP: {e}")
+                    # Rebuild or update the One-Page index so files are usable immediately
+                    try:
+                        y1_index_rfp(conn, int(rfp_id), rebuild=False)
+                    except Exception:
+                        pass
+                else:
+                    st.info(
+                        "No new files were saved. They may already be linked or were empty."
+                    )
 
         df_files = None
         try:
