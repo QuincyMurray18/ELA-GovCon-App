@@ -16309,6 +16309,14 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 comp_cols[0].metric("Must items", f"{must_count}")
                                 comp_cols[1].metric("Total requirements", f"{open_items}")
                                 comp_cols[2].metric("Red flags", f"{red_flags}")
+                                if _rfp_id:
+                                    if st.button("Open RFP Workspace", key="detail_open_rfp_ws"):
+                                        try:
+                                            st.session_state["current_rfp_id"] = _rfp_id
+                                        except Exception:
+                                            pass
+                                        st.session_state["nav_target"] = "RFP Workspace"
+                                        st.rerun()
 
                                 # Subs panel
                                 st.markdown("#### Subs and coverage")
@@ -16327,8 +16335,49 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 subs_cols[1].caption("Coverage by task: see RFQ tools")
                                 with subs_cols[2]:
                                     st.caption("Quick links")
-                                    st.button("Open Sub Finder", key="detail_open_subs")
-                                    st.button("Open RFQ tools", key="detail_open_rfq")
+                                    if st.button("Open Sub Finder", key="detail_open_subs"):
+                                        try:
+                                            st.session_state["current_rfp_id"] = _rfp_id
+                                        except Exception:
+                                            pass
+                                        # Try to seed NAICS and state filters for Sub Finder from rfp_meta
+                                        try:
+                                            import re as _re
+                                            df_meta = _pd.read_sql_query(
+                                                "SELECT key, value FROM rfp_meta WHERE rfp_id=?;",
+                                                conn,
+                                                params=(int(_rfp_id),),
+                                            )
+                                            if df_meta is not None and not df_meta.empty:
+                                                _meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()}
+                                                _naics = _meta.get("naics") or _meta.get("NAICS")
+                                                if _naics:
+                                                    st.session_state["sub_default_naics"] = str(_naics)
+                                                _place = _meta.get("place_of_performance") or _meta.get("Place of Performance")
+                                                if _place:
+                                                    try:
+                                                        m = _re.search(r"\b([A-Z]{2})\b", str(_place).upper())
+                                                        if m:
+                                                            st.session_state["sub_default_state"] = m.group(1)
+                                                    except Exception:
+                                                        pass
+                                        except Exception:
+                                            pass
+                                        st.session_state["nav_target"] = "Subcontractor Finder"
+                                        st.rerun()
+                                    if st.button("Open RFQ tools", key="detail_open_rfq"):
+                                        try:
+                                            st.session_state["rfq_default_deal_id"] = _detail_id
+                                        except Exception:
+                                            pass
+                                        if _rfp_id:
+                                            try:
+                                                st.session_state["current_rfp_id"] = _rfp_id
+                                                st.session_state["rfq_default_rfp_id"] = _rfp_id
+                                            except Exception:
+                                                pass
+                                        st.session_state["nav_target"] = "RFQ Tools"
+                                        st.rerun()
 
                                 # Pricing panel
                                 st.markdown("#### Pricing")
@@ -16398,7 +16447,43 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             st.caption("None scheduled")
                                     except Exception:
                                         st.caption("None scheduled")
-                                    st.button("Open Outreach for this deal", key="detail_open_outreach")
+                                    if st.button("Open Outreach for this deal", key="detail_open_outreach"):
+                                        try:
+                                            st.session_state["outreach_from_deal_id"] = _detail_id
+                                            if _rfp_id:
+                                                st.session_state["outreach_from_rfp_id"] = _rfp_id
+                                        except Exception:
+                                            pass
+                                        # Seed Outreach vendor filters from RFP meta if available
+                                        try:
+                                            import re as _re
+                                            df_meta = _pd.read_sql_query(
+                                                "SELECT key, value FROM rfp_meta WHERE rfp_id=?;",
+                                                conn,
+                                                params=(int(_rfp_id),),
+                                            )
+                                            if df_meta is not None and not df_meta.empty:
+                                                _meta = {str(r["key"]): str(r["value"]) for _, r in df_meta.iterrows()}
+                                                _naics = _meta.get("naics") or _meta.get("NAICS")
+                                                if _naics:
+                                                    st.session_state["o3_f_naics"] = str(_naics)
+                                                _place = _meta.get("place_of_performance") or _meta.get("Place of Performance")
+                                                if _place:
+                                                    try:
+                                                        m = _re.search(r"\b([A-Z]{2})\b", str(_place).upper())
+                                                        if m:
+                                                            st.session_state["o3_f_state"] = m.group(1)
+                                                    except Exception:
+                                                        pass
+                                        except Exception:
+                                            pass
+                                        if _rfp_id:
+                                            try:
+                                                st.session_state["current_rfp_id"] = _rfp_id
+                                            except Exception:
+                                                pass
+                                        st.session_state["nav_target"] = "Outreach"
+                                        st.rerun()
 
                                 # Contacts and notes
                                 st.markdown("#### Contacts and notes")
@@ -21790,6 +21875,34 @@ def run_outreach(conn):
 
     st.header("Outreach")
     st.caption("Use this page to send targeted email campaigns to agencies and vendors and track your outreach work.")
+    # If we were launched from Deals detail, show quick context
+    try:
+        _from_deal = st.session_state.get("outreach_from_deal_id")
+        _from_rfp = st.session_state.get("outreach_from_rfp_id")
+    except Exception:
+        _from_deal = None
+        _from_rfp = None
+    if _from_deal or _from_rfp:
+        with st.expander("Context from Deals", expanded=True):
+            try:
+                import pandas as _pd
+                if _from_deal:
+                    df_d = _pd.read_sql_query(
+                        "SELECT id, title, agency FROM deals_t WHERE id=?;",
+                        conn,
+                        params=(int(_from_deal),),
+                    )
+                else:
+                    df_d = _pd.DataFrame()
+            except Exception:
+                df_d = None
+            if df_d is not None and not df_d.empty:
+                row = df_d.iloc[0]
+                st.caption(f"Deal #{int(row['id'])} — {row.get('title') or ''} ({row.get('agency') or ''})")
+            elif _from_deal:
+                st.caption(f"Deal #{_from_deal}")
+            if _from_rfp:
+                st.caption(f"Linked RFP ID: {_from_rfp}")
     st.markdown("**Primary action on this page:** build or pick a template, then use Mail Merge and Send to deliver batch emails.")
     with st.expander("Advanced: Compliance & Unsubscribe (O6)", expanded=False):
         render_outreach_o6_compliance(conn)
