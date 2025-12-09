@@ -15557,11 +15557,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             except Exception:
                                 pass
 
-# Normalize deadline for date filtering as datetime64 (no plain date) to avoid mixed-type comparisons
-_df_cc["_deadline_dt"] = _pd.to_datetime(
-    _df_cc.get("rfp_deadline"),
-    errors="coerce"
-).dt.normalize()
+                        # Normalize deadline for date filtering as datetime64 (no plain date) to avoid mixed-type comparisons
+                        _df_cc["_deadline_dt"] = _pd.to_datetime(
+                            _df_cc.get("rfp_deadline"),
+                            errors="coerce"
+                        ).dt.normalize()
 
                         # Filter options
                         owners = []
