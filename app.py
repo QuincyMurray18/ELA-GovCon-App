@@ -16084,14 +16084,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             _kb_state_key = f"kanban_show_all_{stage.replace(' ', '_').lower()}"
                             _kb_show_all = bool(st.session_state.get(_kb_state_key, False))
                             _kb_total = len(sdf)
-                            if _kb_total > 8:
-                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
-                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
-                                    st.session_state[_kb_state_key] = not _kb_show_all
-                                    st.rerun()
-                            if not _kb_show_all:
-                                sdf = sdf.head(8)
-                            for _, r in sdf.iterrows():
+                            if not _kb_show_all and _kb_total > 8:
+                                sdf_view = sdf.head(8)
+                            else:
+                                sdf_view = sdf
+                            for _, r in sdf_view.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
@@ -16390,6 +16387,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_next(stage)
                                             _update_deal_row(ns2, ns2)
                                             st.rerun()
+                    if _kb_total > 8:
+                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
+                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
+                                    st.session_state[_kb_state_key] = not _kb_show_all
+                                    st.rerun()
                     st.subheader("Summary by Stage")
                     # Deal detail panel (View 2)
                     _detail_id = st.session_state.get("deals_detail_id")
