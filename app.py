@@ -16057,8 +16057,17 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     )
                             except Exception:
                                 pass
-                            # Limit the number of Kanban cards per stage to keep columns compact.
-                            sdf = sdf.head(8)
+                            # Per‑stage Show more / Show less toggle to keep columns compact.
+                            _kb_state_key = f"kanban_show_all_{stage.replace(' ', '_').lower()}"
+                            _kb_show_all = bool(st.session_state.get(_kb_state_key, False))
+                            _kb_total = len(sdf)
+                            if _kb_total > 8:
+                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
+                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
+                                    st.session_state[_kb_state_key] = not _kb_show_all
+                                    st.rerun()
+                            if not _kb_show_all:
+                                sdf = sdf.head(8)
                             for _, r in sdf.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
@@ -26902,48 +26911,6 @@ def run_my_jobs(conn: "sqlite3.Connection") -> None:
                         except Exception:
                             pretty = str(raw_val)
                         st.code(pretty)
-
-            # Convenience download for backup jobs
-            result_data = None
-            if "result_json" in row.index:
-                raw_res = row.get("result_json")
-                if raw_res:
-                    try:
-                        if isinstance(raw_res, str):
-                            result_data = json.loads(raw_res)
-                        else:
-                            result_data = raw_res
-                    except Exception:
-                        result_data = None
-
-            if job_type == "backup_full" and isinstance(result_data, dict):
-                backup_path = (
-                    result_data.get("backup_path")
-                    or result_data.get("path")
-                    or result_data.get("file")
-                )
-                if backup_path:
-                    try:
-                        from pathlib import Path as _Path
-                        p = _Path(backup_path)
-                        if p.exists():
-                            st.markdown("**Download backup file**")
-                            try:
-                                with p.open("rb") as _f:
-                                    st.download_button(
-                                        "Download backup db",
-                                        data=_f.read(),
-                                        file_name=p.name,
-                                        mime="application/octet-stream",
-                                        key=f"job_{job_id}_backup_download",
-                                    )
-                            except Exception as e:
-                                st.warning(f"Cannot stream backup file for download: {e}")
-                        else:
-                            st.warning(f"Backup file not found at {backup_path}")
-                    except Exception:
-                        pass
-
 
 
 
