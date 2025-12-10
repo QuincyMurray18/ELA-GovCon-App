@@ -16065,7 +16065,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                 sdf_display = sdf.head(8)
                             else:
                                 sdf_display = sdf
-for _, r in sdf.iterrows():
+                            for _, r in sdf_display.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
@@ -16286,11 +16286,6 @@ for _, r in sdf.iterrows():
                                         key=f"k_owner_{did}",
                                     )
 
-                            # Show more / Show less control at bottom of the Kanban column.
-                            if _kb_total > 8:
-                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
-                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
-                                    st.session_state[_kb_state_key] = not _kb_show_all
                                     st.rerun()
                                     # Editable stage
                                     ns = st.selectbox(
@@ -16371,6 +16366,12 @@ for _, r in sdf.iterrows():
                                             ns2 = _stage_next(stage)
                                             _update_deal_row(ns2, ns2)
                                             st.rerun()
+                            # Show more / Show less control at bottom of the Kanban column.
+                            if _kb_total > 8:
+                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
+                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
+                                    st.session_state[_kb_state_key] = not _kb_show_all
+                                    st.rerun()
                     st.subheader("Summary by Stage")
                     # Deal detail panel (View 2)
                     _detail_id = st.session_state.get("deals_detail_id")
