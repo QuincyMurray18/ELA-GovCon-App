@@ -16057,18 +16057,15 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                     )
                             except Exception:
                                 pass
-                            # Per‑stage Show more / Show less toggle to keep columns compact.
+                            # Per‑stage Show more / Show less toggle with button at bottom of the column.
                             _kb_state_key = f"kanban_show_all_{stage.replace(' ', '_').lower()}"
                             _kb_show_all = bool(st.session_state.get(_kb_state_key, False))
                             _kb_total = len(sdf)
-                            if _kb_total > 8:
-                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
-                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
-                                    st.session_state[_kb_state_key] = not _kb_show_all
-                                    st.rerun()
                             if not _kb_show_all:
-                                sdf = sdf.head(8)
-                            for _, r in sdf.iterrows():
+                                sdf_display = sdf.head(8)
+                            else:
+                                sdf_display = sdf
+for _, r in sdf.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
@@ -16288,6 +16285,13 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         index=owner_opts.index(owner_cur) if owner_cur in owner_opts else 0,
                                         key=f"k_owner_{did}",
                                     )
+
+                            # Show more / Show less control at bottom of the Kanban column.
+                            if _kb_total > 8:
+                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
+                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
+                                    st.session_state[_kb_state_key] = not _kb_show_all
+                                    st.rerun()
                                     # Editable stage
                                     ns = st.selectbox(
                                         "Stage",
