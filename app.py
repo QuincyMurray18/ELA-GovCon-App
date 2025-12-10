@@ -15589,6 +15589,11 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                         _def_owner = _ctx_owner if _ctx_owner in owner_sel_opts else "Quincy"
                         owner_val = st.selectbox("Owner", owner_sel_opts, index=owner_sel_opts.index(_def_owner))
                     d_due = st.date_input("Due date (optional)", key="deal_due_date")
+                    t_due = st.time_input(
+                        "Due time (optional)",
+                        value=_dt.time(17, 0),
+                        key="deal_due_time",
+                    )
 
                     co_contact_id = None
                     if df_contacts_all is not None and not df_contacts_all.empty:
@@ -15622,12 +15627,30 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if submitted and title:
                     try:
                         from contextlib import closing as _closing
+                        _rfp_deadline_val = None
+                        try:
+                            if d_due:
+                                if isinstance(d_due, _dt.datetime):
+                                    _date_part = d_due.date()
+                                elif isinstance(d_due, _dt.date):
+                                    _date_part = d_due
+                                else:
+                                    _date_part = None
+                                if _date_part is not None:
+                                    if isinstance(t_due, _dt.time):
+                                        _time_part = t_due
+                                    else:
+                                        _time_part = _dt.time(17, 0)
+                                    _combined = _dt.datetime.combine(_date_part, _time_part)
+                                    _rfp_deadline_val = _combined.isoformat(timespec="minutes")
+                        except Exception:
+                            _rfp_deadline_val = str(d_due) if d_due else None
                         with _closing(conn.cursor()) as cur:
         
                                 cur.execute(
                                     "INSERT INTO deals(title, agency, status, stage, value, owner, owner_user, co_contact_id, rfp_deadline, created_at) "
                                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val, co_contact_id, d_due)
+                                    (title.strip(), agency.strip(), STAGES_ORDERED[0], STAGES_ORDERED[0], float(value), owner_val, owner_val, co_contact_id, _rfp_deadline_val)
                                 )
                                 cur.execute("INSERT INTO deal_stage_log(deal_id, stage, changed_at) VALUES(last_insert_rowid(), ?, datetime('now'));", (STAGES_ORDERED[0],))
                                 conn.commit()
@@ -15656,7 +15679,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                 if df.empty:
                     st.info("No deals")
                 else:
-                    import datetime as _dt
+                    # datetime already imported as _dt
                     today = _dt.date.today()
                     # Bring in stage date metadata from base deals table
                     try:
@@ -15710,7 +15733,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     # --- Deals Control Center: top filters + quick stats ---
                     try:
                         import pandas as _pd
-                        import datetime as _dt
+                        # datetime already imported as _dt
 
                         # Start from the current pipeline DataFrame
                         _df_cc = df.copy()
@@ -16061,11 +16084,14 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                             _kb_state_key = f"kanban_show_all_{stage.replace(' ', '_').lower()}"
                             _kb_show_all = bool(st.session_state.get(_kb_state_key, False))
                             _kb_total = len(sdf)
-                            if not _kb_show_all and _kb_total > 8:
-                                sdf_view = sdf.head(8)
-                            else:
-                                sdf_view = sdf
-                            for _, r in sdf_view.iterrows():
+                            if _kb_total > 8:
+                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
+                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
+                                    st.session_state[_kb_state_key] = not _kb_show_all
+                                    st.rerun()
+                            if not _kb_show_all:
+                                sdf = sdf.head(8)
+                            for _, r in sdf.iterrows():
                                 with st.container(border=True):
                                     did = int(r["id"])
                                     st.markdown(f"#{did} · **{r.get('title') or ''}**")
@@ -16170,7 +16196,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                         st.session_state["deals_detail_contact_id"] = int(r.get("co_contact_id") or 0)
                                         st.rerun()
 
-                                    import datetime as _dt
+                                    # datetime already imported as _dt
                                     # Editable due date for Kanban cards (calendar picker)
                                     _raw_deadline = r.get("rfp_deadline")
                                     _raw_dt = None
@@ -16364,11 +16390,6 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                                             ns2 = _stage_next(stage)
                                             _update_deal_row(ns2, ns2)
                                             st.rerun()
-                            if _kb_total > 8:
-                                _kb_label = "Show less" if _kb_show_all else f"Show more ({_kb_total})"
-                                if st.button(_kb_label, key=f"{_kb_state_key}_btn"):
-                                    st.session_state[_kb_state_key] = not _kb_show_all
-                                    st.rerun()
                     st.subheader("Summary by Stage")
                     # Deal detail panel (View 2)
                     _detail_id = st.session_state.get("deals_detail_id")
@@ -16910,7 +16931,7 @@ def run_crm(conn: "sqlite3.Connection") -> None:
                     co_label = "None set"
                 # Compute SLA-style age metrics for this deal
                 try:
-                    import datetime as _dt
+                    # datetime already imported as _dt
                     import pandas as _pd
                     today = _dt.date.today()
                     df_dates = pd.read_sql_query(
